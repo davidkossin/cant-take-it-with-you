@@ -36,7 +36,7 @@ import {
   annualLoanPayment,
 } from '../finance/Engine.js';
 import { getDifficulty } from '../finance/Difficulty.js';
-import { commitRoomDecisions, currentNode, findPriorHallwayNode, jumpToHallwayNode } from '../state/GameState.js';
+import { commitRoomDecisions, currentNode, westReturnHallway, jumpToHallwayNode } from '../state/GameState.js';
 import { autoSave } from '../state/SaveSystem.js';
 import { formatMoneyDisplay } from '../render/Dialog.js';
 import { log as debugLog } from '../debug/Logger.js';
@@ -54,8 +54,8 @@ export class RoomScene {
   }
 
   enter(game, spawnNearDoor = false) {
-    // Prior hallway ancestor → west return door (root begin has none)
-    this.priorHallway = findPriorHallwayNode(game);
+    // West door only after a year-door split, not a south-door return.
+    this.priorHallway = westReturnHallway(game);
     this.world = buildDecisionRoom({
       hasWestReturn: !!this.priorHallway,
       priorHallwayYear: this.priorHallway?.year,
@@ -79,8 +79,17 @@ export class RoomScene {
     if (!alreadyBegin) {
       commitRoomDecisions(game, 'begin');
     }
-    // Re-resolve after any begin commit (parent chain still reaches the hallway)
-    this.priorHallway = findPriorHallwayNode(game);
+    // Re-resolve after any begin commit. Rebuild only if the door changed.
+    const resolved = westReturnHallway(game);
+    if ((resolved?.id || null) !== (this.priorHallway?.id || null)) {
+      this.priorHallway = resolved;
+      this.world = buildDecisionRoom({
+        hasWestReturn: !!resolved,
+        priorHallwayYear: resolved?.year,
+      });
+    } else {
+      this.priorHallway = resolved;
+    }
     autoSave(game, 'begin');
   }
 
@@ -139,10 +148,7 @@ export class RoomScene {
 
     if (obj.kind === 'west-door') {
       // Return to the Hallway of Time instance this Decision Room was entered from
-      const prior =
-        this.priorHallway ||
-        findPriorHallwayNode(game) ||
-        null;
+      const prior = this.priorHallway || westReturnHallway(game) || null;
       if (!prior) {
         await dialog.show('There is no prior Hallway of Time to return to.', {
           title: 'Hallway of Time',

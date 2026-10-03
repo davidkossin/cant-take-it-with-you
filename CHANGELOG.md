@@ -12,6 +12,14 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 - Published the Godot V2 HTML5 rebuild at `/v2/` (Starman standard portfolio, Hallway of Time, six tellers). V1 at the site root is unchanged.
 
+## [0.5.14] — 2026-10-03
+
+### Changed
+- Standard starter is Starman, age 30, married, no children: salary $78,000, spend $50,000, primary home $380,000 with a $270,000 mortgage at 6.5% and 27 years left, Cash $5,500, savings $15,000 at 2%, stocks $41,500 (basis $35,275), 401(k) $62,000 (6% contribution, 100% match on the first 3% of salary), ZIP 85001, Standard difficulty. With no Decision Room edits, Cash first hits $0 at glass index 15; starting net worth is $234,000. Replaces the Alex age-40 / one-child starter (glass index ~6).
+- Decision Room west door is tied to a year-door timeline split. Returning to the starter room through the Hallway south door restores that room and does not add a west door. After a later year door splits the hallway, that new room and the prior room both have a west door back to the hallway.
+- Pause map rebuilt as a vertical tree: time goes up, columns numbered 1, 2, 3…, calendar years on the left. A is where a timeline begins, B is the parent branch in that same year, C is age 100 only after that timeline is played there. Forks are horizontal; the line below a child A is dashed. Compare still needs two timelines and does not invent years before a fork.
+- Cache-bust / `GAME_VERSION` bumped to **0.5.14**
+
 ## [0.5.13] — 2026-10-03
 
 ### Changed

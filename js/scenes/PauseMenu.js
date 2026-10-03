@@ -632,9 +632,9 @@ export class PauseMenu {
   }
 
   /**
-   * Vertical timeline TREE: time ↑, forks ↗ at every Decision Room entry.
+   * Vertical timeline tree. Time goes up. Columns 1, 2, 3… are timelines.
+   * Left edge is the calendar year. A/B/C only. Dashed below a fork's A.
    * D-pad: ←/→ timeline · ↑/↓ jump point (and Compare) · Enter jump / open Compare.
-   * Selection is highlighted on the graph; status line replaces the old jump list.
    */
   drawMap(ctx, game, x, y, boxW, boxH) {
     const compareSelect = this.mapMode === 'select';
@@ -686,21 +686,26 @@ export class PauseMenu {
     const selectedJump =
       this.mapFocus === 'point' ? this.mapJumpPoints[this.mapPointIndex] : null;
 
-    // Spine + fork connectors (selected timeline thicker / brighter)
+    // Solid spines, dashed pre-fork past, horizontal forks.
+    ctx.save();
     for (const seg of layout.segments || []) {
       ctx.beginPath();
+      ctx.setLineDash(seg.kind === 'dashed' ? [2, 2] : []);
       if (seg.kind === 'spine') {
         const selected = selectedTl && seg.timeline === selectedTl.number;
         if (selected) {
           ctx.strokeStyle = '#e8c878';
-          ctx.lineWidth = 3;
+          ctx.lineWidth = 2;
         } else if (seg.isCurrent) {
           ctx.strokeStyle = '#c8a050';
-          ctx.lineWidth = 2;
+          ctx.lineWidth = 1.5;
         } else {
           ctx.strokeStyle = '#555';
           ctx.lineWidth = 1;
         }
+      } else if (seg.kind === 'dashed') {
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = 1;
       } else {
         ctx.strokeStyle = '#887848';
         ctx.lineWidth = 1.5;
@@ -709,26 +714,20 @@ export class PauseMenu {
       ctx.lineTo(seg.x2, seg.y2);
       ctx.stroke();
     }
+    ctx.restore();
 
-    // Timeline number labels at each spine start
-    ctx.font = '5px "Press Start 2P", monospace';
-    for (const tl of timelines) {
-      const aPt = (layout.points || []).find(
-        (p) => p.timeline === tl.number && p.kind === 'A'
-      );
-      if (!aPt) continue;
-      const selected = selectedTl && tl.number === selectedTl.number;
-      ctx.fillStyle = selected ? PALETTE.gold : tl.isCurrent ? '#c8a050' : '#888';
-      ctx.fillText(String(tl.number), aPt.x - 8, aPt.y + 3);
+    ctx.font = '4px "Press Start 2P", monospace';
+    ctx.fillStyle = '#888';
+    for (const lab of layout.yearLabels || []) {
+      ctx.fillText(String(lab.year), lab.x, lab.y - 2);
+    }
+    for (const col of layout.columnLabels || []) {
+      const selected = selectedTl && col.number === selectedTl.number;
+      ctx.fillStyle = selected ? PALETTE.gold : '#888';
+      ctx.fillText(String(col.number), col.x - 2, col.y);
     }
 
-    // A / DR / B / C points
     for (const pt of layout.points || []) {
-      if (pt.kind === 'DR') {
-        ctx.fillStyle = '#90b070';
-        ctx.fillRect(pt.x - 2, pt.y - 2, 4, 4);
-        continue;
-      }
       const r = pt.kind === 'C' ? 3.5 : 3;
       if (pt.kind === 'A') ctx.fillStyle = PALETTE.gold;
       else if (pt.kind === 'B') ctx.fillStyle = '#80c0e0';
@@ -739,11 +738,7 @@ export class PauseMenu {
       ctx.fillStyle = '#aaa';
       ctx.font = '4px "Press Start 2P", monospace';
       const tag = pt.kind === 'B' ? pt.label : pt.kind;
-      ctx.fillText(tag, pt.x + 5, pt.y + 2);
-      if (pt.kind === 'A' || pt.kind === 'C') {
-        ctx.fillStyle = '#666';
-        ctx.fillText(String(pt.year), pt.x + 5, pt.y + 9);
-      }
+      ctx.fillText(tag, pt.x + 4, pt.y - 4);
     }
 
     if (!compareResult && layout.currentPos) {
@@ -767,7 +762,7 @@ export class PauseMenu {
 
     ctx.fillStyle = '#666';
     ctx.font = '4px "Press Start 2P", monospace';
-    ctx.fillText('A start · DR visit · B fork · C age100', x + 12, graphY + graphH + 2);
+    ctx.fillText('A start · B branch · C age 100', x + 12, graphY + graphH + 2);
 
     if (compareSelect) {
       const branches = listCompareBranches(game);

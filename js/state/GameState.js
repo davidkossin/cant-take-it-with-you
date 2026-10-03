@@ -43,20 +43,20 @@ export function createDefaultSetup() {
 }
 
 /**
- * Tuned "average US household" starter for New Game → Standard portfolio.
+ * Standard starter for New Game → Standard portfolio (skip the questionnaire).
  *
- * Rough mid-2020s grounding (order-of-magnitude, not a Census extract):
- *   age 40, married, one school-age child; ~$78k household gross;
- *   primary home ~$380k with ~$270k @ 6.5% / 27yr left; liquid buffers
- *   (Cash / savings / taxable stocks) and a modest 401(k); ZIP 85001 (AZ).
+ * Starman, age 30, married, no children. Salary $78k, spend $50k.
+ * Primary home $380k, mortgage $270k @ 6.5% / 27 years left.
+ * Cash $5,500, savings $15,000 @ 2%, stocks $41,500 (basis $35,275),
+ * 401(k) $62,000 (6% contribution, 100% match on the first 3% of salary).
+ * ZIP 85001, Standard difficulty.
  *
  * Glass-wall validation (Standard difficulty, deterministic projectYears,
  * no Decision Room changes — same path as HallwayScene):
  *   snapshots = [baseline, ...projectYears(baseline, years, 'standard', {deterministic:true})]
- *   findBankInsolvencyIndex(snapshots) === 6  (±1 ok)
- *   → Cash ≤ 0 after ~6 projected years / ~6 hallway doors (year index 6).
- * Tuned primarily via annualSpending vs salary / tax / 401(k) deferral / mortgage P&I
- * (+ USDA child-cost band). Re-check if Engine cashflow or difficulty presets change.
+ *   findBankInsolvencyIndex(snapshots) === 15
+ *   starting Cash $5,500, starting net worth $234,000.
+ * Do not retune these inputs to chase a different glass index.
  */
 export function createStandardPortfolioSetup() {
   const home = {
@@ -68,11 +68,11 @@ export function createStandardPortfolioSetup() {
     remainingTerm: 27,
     propertyTaxRate: 0.012,
   };
-  const spend = 35000;
+  const spend = 50000;
   return {
-    playerName: 'Alex',
+    playerName: 'Starman',
     year: CURRENT_YEAR,
-    age: 40,
+    age: 30,
     hairColor: 'dark',
     hairLength: 'short',
     cash: 5500,
@@ -80,14 +80,14 @@ export function createStandardPortfolioSetup() {
     savings: 15000,
     savingsRate: 0.02,
     homes: [home],
-    stocksTotal: 22000,
-    stocksCostBasis: 18700,
+    stocksTotal: 41500,
+    stocksCostBasis: 35275,
     k401Balance: 62000,
     k401ContribRate: 0.06,
     k401MatchRate: 1.0,
     k401MatchOnFirst: 0.03,
     married: true,
-    kids: [{ name: 'Sam', age: 7 }],
+    kids: [],
     annualSpending: spend,
     spendingBreakdown: {
       incomeTax: 0,
@@ -374,6 +374,97 @@ export function findPriorHallwayNode(game, fromNodeId) {
   return null;
 }
 
+/**
+ * Hallway descended from this room that a year-door begin actually split.
+ * @param {object} game
+ * @param {object} roomNode
+ * @returns {object|null}
+ */
+function hallwaySplitFromRoom(game, roomNode) {
+  const nodes = Object.values(game.timeline?.nodes || {});
+  /** @type {Map<string, object[]>} */
+  const children = new Map();
+  for (const n of nodes) {
+    if (!n?.parentId) continue;
+    if (!children.has(n.parentId)) children.set(n.parentId, []);
+    children.get(n.parentId).push(n);
+  }
+  const stack = [...(children.get(roomNode.id) || [])];
+  const seen = new Set();
+  let found = null;
+  while (stack.length) {
+    const n = stack.pop();
+    if (!n || seen.has(n.id)) continue;
+    seen.add(n.id);
+    if (n.type === 'hallway') {
+      for (const kid of children.get(n.id) || []) {
+        if (
+          kid.type === 'room' &&
+          kid.kind === 'begin' &&
+          (kid.year !== n.year || kid.age !== n.age)
+        ) {
+          found = n;
+        }
+      }
+    }
+    for (const kid of children.get(n.id) || []) stack.push(kid);
+  }
+  return found;
+}
+
+/**
+ * Hallway this Decision Room may return to through the west door, or null.
+ * A year-door room (year/age differ from the hallway it came from) always
+ * qualifies. The room that opened the hallway — including the starter after
+ * a south-door return — qualifies only once a later year door has split it.
+ * @param {object} game
+ * @returns {object|null}
+ */
+export function westReturnHallway(game) {
+  const cur = currentNode(game);
+  if (!cur || cur.type !== 'room') return null;
+  const hall = findPriorHallwayNode(game);
+  // This room was entered through a year door off a hallway.
+  if (hall && (cur.year !== hall.year || cur.age !== hall.age)) return hall;
+  // The room that opened the hallway (starter, or a south-door return to it)
+  // gets a west door only after a later year door has split that hallway.
+  if (cur.kind === 'begin') {
+    const splitHall = hallwaySplitFromRoom(game, cur);
+    if (splitHall) return splitHall;
+  }
+  return null;
+}
+
+/**
+ * South door: restore the Decision Room that opened this hallway.
+ * Does not create a new begin node under the hallway (that looked like a
+ * year-door split and spawned a west door on the starter room).
+ * @param {object} game
+ * @param {object} portfolioState finances from when that room was left
+ * @returns {string|null} restored begin node id
+ */
+export function returnToLeftDecisionRoom(game, portfolioState) {
+  const p = cloneState(portfolioState);
+  let id = game.timeline.currentNodeId;
+  const guard = new Set();
+  let beginId = null;
+  while (id && !guard.has(id)) {
+    guard.add(id);
+    const n = game.timeline.nodes?.[id];
+    if (!n) break;
+    if (n.type === 'room' && n.kind === 'begin' && n.year === p.year && n.age === p.age) {
+      beginId = n.id;
+      break;
+    }
+    id = n.parentId;
+  }
+  game.portfolio = p;
+  if (beginId) game.timeline.currentNodeId = beginId;
+  pushWorth(game, p);
+  game.scene = 'room';
+  return beginId;
+}
+
 export function listTimelineNodes(game) {
   return Object.values(game.timeline.nodes || {}).sort((a, b) => {
     if (a.year !== b.year) return a.year - b.year;
@@ -548,7 +639,9 @@ export function portfolioAtYearOnBranch(game, tipNodeId, year) {
   if (!Number.isFinite(y)) {
     return { status: 'empty', year: y };
   }
-  const path = pathFromRoot(game, tipNodeId);
+  // Only this timeline's own nodes. Ancestors before the fork are another
+  // timeline — years before A have no past.
+  const path = timelineOwnNodes(game, tipNodeId);
   if (!path.length) return { status: 'empty', year: y };
 
   const withSnaps = [];
@@ -568,7 +661,6 @@ export function portfolioAtYearOnBranch(game, tipNodeId, year) {
     return { status: 'after', year: y, yearMin, yearMax };
   }
 
-  // Exact year only — mid-span gaps (e.g. spawned into a later door) are n/a
   const exact = withSnaps.filter((s) => s.year === y);
   if (exact.length) {
     const pick = exact[exact.length - 1];
@@ -588,13 +680,27 @@ export function portfolioAtYearOnBranch(game, tipNodeId, year) {
 }
 
 /**
- * True when this node is a Decision Room begin that should fork the Map tree.
- * Every non-root DR begin forks visually (Start DR → Hallway → later DR shows a Y).
- * `isFork` / sibling-count still matter for spawn-off compare tips, but Map UX
- * always treats a new Decision Room entry as a branch point.
- * @param {object} node
- * @param {Map<string, string[]>|null} [_kids] unused; kept for call-site compat
+ * Nodes that belong to the timeline of tipNodeId, starting at that
+ * timeline's A (game start, or the year-door begin that opened the column).
+ * @param {object} game
+ * @param {string} tipNodeId
+ * @returns {object[]}
  */
+export function timelineOwnNodes(game, tipNodeId) {
+  if (!tipNodeId || !game?.timeline?.nodes?.[tipNodeId]) return [];
+  const { laneOf } = assignTimelineLanes(game);
+  const tipLane = laneOf.get(tipNodeId) ?? 0;
+  const path = pathFromRoot(game, tipNodeId);
+  let startIdx = 0;
+  if (tipLane !== 0) {
+    const idx = path.findIndex(
+      (n) => (laneOf.get(n.id) ?? 0) === tipLane && isDecisionRoomForkEntry(n)
+    );
+    if (idx >= 0) startIdx = idx;
+  }
+  return path.slice(startIdx).filter((n) => (laneOf.get(n.id) ?? 0) === tipLane);
+}
+
 export function isDecisionRoomForkEntry(node, _kids) {
   if (!node || node.type !== 'room') return false;
   if (node.kind && node.kind !== 'begin') return false;
@@ -674,24 +780,18 @@ export function hallwayNodesForTimeline(game, tipId) {
 }
 
 /**
- * Semantic timeline TREE for the pause Map.
- * Each lane is a Timeline (1, 2, 3…); every Decision Room begin after the root
- * forks a new lane (Y-shaped branch). Real alternate playthrough tips still
- * drive Map Compare via listCompareBranches.
+ * Pause Map tree. Time goes up. Each column is one timeline.
  *
- * Point A = branch start year (game start on Timeline 1; Decision Room year on forks)
- * Point B / B2… = Decision Room fork years along that timeline
- * Point C = age-100 / terminal year end marker
+ * A — where the timeline begins (game start on column 1; the year-door
+ *     Decision Room on a later column).
+ * B — on the parent column, the year a child timeline forked off. Drawn on
+ *     the same calendar year as that child's A so the fork is horizontal.
+ *     The game records the left-behind room on an earlier year than the door
+ *     you entered; the shared row is the door year (the year you forked onto).
+ * C — age 100, its own point on that year row, only if a node on the column
+ *     was actually played to age 100.
  *
  * @param {object} game
- * @returns {{
- *   timelines: Array<object>,
- *   connectors: Array<object>,
- *   startYear: number,
- *   terminalYear: number,
- *   current: object|null,
- *   laneCount: number,
- * }}
  */
 export function buildTimelineMapModel(game) {
   const nodes = game.timeline?.nodes || {};
@@ -720,6 +820,16 @@ export function buildTimelineMapModel(game) {
   const currentId = game.timeline.currentNodeId;
   const lanes = [...new Set(laneOf.values())].sort((a, b) => a - b);
 
+  function reachedAge100(onLane) {
+    for (const n of onLane) {
+      if ((n.age ?? 0) >= MAX_AGE || (n.year ?? 0) >= terminalYear) return true;
+      const snap = game.timeline.snapshots?.[n.snapshotId];
+      if (!snap) continue;
+      if ((snap.age ?? 0) >= MAX_AGE || (snap.year ?? 0) >= terminalYear) return true;
+    }
+    return false;
+  }
+
   const timelines = lanes.map((lane) => {
     const onLane = list
       .filter((n) => (laneOf.get(n.id) ?? 0) === lane)
@@ -731,16 +841,13 @@ export function buildTimelineMapModel(game) {
     let yearA = startYear;
     let spawnNode = null;
     if (lane !== 0) {
-      // First node on a forked lane is the Decision Room begin that spawned it
       spawnNode = onLane.find((n) => isDecisionRoomForkEntry(n)) || onLane[0] || null;
       if (spawnNode) yearA = spawnNode.year;
+    } else if (root) {
+      yearA = root.year;
     }
 
-    // Tip for this lane: real leaf on lane, else deepest hallway (abandoned
-    // parent spine before a DR fork), else latest node on the lane.
-    const leaves = onLane.filter(
-      (n) => !kids.has(n.id) || (kids.get(n.id) || []).length === 0
-    );
+    const leaves = onLane.filter((n) => !(kids.get(n.id) || []).length);
     const hallwaysOnLane = onLane.filter((n) => n.type === 'hallway');
     const tip =
       leaves[leaves.length - 1] ||
@@ -748,20 +855,19 @@ export function buildTimelineMapModel(game) {
       onLane[onLane.length - 1] ||
       root;
 
-    // Point B…: Decision Room entries that forked RIGHT off hubs on this lane
     const forks = [];
     let forkIdx = 0;
     for (const n of onLane) {
-      const children = kids.get(n.id) || [];
-      for (const cid of children) {
+      for (const cid of kids.get(n.id) || []) {
         const child = nodes[cid];
-        if (!child) continue;
+        if (!child || !isDecisionRoomForkEntry(child)) continue;
         const childLane = laneOf.get(cid) ?? 0;
         if (childLane === lane) continue;
-        if (!isDecisionRoomForkEntry(child)) continue;
         forkIdx += 1;
         forks.push({
+          // Same row as the child timeline's A (the year you forked onto).
           year: child.year,
+          leaveYear: n.year,
           label: forkIdx === 1 ? 'B' : `B${forkIdx}`,
           hubId: n.id,
           childId: cid,
@@ -770,17 +876,9 @@ export function buildTimelineMapModel(game) {
       }
     }
 
-    // Decision Room visits on this lane (markers even when a visit is not a B hub)
-    const visits = [];
-    const seenVisitYears = new Set();
-    for (const n of onLane) {
-      if (n.type !== 'room' || (n.kind && n.kind !== 'begin')) continue;
-      if (seenVisitYears.has(n.year)) continue;
-      if (!spawnNode && n.year === yearA) continue;
-      if (spawnNode && n.id === spawnNode.id) continue;
-      seenVisitYears.add(n.year);
-      visits.push({ year: n.year, nodeId: n.id });
-    }
+    const reachedC = reachedAge100(onLane);
+    const nodeYears = onLane.map((n) => n.year);
+    const playedYearMax = Math.max(yearA, ...nodeYears, ...forks.map((f) => f.year));
 
     return {
       number: 0,
@@ -788,23 +886,24 @@ export function buildTimelineMapModel(game) {
       tipId: tip?.id,
       tip,
       yearA,
-      yearC: terminalYear,
+      yearC: reachedC ? terminalYear : null,
+      reachedC,
+      playedYearMax,
       forks,
-      visits,
       isCurrent: (laneOf.get(currentId) ?? 0) === lane,
       spawnNodeId: spawnNode?.id ?? null,
     };
   });
 
-  timelines.forEach((t, i) => {
-    t.number = i + 1;
+  timelines.forEach((tl, i) => {
+    tl.number = i + 1;
   });
 
   const connectors = [];
-  for (const t of timelines) {
-    for (const f of t.forks) {
+  for (const tl of timelines) {
+    for (const f of tl.forks) {
       connectors.push({
-        fromLane: t.lane,
+        fromLane: tl.lane,
         toLane: f.childLane,
         year: f.year,
         label: f.label,
@@ -813,8 +912,6 @@ export function buildTimelineMapModel(game) {
   }
 
   const cur = currentId ? nodes[currentId] : null;
-  // Live "you" uses portfolio year/age: hallway nodes freeze at entry year while
-  // the player walks doors and the HUD advances.
   const liveYear = game.portfolio?.year ?? cur?.year ?? startYear;
   const liveAge = game.portfolio?.age ?? cur?.age ?? startAge;
   return {
@@ -831,61 +928,81 @@ export function buildTimelineMapModel(game) {
           type: cur.type,
           nodeYear: cur.year,
         }
-      : game.portfolio
-        ? {
-            year: liveYear,
-            age: liveAge,
-            id: null,
-            lane: 0,
-            type: game.scene || 'room',
-            nodeYear: liveYear,
-          }
-        : null,
+      : null,
     laneCount,
   };
 }
 
 export function layoutTimelineMap(game, rect) {
   const model = buildTimelineMapModel(game);
-  const padX = 14;
-  const padY = 8;
-  const usableW = Math.max(20, rect.w - padX * 2);
-  const usableH = Math.max(20, rect.h - padY * 2);
-  const yMin = model.startYear;
-  const yMax = model.terminalYear;
-  const yearSpan = Math.max(1, yMax - yMin);
-  const maxLane = Math.max(0, ...(model.timelines.map((t) => t.lane) || [0]));
-  const laneGap =
-    maxLane === 0 ? 0 : Math.min(36, usableW / Math.max(1, maxLane));
+  const labelW = 32;
+  const bottomH = 12;
+  const plotX = rect.x + labelW;
+  const plotY = rect.y + 2;
+  const plotW = Math.max(20, rect.w - labelW - 4);
+  const plotH = Math.max(16, rect.h - bottomH - 4);
 
-  // Keep markers inset so A/C discs + labels stay inside the graph.
-  const edgeInset = Math.min(10, usableH * 0.06);
+  const years = [];
+  for (const tl of model.timelines) {
+    years.push(tl.yearA);
+    if (tl.reachedC && tl.yearC != null) years.push(tl.yearC);
+    for (const f of tl.forks) years.push(f.year);
+    years.push(tl.playedYearMax);
+  }
+  const yMin = years.length ? Math.min(...years) : model.startYear;
+  const yMax = years.length ? Math.max(...years) : model.startYear;
+  const yearSpan = Math.max(1, yMax - yMin);
+  const laneCount = Math.max(1, model.timelines.length);
+  const maxLane = Math.max(0, ...model.timelines.map((t) => t.lane), 0);
+
   function xy(lane, year) {
     const t = (year - yMin) / yearSpan;
+    const laneT = laneCount <= 1 ? 0.5 : lane / (laneCount - 1);
     return {
-      x: rect.x + padX + Math.max(8, lane * laneGap),
-      // Past/start sits at the bottom; future/age 100 rises to the top.
-      y: rect.y + padY + edgeInset + (1 - t) * (usableH - edgeInset * 2),
+      x: plotX + laneT * (plotW - 8),
+      y: plotY + (1 - t) * plotH,
     };
   }
 
-  /** @type {Array<{key:string,x:number,y:number,lane:number,year:number,kind:string,label:string,timeline:number,tipId?:string}>} */
   const points = [];
-  /** @type {Array<{x1:number,y1:number,x2:number,y2:number,kind:string}>} */
   const segments = [];
+  const yearLabels = [];
+  const columnLabels = [];
+  const labeledYears = new Set();
+
+  function addYearLabel(year) {
+    if (labeledYears.has(year)) return;
+    labeledYears.add(year);
+    const p = xy(0, year);
+    yearLabels.push({ year, x: rect.x + 1, y: p.y });
+  }
 
   for (const tl of model.timelines) {
     const a = xy(tl.lane, tl.yearA);
-    const c = xy(tl.lane, tl.yearC);
+    const topYear = tl.reachedC && tl.yearC != null ? tl.yearC : tl.playedYearMax;
+    const top = xy(tl.lane, topYear);
+    const solidTopY = Math.abs(top.y - a.y) < 1 ? a.y - 10 : top.y;
     segments.push({
       x1: a.x,
       y1: a.y,
-      x2: c.x,
-      y2: c.y,
+      x2: a.x,
+      y2: solidTopY,
       kind: 'spine',
       timeline: tl.number,
       isCurrent: tl.isCurrent,
     });
+    // No past before a fork: dashed from the chart bottom up to this column's A.
+    if (tl.yearA > yMin) {
+      const bottom = xy(tl.lane, yMin);
+      segments.push({
+        x1: a.x,
+        y1: bottom.y,
+        x2: a.x,
+        y2: a.y,
+        kind: 'dashed',
+        timeline: tl.number,
+      });
+    }
     points.push({
       key: `T${tl.number}-A`,
       x: a.x,
@@ -897,20 +1014,7 @@ export function layoutTimelineMap(game, rect) {
       timeline: tl.number,
       tipId: tl.tipId,
     });
-    for (const v of tl.visits || []) {
-      const vp = xy(tl.lane, v.year);
-      points.push({
-        key: `T${tl.number}-DR-${v.year}`,
-        x: vp.x,
-        y: vp.y,
-        lane: tl.lane,
-        year: v.year,
-        kind: 'DR',
-        label: 'DR',
-        timeline: tl.number,
-        tipId: tl.tipId,
-      });
-    }
+    addYearLabel(tl.yearA);
     for (const f of tl.forks) {
       const bp = xy(tl.lane, f.year);
       points.push({
@@ -923,36 +1027,41 @@ export function layoutTimelineMap(game, rect) {
         label: f.label,
         timeline: tl.number,
         tipId: tl.tipId,
+        leaveYear: f.leaveYear,
       });
+      addYearLabel(f.year);
     }
-    points.push({
-      key: `T${tl.number}-C`,
-      x: c.x,
-      y: c.y,
-      lane: tl.lane,
-      year: tl.yearC,
-      kind: 'C',
-      label: 'C',
-      timeline: tl.number,
-      tipId: tl.tipId,
+    if (tl.reachedC && tl.yearC != null) {
+      const c = xy(tl.lane, tl.yearC);
+      points.push({
+        key: `T${tl.number}-C`,
+        x: c.x,
+        y: c.y,
+        lane: tl.lane,
+        year: tl.yearC,
+        kind: 'C',
+        label: 'C',
+        timeline: tl.number,
+        tipId: tl.tipId,
+      });
+      addYearLabel(tl.yearC);
+    }
+    const col = xy(tl.lane, yMin);
+    columnLabels.push({
+      number: tl.number,
+      x: col.x,
+      y: plotY + plotH + 10,
     });
   }
 
   for (const conn of model.connectors) {
     const from = xy(conn.fromLane, conn.year);
-    const childAtFork = xy(conn.toLane, conn.year);
-    // Join the child spine a little above the fork year so the connector
-    // reads as a Y: parent spine continues up, child arm rises up-right.
-    const forkRise = Math.min(
-      12,
-      usableH * 0.12,
-      Math.max(0, childAtFork.y - (rect.y + padY))
-    );
+    const to = xy(conn.toLane, conn.year);
     segments.push({
       x1: from.x,
       y1: from.y,
-      x2: childAtFork.x,
-      y2: childAtFork.y - forkRise,
+      x2: to.x,
+      y2: to.y,
       kind: 'fork',
       label: conn.label,
     });
@@ -964,7 +1073,6 @@ export function layoutTimelineMap(game, rect) {
     currentPos = { ...p, ...model.current };
   }
 
-  // Legacy-compatible maps for any old callers
   const positions = new Map();
   for (const pt of points) {
     positions.set(pt.key, { x: pt.x, y: pt.y, node: pt, lane: pt.lane });
@@ -974,6 +1082,8 @@ export function layoutTimelineMap(game, rect) {
     model,
     points,
     segments,
+    yearLabels,
+    columnLabels,
     currentPos,
     positions,
     edges: segments

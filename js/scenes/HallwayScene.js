@@ -8,7 +8,7 @@ import {
   findFacingInteractable,
 } from '../render/World.js';
 import { projectYears, computeWorth, cloneState, findBankInsolvencyIndex } from '../finance/Engine.js';
-import { currentNode, enterYearRoom, commitHallwayNode } from '../state/GameState.js';
+import { currentNode, enterYearRoom, commitHallwayNode, returnToLeftDecisionRoom } from '../state/GameState.js';
 import { autoSave } from '../state/SaveSystem.js';
 import { log as debugLog, setHallwayStash } from '../debug/Logger.js';
 
@@ -325,7 +325,8 @@ export class HallwayScene {
         cash: state.cash,
         salary: state.salary,
       });
-      enterYearRoom(game, state);
+      // Same room again — not a year-door split, so no new begin node.
+      returnToLeftDecisionRoom(game, state);
       autoSave(game, 'begin');
       this.leave();
       return { goto: 'room' };
