@@ -12,6 +12,12 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 - Published the Godot V2 HTML5 rebuild at `/v2/` (Starman standard portfolio, Hallway of Time, six tellers). V1 at the site root is unchanged.
 
+## [0.5.13] — 2026-10-03
+
+### Changed
+- Top-left back link label is **Objects In Space** (was Macinapp). The link still goes to the site homepage.
+- Cache-bust / `GAME_VERSION` bumped to **0.5.13**
+
 ## [0.5.12] — 2026-10-03
 
 ### Changed
