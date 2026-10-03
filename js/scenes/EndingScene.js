@@ -1,4 +1,4 @@
-import { VIEW_W, CANVAS_H, PALETTE, KEYS } from '../config.js';
+import { FRAME_W, FRAME_H, PALETTE, KEYS } from '../config.js';
 import { drawWorthChart } from '../render/Charts.js';
 
 export class EndingScene {
@@ -80,28 +80,28 @@ export class EndingScene {
 
   render(ctx) {
     ctx.fillStyle = `rgba(0,0,0,${this.alpha})`;
-    ctx.fillRect(0, 0, VIEW_W, CANVAS_H);
+    ctx.fillRect(0, 0, FRAME_W, FRAME_H);
 
     if (this.phase >= 1 && this.phase < 3) {
       ctx.textAlign = 'center';
       // The ending is about leaving material wealth behind: never reveal a final
       // dollar amount here. The charts below intentionally keep the real history.
-      ctx.font = '7px "Press Start 2P", monospace';
+      ctx.font = '22px "Press Start 2P", monospace';
       ctx.fillStyle = '#666';
-      ctx.fillText('Net Worth  ---', VIEW_W / 2, 90);
-      ctx.fillText('Cash       ---', VIEW_W / 2, 106);
+      ctx.fillText('Net Worth  ---', FRAME_W / 2, 280);
+      ctx.fillText('Cash       ---', FRAME_W / 2, 320);
 
       ctx.fillStyle = PALETTE.gold;
-      ctx.font = '9px "Press Start 2P", monospace';
-      ctx.fillText("You can't take", VIEW_W / 2, 140);
-      ctx.fillText('it with you…', VIEW_W / 2, 158);
+      ctx.font = '428px "Press Start 2P", monospace';
+      ctx.fillText("You can't take", FRAME_W / 2, 420);
+      ctx.fillText('it with you…', FRAME_W / 2, 490);
 
       if (this.phase >= 2) {
-        ctx.font = '7px "Press Start 2P", monospace';
+        ctx.font = '22px "Press Start 2P", monospace';
         this.menu.forEach((m, i) => {
           const sel = i === this.menuIndex;
           ctx.fillStyle = sel ? PALETTE.gold : PALETTE.uiText;
-          ctx.fillText(`${sel ? '▶ ' : '  '}${m.label}`, VIEW_W / 2, 190 + i * 16);
+          ctx.fillText(`${sel ? '▶ ' : '  '}${m.label}`, FRAME_W / 2, 600 + i * 48);
         });
       }
       ctx.textAlign = 'left';
@@ -109,23 +109,23 @@ export class EndingScene {
 
     if (this.phase === 3) {
       ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, VIEW_W, CANVAS_H);
-      ctx.font = '8px "Press Start 2P", monospace';
+      ctx.fillRect(0, 0, FRAME_W, FRAME_H);
+      ctx.font = '28px "Press Start 2P", monospace';
       ctx.fillStyle = PALETTE.gold;
       ctx.textAlign = 'center';
-      ctx.fillText('Your life ledger', VIEW_W / 2, 22);
+      ctx.fillText('Your life ledger', FRAME_W / 2, 36);
       ctx.textAlign = 'left';
       drawWorthChart(ctx, this.game?.worthHistory || [], {
-        x: 16,
-        y: 32,
-        w: VIEW_W - 32,
-        h: CANVAS_H - 80,
+        x: 80,
+        y: 100,
+        w: FRAME_W - 160,
+        h: FRAME_H - 200,
         series: ['netWorth', 'bank', 'salary'],
       });
-      ctx.font = '6px "Press Start 2P", monospace';
+      ctx.font = '16px "Press Start 2P", monospace';
       ctx.fillStyle = PALETTE.uiText;
       ctx.textAlign = 'center';
-      ctx.fillText('Enter / Esc — back', VIEW_W / 2, CANVAS_H - 12);
+      ctx.fillText('Enter / Esc — back', FRAME_W / 2, FRAME_H - 36);
       ctx.textAlign = 'left';
     }
   }

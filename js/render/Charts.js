@@ -3,7 +3,7 @@
  * Also multi-timeline compare charts (shared year axis + legend labels).
  */
 
-import { PALETTE, VIEW_W, VIEW_H } from '../config.js';
+import { PALETTE, FRAME_W, FRAME_H } from '../config.js';
 import { hairline } from './hdText.js';
 
 /** Distinct colors for Timeline A/B/C… overlays */
@@ -26,8 +26,8 @@ export const BRANCH_COLORS = [
 export function drawWorthChart(ctx, history, opts = {}) {
   const x = opts.x ?? 16;
   const y = opts.y ?? 36;
-  const w = opts.w ?? VIEW_W - 32;
-  const h = opts.h ?? VIEW_H - 80;
+  const w = opts.w ?? FRAME_W - 160;
+  const h = opts.h ?? FRAME_H - 220;
   const series = opts.series || ['netWorth', 'bank'];
 
   ctx.fillStyle = 'rgba(0,0,0,0.72)';
@@ -38,7 +38,7 @@ export function drawWorthChart(ctx, history, opts = {}) {
 
   if (!history?.length) {
     ctx.fillStyle = PALETTE.uiText;
-    ctx.font = '7px "Press Start 2P", monospace';
+    ctx.font = '16px "Press Start 2P", monospace';
     ctx.fillText('No data yet', x + 8, y + h / 2);
     return;
   }
@@ -86,7 +86,7 @@ export function drawWorthChart(ctx, history, opts = {}) {
   const n = history.length;
   for (const key of series) {
     ctx.strokeStyle = colors[key] || '#fff';
-    hairline(ctx, 1.25);
+    hairline(ctx, 2);
     ctx.beginPath();
     let started = false;
     for (let i = 0; i < n; i++) {
@@ -103,26 +103,26 @@ export function drawWorthChart(ctx, history, opts = {}) {
   }
 
   // legend
-  ctx.font = '5px "Press Start 2P", monospace';
+  ctx.font = '14px "Press Start 2P", monospace';
   let lx = x + 4;
-  const ly = y + 4;
+  const ly = y + 16;
   for (const key of series) {
     ctx.fillStyle = colors[key] || '#fff';
-    ctx.fillRect(lx, ly, 6, 4);
+    ctx.fillRect(lx, ly, 18, 12);
     ctx.fillStyle = PALETTE.uiText;
-    ctx.fillText(labels[key] || key, lx + 8, ly - 1);
-    lx += 8 + ctx.measureText(labels[key] || key).width + 10;
+    ctx.fillText(labels[key] || key, lx + 24, ly);
+    lx += 24 + ctx.measureText(labels[key] || key).width + 24;
   }
 
   // year range
   ctx.fillStyle = '#888';
-  ctx.fillText(String(history[0].year), x, y + h + 6);
-  ctx.fillText(String(history[n - 1].year), x + w - 28, y + h + 6);
+  ctx.fillText(String(history[0].year), x, y + h + 22);
+  ctx.fillText(String(history[n - 1].year), x + w - 70, y + h + 22);
 
   // min/max
   ctx.fillStyle = '#666';
-  ctx.fillText(compact(maxV), x + 2, y + 2);
-  ctx.fillText(compact(minV), x + 2, y + h - 8);
+  ctx.fillText(compact(maxV), x + 2, y + 40);
+  ctx.fillText(compact(minV), x + 2, y + h - 28);
 }
 
 /**
@@ -135,8 +135,8 @@ export function drawWorthChart(ctx, history, opts = {}) {
 export function drawCompareChart(ctx, branches, opts = {}) {
   const x = opts.x ?? 16;
   const y = opts.y ?? 36;
-  const w = opts.w ?? VIEW_W - 32;
-  const h = opts.h ?? VIEW_H - 80;
+  const w = opts.w ?? FRAME_W - 160;
+  const h = opts.h ?? FRAME_H - 220;
   const metric = opts.metric || 'netWorth';
 
   ctx.fillStyle = 'rgba(0,0,0,0.72)';
@@ -148,7 +148,7 @@ export function drawCompareChart(ctx, branches, opts = {}) {
   const usable = (branches || []).filter((b) => b.history?.length);
   if (!usable.length) {
     ctx.fillStyle = PALETTE.uiText;
-    ctx.font = '7px "Press Start 2P", monospace';
+    ctx.font = '16px "Press Start 2P", monospace';
     ctx.fillText('No branch data', x + 8, y + h / 2);
     return;
   }
@@ -211,14 +211,14 @@ export function drawCompareChart(ctx, branches, opts = {}) {
   });
 
   // legend — Timeline A / B ★
-  ctx.font = '5px "Press Start 2P", monospace';
+  ctx.font = '14px "Press Start 2P", monospace';
   let lx = x + 4;
   const ly = y + 4;
   usable.forEach((b, i) => {
     const color = BRANCH_COLORS[i % BRANCH_COLORS.length];
     const tag = `${b.letter || b.shortLabel || i}${b.isCurrent ? '*' : ''}`;
     ctx.fillStyle = color;
-    ctx.fillRect(lx, ly, 6, 4);
+    ctx.fillRect(lx, ly, 18, 12);
     ctx.fillStyle = PALETTE.uiText;
     ctx.fillText(tag, lx + 8, ly - 1);
     lx += 8 + ctx.measureText(tag).width + 8;

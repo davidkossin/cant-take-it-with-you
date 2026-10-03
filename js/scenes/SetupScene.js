@@ -2,7 +2,7 @@
  * Contextual LTTP-styled setup questionnaires with Back on every step.
  */
 
-import { CURRENT_YEAR, HOME_TYPES, VIEW_W, VIEW_H, CANVAS_H, PALETTE } from '../config.js';
+import { CURRENT_YEAR, HOME_TYPES, FRAME_W, FRAME_H, TILE, WORLD_SCALE, PALETTE } from '../config.js';
 import { createDefaultSetup, createGameFromSetup } from '../state/GameState.js';
 import { saveProfile } from '../state/ProfileSystem.js';
 import { listDifficulties } from '../finance/Difficulty.js';
@@ -17,15 +17,18 @@ export class SetupScene {
 
   draw(ctx) {
     const floor = makeTile('wood');
-    for (let y = 0; y < CANVAS_H; y += 16) {
-      for (let x = 0; x < VIEW_W; x += 16) ctx.drawImage(floor, x, y);
+    const step = TILE * WORLD_SCALE;
+    ctx.imageSmoothingEnabled = false;
+    for (let y = 0; y < FRAME_H; y += step) {
+      for (let x = 0; x < FRAME_W; x += step) ctx.drawImage(floor, x, y, step, step);
     }
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fillRect(0, 0, VIEW_W, CANVAS_H);
-    ctx.font = '8px "Press Start 2P", monospace';
+    ctx.fillRect(0, 0, FRAME_W, FRAME_H);
+    ctx.font = '28px "Press Start 2P", monospace';
     ctx.fillStyle = PALETTE.gold;
     ctx.textAlign = 'center';
-    ctx.fillText('Character Setup', VIEW_W / 2, 28);
+    ctx.textBaseline = 'top';
+    ctx.fillText('Character Setup', FRAME_W / 2, 36);
     ctx.textAlign = 'left';
   }
 

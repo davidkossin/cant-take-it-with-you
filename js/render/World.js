@@ -14,6 +14,8 @@ import { makeTile, makeDoor, makeLamp, makeBlueTorch, makeTellerWindow, makeTell
  */
 export function buildDecisionRoom(opts = {}) {
   const hasWestReturn = !!opts.hasWestReturn;
+  // Original room: 20×14 tiles (320×224), the old playfield proportions.
+  // Side margins are void outside this map; the player cannot walk there.
   const cols = 20;
   const rows = 14;
   const map = [];
@@ -175,8 +177,9 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
   // Narrow walkable: 4 tiles wide, thick 2-tile walls, void outside
   const walkW = 4;
   const wallThick = 2;
-  const voidPad = 3;
-  const cols = voidPad + wallThick + walkW + wallThick + voidPad; // 14
+  // Corridor stays narrow; void and walls fill the wide 16:9 view.
+  const cols = VIEW_W / TILE;
+  const voidPad = Math.floor((cols - walkW - wallThick * 2) / 2);
   const walkLeft = voidPad + wallThick; // first walkable col
   const walkRight = walkLeft + walkW - 1;
 
@@ -355,12 +358,15 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
     carpet: makeTile('carpet'),
   };
 
-  // Fill view with void first for hallway (covers camera edges)
-  if (world.theme === 'hallway') {
+  // Hallway corridor and the squarer Decision Room both sit in the wide
+  // frame. Void fills the non-playable margins (same tile as the hallway).
+  if (world.theme === 'hallway' || world.theme === 'room') {
     const voidTile = tiles.void;
+    const ox = ((camX % TILE) + TILE) % TILE;
+    const oy = ((camY % TILE) + TILE) % TILE;
     for (let y = -TILE; y < VIEW_H + TILE; y += TILE) {
       for (let x = -TILE; x < VIEW_W + TILE; x += TILE) {
-        ctx.drawImage(voidTile, x - ((camX % TILE) + TILE) % TILE, y - ((camY % TILE) + TILE) % TILE);
+        ctx.drawImage(voidTile, x - ox, y - oy);
       }
     }
   }

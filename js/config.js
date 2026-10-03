@@ -2,14 +2,24 @@
 
 export const TILE = 16;
 export const SCALE = 3;
-export const VIEW_W = 320; // logical pixels (playfield)
-export const VIEW_H = 240;
-/** HUD band above the playfield — not overlaid on the world. */
-export const HUD_H = 40;
-export const CANVAS_H = HUD_H + VIEW_H;
+/**
+ * Internal frame is exactly 1920×1080. The 16px tile world is integer-scaled
+ * (WORLD_SCALE) into the playfield under the HUD. HUD, text, charts, and menus
+ * are drawn in frame pixels so they stay sharp.
+ */
+export const FRAME_W = 1920;
+export const FRAME_H = 1080;
+export const WORLD_SCALE = 4;
+/** HUD band in frame pixels, above the playfield. 120 + 240×4 = 1080. */
+export const HUD_H = 120;
+/** World pixels. 480×240 tiles fill the 1920×960 playfield at WORLD_SCALE. */
+export const VIEW_W = FRAME_W / WORLD_SCALE;
+export const VIEW_H = (FRAME_H - HUD_H) / WORLD_SCALE;
+export const CANVAS_W = FRAME_W;
+export const CANVAS_H = FRAME_H;
 
 /** Bump on each published build so players can confirm cache. */
-export const GAME_VERSION = '0.5.14';
+export const GAME_VERSION = '0.5.15';
 
 export const PALETTE = {
   bg: '#1a1420',

@@ -1,4 +1,4 @@
-import { VIEW_W, VIEW_H, HUD_H, MAX_AGE, TILE, KEYS } from '../config.js';
+import { FRAME_W, WORLD_SCALE, VIEW_W, VIEW_H, HUD_H, MAX_AGE, TILE, KEYS } from '../config.js';
 import { Player } from '../render/Player.js';
 import { Hud } from '../render/Hud.js';
 import {
@@ -362,7 +362,8 @@ export class HallwayScene {
     );
 
     ctx.save();
-    ctx.translate(0, HUD_H);
+    ctx.setTransform(WORLD_SCALE, 0, 0, WORLD_SCALE, 0, HUD_H);
+    ctx.imageSmoothingEnabled = false;
     drawWorld(ctx, this.world, camX, camY, this.animTime);
     drawEventAuras(ctx, this.world, this.eventAuras, camX, camY, this.animTime);
     drawGlassWall(ctx, this.glassWall, camX, camY, this.animTime);
@@ -379,25 +380,26 @@ export class HallwayScene {
 
     // Life-event banner (playfield bottom); prompt sits just below if both active
     if (this.eventBanner) {
-      ctx.font = '6px "Press Start 2P", monospace';
+      ctx.font = '18px "Press Start 2P", monospace';
       ctx.textAlign = 'center';
-      const by = this.prompt ? HUD_H + VIEW_H - 24 : HUD_H + VIEW_H - 12;
+      ctx.textBaseline = 'top';
+      const by = this.prompt ? HUD_H + VIEW_H * WORLD_SCALE - 72 : HUD_H + VIEW_H * WORLD_SCALE - 40;
       let msg = this.eventBanner;
-      while (msg.length > 1 && ctx.measureText(msg).width > VIEW_W - 20) msg = msg.slice(0, -1);
-      // dark plate behind text for readability
+      while (msg.length > 1 && ctx.measureText(msg).width > FRAME_W - 80) msg = msg.slice(0, -1);
       const tw = ctx.measureText(msg).width;
       ctx.fillStyle = 'rgba(10,8,24,0.72)';
-      ctx.fillRect(VIEW_W / 2 - tw / 2 - 6, by - 2, tw + 12, 12);
+      ctx.fillRect(FRAME_W / 2 - tw / 2 - 16, by - 6, tw + 32, 28);
       ctx.fillStyle = '#e8d8ff';
-      ctx.fillText(msg, VIEW_W / 2, by);
+      ctx.fillText(msg, FRAME_W / 2, by);
       ctx.textAlign = 'left';
     }
 
     if (this.prompt) {
-      ctx.font = '6px "Press Start 2P", monospace';
+      ctx.font = '18px "Press Start 2P", monospace';
       ctx.fillStyle = '#f0e8c8';
       ctx.textAlign = 'center';
-      ctx.fillText(`[E] ${this.prompt.label}`, VIEW_W / 2, HUD_H + VIEW_H - 12);
+      ctx.textBaseline = 'top';
+      ctx.fillText(`[E] ${this.prompt.label}`, FRAME_W / 2, HUD_H + VIEW_H * WORLD_SCALE - 36);
       ctx.textAlign = 'left';
     }
   }

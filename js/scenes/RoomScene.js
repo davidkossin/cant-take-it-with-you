@@ -1,4 +1,6 @@
 import {
+  FRAME_W,
+  WORLD_SCALE,
   VIEW_W,
   VIEW_H,
   HUD_H,
@@ -675,12 +677,19 @@ export class RoomScene {
   }
 
   render(ctx, game) {
-    const camX = Math.max(0, Math.min(this.world.width - VIEW_W, this.player.x + 6 - VIEW_W / 2));
-    const camY = Math.max(0, Math.min(this.world.height - VIEW_H, this.player.y - VIEW_H / 2));
+    // Room is narrower than the 16:9 playfield. Center it; negative cam
+    // insets the walls. Out-of-map tiles are solid, so the side void is not walkable.
+    const camX = this.world.width <= VIEW_W
+      ? (this.world.width - VIEW_W) / 2
+      : Math.max(0, Math.min(this.world.width - VIEW_W, this.player.x + 6 - VIEW_W / 2));
+    const camY = this.world.height <= VIEW_H
+      ? (this.world.height - VIEW_H) / 2
+      : Math.max(0, Math.min(this.world.height - VIEW_H, this.player.y - VIEW_H / 2));
 
-    // Playfield below HUD band
+    // Integer-scale the pixel world under the HUD. UI stays in frame pixels.
     ctx.save();
-    ctx.translate(0, HUD_H);
+    ctx.setTransform(WORLD_SCALE, 0, 0, WORLD_SCALE, 0, HUD_H);
+    ctx.imageSmoothingEnabled = false;
     drawWorld(ctx, this.world, camX, camY, this.animTime);
     ctx.save();
     ctx.translate(-camX, -camY);
@@ -696,10 +705,11 @@ export class RoomScene {
     this.hud.draw(ctx, game.portfolio);
 
     if (this.prompt && !this.locked) {
-      ctx.font = '6px "Press Start 2P", monospace';
+      ctx.font = '18px "Press Start 2P", monospace';
       ctx.fillStyle = '#f0e8c8';
       ctx.textAlign = 'center';
-      ctx.fillText(`[E] ${this.prompt.label}`, VIEW_W / 2, HUD_H + VIEW_H - 12);
+      ctx.textBaseline = 'top';
+      ctx.fillText(`[E] ${this.prompt.label}`, FRAME_W / 2, HUD_H + VIEW_H * WORLD_SCALE - 36);
       ctx.textAlign = 'left';
     }
   }

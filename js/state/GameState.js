@@ -935,8 +935,8 @@ export function buildTimelineMapModel(game) {
 
 export function layoutTimelineMap(game, rect) {
   const model = buildTimelineMapModel(game);
-  const labelW = 32;
-  const bottomH = 12;
+  const labelW = 84;
+  const bottomH = 28;
   const plotX = rect.x + labelW;
   const plotY = rect.y + 2;
   const plotW = Math.max(20, rect.w - labelW - 4);
@@ -951,12 +951,17 @@ export function layoutTimelineMap(game, rect) {
   }
   const yMin = years.length ? Math.min(...years) : model.startYear;
   const yMax = years.length ? Math.max(...years) : model.startYear;
-  const yearSpan = Math.max(1, yMax - yMin);
+  // Pad the scale so a single year is not pinned to the bottom edge of a tall plot.
+  const rawSpan = Math.max(1, yMax - yMin);
+  const padYears = Math.max(2, rawSpan * 0.25);
+  const yLo = yMin - padYears;
+  const yHi = yMax + padYears;
+  const yearSpan = yHi - yLo;
   const laneCount = Math.max(1, model.timelines.length);
   const maxLane = Math.max(0, ...model.timelines.map((t) => t.lane), 0);
 
   function xy(lane, year) {
-    const t = (year - yMin) / yearSpan;
+    const t = (year - yLo) / yearSpan;
     const laneT = laneCount <= 1 ? 0.5 : lane / (laneCount - 1);
     return {
       x: plotX + laneT * (plotW - 8),

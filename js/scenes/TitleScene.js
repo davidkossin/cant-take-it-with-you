@@ -1,4 +1,4 @@
-import { PALETTE, VIEW_W, VIEW_H, CANVAS_H } from '../config.js';
+import { PALETTE, FRAME_W, FRAME_H, TILE, WORLD_SCALE } from '../config.js';
 import { deleteSave, hasSaves, listSaves, loadSave } from '../state/SaveSystem.js';
 import {
   deleteProfile,
@@ -401,28 +401,32 @@ export class TitleScene {
     }
     // dithered title backdrop (full canvas incl. HUD band)
     const floor = makeTile('floor');
-    for (let y = 0; y < CANVAS_H; y += 16) {
-      for (let x = 0; x < VIEW_W; x += 16) {
-        ctx.drawImage(floor, x, y);
+    const step = TILE * WORLD_SCALE;
+    ctx.imageSmoothingEnabled = false;
+    for (let y = 0; y < FRAME_H; y += step) {
+      for (let x = 0; x < FRAME_W; x += step) {
+        ctx.drawImage(floor, x, y, step, step);
       }
     }
     ctx.fillStyle = 'rgba(10,8,16,0.55)';
-    ctx.fillRect(0, 0, VIEW_W, CANVAS_H);
+    ctx.fillRect(0, 0, FRAME_W, FRAME_H);
 
     ctx.textAlign = 'center';
-    ctx.font = '10px "Press Start 2P", monospace';
+    ctx.textBaseline = 'top';
+    ctx.font = '64px "Press Start 2P", monospace';
     ctx.fillStyle = PALETTE.gold;
-    ctx.fillText("YOU CAN'T TAKE", VIEW_W / 2, 90);
-    ctx.fillText('IT WITH YOU', VIEW_W / 2, 108);
+    ctx.fillText("YOU CAN'T TAKE", FRAME_W / 2, 340);
+    ctx.fillText('IT WITH YOU', FRAME_W / 2, 430);
 
-    ctx.font = '6px "Press Start 2P", monospace';
+    ctx.font = '22px "Press Start 2P", monospace';
     ctx.fillStyle = PALETTE.uiText;
-    ctx.fillText('An existential interactive', VIEW_W / 2, 136);
-    ctx.fillText('financial planner', VIEW_W / 2, 150);
+    ctx.fillText('An existential interactive', FRAME_W / 2, 560);
+    ctx.fillText('financial planner', FRAME_W / 2, 600);
 
     if (Math.floor(this.blink / 30) % 2 === 0) {
       ctx.fillStyle = PALETTE.accent;
-      ctx.fillText('Press Enter', VIEW_W / 2, 200);
+      ctx.font = '28px "Press Start 2P", monospace';
+      ctx.fillText('Press Enter', FRAME_W / 2, 720);
     }
     ctx.textAlign = 'left';
   }

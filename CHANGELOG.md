@@ -10,7 +10,13 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
-- Published the Godot V2 HTML5 rebuild at `/v2/` (Starman standard portfolio, Hallway of Time, six tellers). V1 at the site root is unchanged.
+## [0.5.15] — 2026-10-03
+
+### Changed
+- Internal frame is 1920×1080. The pixel world integer-scales (4×). HUD, text, charts, and menus are drawn at that resolution and use the full wide frame.
+- Decision Room walkable floor is the original 20×14 tile room (about the old 320×240 playfield), centered in the wide frame. Left and right margins are the same non-walkable void as the Hallway of Time. The hallway stays a vertical corridor.
+- Godot V2 HTML5 rebuild is at `/v2/` (Starman standard portfolio, Hallway of Time, six tellers).
+- Cache-bust / `GAME_VERSION` bumped to **0.5.15**
 
 ## [0.5.14] — 2026-10-03
 

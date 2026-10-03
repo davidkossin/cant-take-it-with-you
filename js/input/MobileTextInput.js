@@ -4,7 +4,7 @@
  * when this input is not focused.
  */
 
-import { VIEW_W, CANVAS_H } from '../config.js';
+import { FRAME_W, FRAME_H } from '../config.js';
 import { formatMoneyInput, sanitizeNumberInput, sanitizeTextInput } from '../render/Dialog.js';
 
 export class MobileTextInput {
@@ -131,8 +131,8 @@ export class MobileTextInput {
     }
 
     const rect = this.canvas.getBoundingClientRect();
-    const scaleX = rect.width / VIEW_W;
-    const scaleY = rect.height / CANVAS_H;
+    const scaleX = rect.width / FRAME_W;
+    const scaleY = rect.height / FRAME_H;
 
     const left = rect.left + field.x * scaleX;
     const top = rect.top + field.y * scaleY;

@@ -2,7 +2,7 @@
  * SNES / LTTP-styled dialog & menu boxes (logical canvas space).
  */
 
-import { PALETTE, VIEW_W, VIEW_H, CANVAS_H, KEYS } from '../config.js';
+import { PALETTE, FRAME_W, FRAME_H, KEYS } from '../config.js';
 import { makeDialogChrome } from './Assets.js';
 
 export function formatMoneyInput(raw) {
@@ -63,7 +63,7 @@ export class Dialog {
       this.active = true;
       this.mode = 'text';
       this.title = title;
-      this.lines = wrapText(text, 36);
+      this.lines = wrapText(text, 52);
       this.options = [{ label: 'OK', value: true }];
       this.selected = 0;
       this.resolve = resolve;
@@ -80,7 +80,7 @@ export class Dialog {
       this.active = true;
       this.mode = 'menu';
       this.title = title;
-      this.lines = wrapText(text, 36);
+      this.lines = wrapText(text, 52);
       this.options = options;
       this.selected = Math.max(0, Math.min(options.length - 1, selected));
       this.resolve = resolve;
@@ -110,7 +110,7 @@ export class Dialog {
       this.active = true;
       this.mode = 'prompt';
       this.title = title;
-      this.lines = wrapText(text, 36);
+      this.lines = wrapText(text, 52);
       this.promptType = type;
       let initial = String(defaultValue ?? '');
       if (type === 'money') initial = formatMoneyInput(initial);
@@ -143,29 +143,29 @@ export class Dialog {
       x: layout.x + layout.pad,
       y: layout.promptY,
       w: layout.boxW - layout.pad * 2,
-      h: 14,
+      h: 44,
     };
   }
 
   _layout() {
-    const boxW = 280;
-    const lineH = 12;
+    const boxW = Math.min(1500, FRAME_W - 120);
+    const lineH = 32;
     const hasSub = this.options.some((o) => o.subtext);
-    const optH = hasSub ? 22 : 14;
-    const pad = 12;
+    const optH = hasSub ? 58 : 40;
+    const pad = 36;
     const textH = this.lines.length * lineH;
-    const promptH = this.mode === 'prompt' ? 20 : 0;
-    const optsH = this.options.length * optH + 4;
-    const titleH = this.title ? 16 : 0;
-    const boxH = Math.min(210, pad * 2 + titleH + textH + promptH + optsH + 8);
-    const x = Math.floor((VIEW_W - boxW) / 2);
-    const y = CANVAS_H - boxH - 8;
+    const promptH = this.mode === 'prompt' ? 64 : 0;
+    const optsH = this.options.length * optH + 8;
+    const titleH = this.title ? 44 : 0;
+    const boxH = Math.min(FRAME_H - 80, pad * 2 + titleH + textH + promptH + optsH + 16);
+    const x = Math.floor((FRAME_W - boxW) / 2);
+    const y = Math.floor((FRAME_H - boxH) / 2);
     let ty = y + pad;
     if (this.title) ty += titleH;
     ty += textH;
     let promptY = ty;
     if (this.mode === 'prompt') {
-      promptY = ty + 4;
+      promptY = ty + 8;
     }
     return { boxW, boxH, pad, lineH, optH, titleH, textH, x, y, promptY };
   }
@@ -291,7 +291,7 @@ export class Dialog {
 
     ctx.imageSmoothingEnabled = false;
     let ty = y + pad;
-    ctx.font = '8px "Press Start 2P", monospace';
+    ctx.font = '22px "Press Start 2P", monospace';
     ctx.textBaseline = 'top';
 
     if (this.title) {
@@ -309,15 +309,15 @@ export class Dialog {
     if (this.mode === 'prompt') {
       ty += 4;
       ctx.fillStyle = '#000';
-      ctx.fillRect(x + pad, ty, boxW - pad * 2, 14);
+      ctx.fillRect(x + pad, ty, boxW - pad * 2, 44);
       ctx.strokeStyle = PALETTE.uiBorder;
-      ctx.strokeRect(x + pad, ty, boxW - pad * 2, 14);
+      ctx.strokeRect(x + pad + 0.5, ty + 0.5, boxW - pad * 2 - 1, 43);
       ctx.fillStyle = PALETTE.uiText;
       const caret = Math.floor(performance.now() / 400) % 2 === 0 ? '▌' : '';
       let display = String(this.promptValue);
       if (this.promptType === 'percent' && display !== '') display += '%';
-      ctx.fillText(display + caret, x + pad + 3, ty + 3);
-      ty += 18;
+      ctx.fillText(display + caret, x + pad + 12, ty + 12);
+      ty += 56;
     } else {
       ty += 6;
     }
@@ -328,19 +328,19 @@ export class Dialog {
         ctx.fillStyle = 'rgba(200,160,80,0.25)';
         ctx.fillRect(x + pad - 2, ty - 1, boxW - pad * 2 + 4, optH);
         ctx.fillStyle = PALETTE.gold;
-        ctx.font = '8px "Press Start 2P", monospace';
+        ctx.font = '22px "Press Start 2P", monospace';
         ctx.fillText('▶', x + pad, ty);
       } else {
         ctx.fillStyle = PALETTE.uiText;
-        ctx.font = '8px "Press Start 2P", monospace';
+        ctx.font = '22px "Press Start 2P", monospace';
       }
-      ctx.fillText(opt.label, x + pad + 12, ty);
+      ctx.fillText(opt.label, x + pad + 36, ty);
       if (opt.subtext) {
-        ctx.font = '5px "Press Start 2P", monospace';
+        ctx.font = '14px "Press Start 2P", monospace';
         ctx.fillStyle = selected ? '#c8b878' : '#888070';
-        const sub = wrapText(opt.subtext, 40);
-        ctx.fillText(sub[0] || '', x + pad + 12, ty + 10);
-        ctx.font = '8px "Press Start 2P", monospace';
+        const sub = wrapText(opt.subtext, 64);
+        ctx.fillText(sub[0] || '', x + pad + 36, ty + 28);
+        ctx.font = '22px "Press Start 2P", monospace';
       }
       ty += optH;
     });

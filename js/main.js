@@ -2,8 +2,7 @@
  * You Can't Take It With You — bootstrap & scene loop.
  */
 
-import { VIEW_W, CANVAS_H, KEYS, GAME_VERSION } from './config.js';
-import { chooseCanvasScale, canvasCssSize } from './layout/canvasFit.js';
+import { FRAME_W, FRAME_H, KEYS, GAME_VERSION } from './config.js';
 import { installHdText } from './render/hdText.js';
 import { Dialog } from './render/Dialog.js';
 import { TitleScene } from './scenes/TitleScene.js';
@@ -23,13 +22,6 @@ import {
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 installHdText(ctx);
-
-function applyLogicalTransform() {
-  const sx = canvas.width / VIEW_W;
-  const sy = canvas.height / CANVAS_H;
-  ctx.setTransform(sx, 0, 0, sy, 0, 0);
-  ctx.imageSmoothingEnabled = false;
-}
 
 function availableViewport() {
   const vv = window.visualViewport;
@@ -53,7 +45,9 @@ function touchPadReserve() {
   if (overlap <= 0) return 0;
   const topbar = document.querySelector('.topbar');
   const topbarH = topbar ? topbar.getBoundingClientRect().height : 48;
-  const minPlay = CANVAS_H + topbarH + 48;
+  // CSS pixels, not the 1920×1080 buffer. Reserve the pad unless the
+  // window is already too short to show a playable frame.
+  const minPlay = topbarH + 160;
   if (winH - overlap < minPlay) return 0;
   return overlap;
 }
@@ -91,21 +85,24 @@ function fitCanvas() {
   const availW = Math.max(32, Math.floor(winW - padLeft - padRight - borderX * 2));
   const availH = Math.max(32, Math.floor(winH - padTop - padBottom - hintH - borderY * 2));
 
-  const dpr = window.devicePixelRatio || 1;
-  const scale = chooseCanvasScale(availW, availH, VIEW_W, CANVAS_H, dpr);
-  const { cssW, cssH } = canvasCssSize(scale, VIEW_W, CANVAS_H, availW, availH);
-
-  // CSS box is the window fit. Backing store is that box × devicePixelRatio
-  // so text and chart strokes rasterize sharp. Scenes still use logical
-  // 320×280 coordinates (see applyLogicalTransform). DOM overlays map
-  // pointers through the CSS box, not the backing-store size.
+  // CSS box is the largest 16:9 rect that fits the window. The backing
+  // store stays exactly 1920×1080 so HUD, text, charts, and menus rasterize
+  // at that frame. The pixel world is integer-scaled inside it.
+  const aspect = FRAME_W / FRAME_H;
+  let cssW = availW;
+  let cssH = Math.floor(availW / aspect);
+  if (cssH > availH) {
+    cssH = availH;
+    cssW = Math.floor(availH * aspect);
+  }
+  cssW = Math.max(32, cssW);
+  cssH = Math.max(18, cssH);
   canvas.style.width = `${cssW}px`;
   canvas.style.height = `${cssH}px`;
-  const bufW = Math.max(1, Math.round(cssW * dpr));
-  const bufH = Math.max(1, Math.round(cssH * dpr));
-  if (canvas.width !== bufW) canvas.width = bufW;
-  if (canvas.height !== bufH) canvas.height = bufH;
-  applyLogicalTransform();
+  if (canvas.width !== FRAME_W) canvas.width = FRAME_W;
+  if (canvas.height !== FRAME_H) canvas.height = FRAME_H;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = false;
 }
 
 function scheduleFit() {
@@ -274,9 +271,9 @@ async function transition(to) {
 }
 
 function loop() {
-  applyLogicalTransform();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#0a0810';
-  ctx.fillRect(0, 0, VIEW_W, CANVAS_H);
+  ctx.fillRect(0, 0, FRAME_W, FRAME_H);
   ctx.imageSmoothingEnabled = false;
 
   if (mode === 'title') {
@@ -315,15 +312,15 @@ function loop() {
 
   // Build version — bottom-right, always visible for cache checks
   ctx.save();
-  ctx.font = '5px "Press Start 2P", monospace';
+  ctx.font = '14px "Press Start 2P", monospace';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'bottom';
   ctx.fillStyle = 'rgba(240, 232, 200, 0.45)';
-  ctx.fillText('v' + GAME_VERSION, VIEW_W - 4, CANVAS_H - 3);
+  ctx.fillText('v' + GAME_VERSION, FRAME_W - 16, FRAME_H - 12);
   ctx.restore();
 
   // Always call — draws toast on toggle OFF as well as the DEBUG ON panel
-  drawDebugOverlay(ctx, VIEW_W, CANVAS_H);
+  drawDebugOverlay(ctx, FRAME_W, FRAME_H);
 
   requestAnimationFrame(loop);
 }

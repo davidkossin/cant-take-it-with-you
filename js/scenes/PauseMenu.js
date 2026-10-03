@@ -3,7 +3,7 @@
  * Map Compare provides side-by-side portfolio snapshots for two timelines.
  */
 
-import { PALETTE, VIEW_W, CANVAS_H, KEYS } from '../config.js';
+import { PALETTE, FRAME_W, FRAME_H, KEYS } from '../config.js';
 import {
   listTimelineNodes,
   jumpToHallwayNode,
@@ -399,12 +399,12 @@ export class PauseMenu {
     if (!this.open) return;
 
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(0, 0, VIEW_W, CANVAS_H);
+    ctx.fillRect(0, 0, FRAME_W, FRAME_H);
 
-    const boxW = 300;
-    const boxH = 200;
-    const x = Math.floor((VIEW_W - boxW) / 2);
-    const y = Math.floor((CANVAS_H - boxH) / 2);
+    const boxW = 1680;
+    const boxH = 880;
+    const x = Math.floor((FRAME_W - boxW) / 2);
+    const y = 150;
     if (!this.chrome || this.chrome.width !== boxW || this.chrome.height !== boxH) {
       this.chrome = makeDialogChrome(boxW, boxH);
     }
@@ -418,37 +418,37 @@ export class PauseMenu {
   }
 
   drawMenu(ctx, x, y, boxW) {
-    ctx.font = '8px "Press Start 2P", monospace';
+    ctx.font = '32px "Press Start 2P", monospace';
     ctx.textBaseline = 'top';
     ctx.fillStyle = PALETTE.gold;
-    ctx.fillText('Pause', x + 12, y + 10);
-    ctx.font = '6px "Press Start 2P", monospace';
+    ctx.fillText('Pause', x + 48, y + 48);
+    ctx.font = '18px "Press Start 2P", monospace';
     ctx.fillStyle = PALETTE.uiText;
-    ctx.fillText('Choose a view', x + 12, y + 31);
+    ctx.fillText('Choose a view', x + 48, y + 100);
 
     const options = ['Portfolio', 'Map', 'Charts', 'Resume'];
-    let oy = y + 55;
+    let oy = y + 180;
     options.forEach((label, i) => {
       const selected = i === this.selected;
       if (selected) {
         ctx.fillStyle = 'rgba(200,160,80,0.25)';
-        ctx.fillRect(x + 10, oy - 2, boxW - 20, 18);
+        ctx.fillRect(x + 40, oy - 8, boxW - 80, 48);
         ctx.fillStyle = PALETTE.gold;
       } else {
         ctx.fillStyle = PALETTE.uiText;
       }
-      ctx.font = '8px "Press Start 2P", monospace';
-      ctx.fillText(`${selected ? '▶' : ' '} ${label}`, x + 16, oy);
-      oy += 22;
+      ctx.font = '28px "Press Start 2P", monospace';
+      ctx.fillText(`${selected ? '▶' : ' '} ${label}`, x + 56, oy);
+      oy += 72;
     });
 
-    ctx.font = '5px "Press Start 2P", monospace';
+    ctx.font = '16px "Press Start 2P", monospace';
     ctx.fillStyle = '#777';
-    ctx.fillText('Enter select · Esc resume', x + 12, y + 178);
+    ctx.fillText('Enter select · Esc resume', x + 48, y + 860);
   }
 
   drawSubView(ctx, game, x, y, boxW, boxH) {
-    ctx.font = '8px "Press Start 2P", monospace';
+    ctx.font = '22px "Press Start 2P", monospace';
     ctx.textBaseline = 'top';
     ctx.fillStyle = PALETTE.gold;
     const title =
@@ -461,8 +461,8 @@ export class PauseMenu {
           : this.chartTitle(game);
     ctx.fillText(title, x + 12, y + 10);
     ctx.fillStyle = '#666';
-    ctx.font = '5px "Press Start 2P", monospace';
-    ctx.fillText('Tab next · Esc back', x + 190, y + 12);
+    ctx.font = '14px "Press Start 2P", monospace';
+    ctx.fillText('Tab next · Esc back', x + boxW - 360, y + 28);
 
     if (this.screen === 'portfolio') {
       this.drawPortfolio(ctx, game.portfolio, x, y, boxW, boxH);
@@ -478,17 +478,14 @@ export class PauseMenu {
   }
 
   drawCharts(ctx, game, x, y, boxW, boxH) {
-    ctx.font = '5px "Press Start 2P", monospace';
+    ctx.font = '16px "Press Start 2P", monospace';
     ctx.fillStyle = '#888';
-    ctx.fillText('Current timeline · Map has Compare', x + 12, y + 28);
-    ctx.font = '6px "Press Start 2P", monospace';
-    ctx.fillStyle = PALETTE.uiText;
-    ctx.fillText('Net worth over years', x + 12, y + 38);
+    ctx.fillText('Current timeline · Map has Compare', x + 28, y + 56);
     drawWorthChart(ctx, game.worthHistory || [], {
-      x: x + 12,
-      y: y + 48,
-      w: boxW - 24,
-      h: boxH - 72,
+      x: x + 36,
+      y: y + 100,
+      w: boxW - 80,
+      h: boxH - 180,
       series: ['netWorth', 'bank'],
     });
   }
@@ -640,7 +637,7 @@ export class PauseMenu {
     const compareSelect = this.mapMode === 'select';
     const compareResult = this.mapMode === 'result';
     const yearLabel = this.compareYear == null ? '' : ` · ${this.compareYear}`;
-    ctx.font = '5px "Press Start 2P", monospace';
+    ctx.font = '16px "Press Start 2P", monospace';
     ctx.fillStyle = PALETTE.uiText;
     ctx.fillText(
       compareResult
@@ -648,15 +645,15 @@ export class PauseMenu {
         : compareSelect
           ? 'Compare · ←/→ side · ↑/↓ timeline · Enter year'
           : '←/→ timeline · ↑/↓ point · Enter jump · Compare',
-      x + 12,
-      y + 28
+      x + 28,
+      y + 56
     );
 
-    const graphX = x + 12;
-    const graphY = y + 38;
-    // Leave room below the graph for status / Compare button / snapshot columns.
-    const graphH = compareResult ? 52 : compareSelect ? 76 : 88;
-    const graphW = boxW - 24;
+    const graphX = x + 28;
+    const graphY = y + 100;
+    const footer = compareResult ? 300 : compareSelect ? 150 : 120;
+    const graphH = Math.min(560, Math.max(180, boxH - (graphY - y) - footer));
+    const graphW = boxW - 56;
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.fillRect(graphX, graphY, graphW, graphH);
     ctx.strokeStyle = '#444';
@@ -690,7 +687,7 @@ export class PauseMenu {
     ctx.save();
     for (const seg of layout.segments || []) {
       ctx.beginPath();
-      ctx.setLineDash(seg.kind === 'dashed' ? [2, 2] : []);
+      ctx.setLineDash(seg.kind === 'dashed' ? [8, 6] : []);
       if (seg.kind === 'spine') {
         const selected = selectedTl && seg.timeline === selectedTl.number;
         if (selected) {
@@ -716,7 +713,7 @@ export class PauseMenu {
     }
     ctx.restore();
 
-    ctx.font = '4px "Press Start 2P", monospace';
+    ctx.font = '14px "Press Start 2P", monospace';
     ctx.fillStyle = '#888';
     for (const lab of layout.yearLabels || []) {
       ctx.fillText(String(lab.year), lab.x, lab.y - 2);
@@ -728,7 +725,7 @@ export class PauseMenu {
     }
 
     for (const pt of layout.points || []) {
-      const r = pt.kind === 'C' ? 3.5 : 3;
+      const r = pt.kind === 'C' ? 10 : 8;
       if (pt.kind === 'A') ctx.fillStyle = PALETTE.gold;
       else if (pt.kind === 'B') ctx.fillStyle = '#80c0e0';
       else ctx.fillStyle = '#c04040';
@@ -736,9 +733,9 @@ export class PauseMenu {
       ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#aaa';
-      ctx.font = '4px "Press Start 2P", monospace';
+      ctx.font = '14px "Press Start 2P", monospace';
       const tag = pt.kind === 'B' ? pt.label : pt.kind;
-      ctx.fillText(tag, pt.x + 4, pt.y - 4);
+      ctx.fillText(tag, pt.x + 12, pt.y - 12);
     }
 
     if (!compareResult && layout.currentPos) {
@@ -761,8 +758,8 @@ export class PauseMenu {
     }
 
     ctx.fillStyle = '#666';
-    ctx.font = '4px "Press Start 2P", monospace';
-    ctx.fillText('A start · B branch · C age 100', x + 12, graphY + graphH + 2);
+    ctx.font = '14px "Press Start 2P", monospace';
+    ctx.fillText('A start · B branch · C age 100', x + 28, graphY + graphH + 8);
 
     if (compareSelect) {
       const branches = listCompareBranches(game);
@@ -799,19 +796,19 @@ export class PauseMenu {
     }
 
     // Status line + optional Compare button (replaces scrolled Jump list)
-    let ly = graphY + graphH + 12;
-    ctx.font = '5px "Press Start 2P", monospace';
+    let ly = graphY + graphH + 32;
+    ctx.font = '16px "Press Start 2P", monospace';
     const status = this.mapStatusLine(game, selectedTl, selectedJump);
     ctx.fillStyle = this.mapFocus === 'point' ? PALETTE.gold : PALETTE.uiText;
     ctx.fillText(status, x + 12, ly);
-    ly += 12;
+    ly += 28;
 
     const canCompare = listCompareBranches(game).length >= 2;
     if (canCompare) {
       const focused = this.mapFocus === 'compare';
       const btnX = x + 10;
       const btnW = boxW - 20;
-      const btnH = 14;
+      const btnH = 36;
       ctx.fillStyle = focused ? 'rgba(200,160,80,0.2)' : 'rgba(0,0,0,0.25)';
       ctx.fillRect(btnX, ly - 2, btnW, btnH);
       ctx.strokeStyle = focused ? PALETTE.gold : '#555';
@@ -819,8 +816,8 @@ export class PauseMenu {
       ctx.strokeRect(btnX + 0.5, ly - 1.5, btnW - 1, btnH - 1);
       ctx.lineWidth = 1;
       ctx.fillStyle = focused ? PALETTE.gold : PALETTE.uiText;
-      ctx.font = '5px "Press Start 2P", monospace';
-      ctx.fillText(`${focused ? '▶' : ' '} Compare`, btnX + 4, ly + 2);
+      ctx.font = '16px "Press Start 2P", monospace';
+      ctx.fillText(`${focused ? '▶' : ' '} Compare`, btnX + 12, ly + 10);
     } else if (!this.mapJumpPoints.length) {
       ctx.fillStyle = '#888';
       ctx.fillText('No hallway nodes yet.', x + 12, ly);
