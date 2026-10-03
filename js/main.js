@@ -3,6 +3,8 @@
  */
 
 import { VIEW_W, CANVAS_H, KEYS, GAME_VERSION } from './config.js';
+import { chooseCanvasScale, canvasCssSize } from './layout/canvasFit.js';
+import { installHdText } from './render/hdText.js';
 import { Dialog } from './render/Dialog.js';
 import { TitleScene } from './scenes/TitleScene.js';
 import { SetupScene } from './scenes/SetupScene.js';
@@ -20,6 +22,14 @@ import {
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
+installHdText(ctx);
+
+function applyLogicalTransform() {
+  const sx = canvas.width / VIEW_W;
+  const sy = canvas.height / CANVAS_H;
+  ctx.setTransform(sx, 0, 0, sy, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+}
 
 function availableViewport() {
   const vv = window.visualViewport;
@@ -27,48 +37,91 @@ function availableViewport() {
   return { w: window.innerWidth, h: window.innerHeight };
 }
 
-function fitCanvas() {
-  const { w: winW, h: winH } = availableViewport();
+/**
+ * Bottom inset of the on-screen pad, or 0 when reserving it would shrink
+ * the logical playfield below 1× (short landscape phones keep the overlay).
+ */
+function touchPadReserve() {
+  if (!document.body.classList.contains('has-virtual-pad')) return 0;
+  const { h: winH } = availableViewport();
+  let top = winH;
+  for (const el of document.querySelectorAll('.vp-dpad, .vp-actions')) {
+    const r = el.getBoundingClientRect();
+    if (r.height > 0) top = Math.min(top, r.top);
+  }
+  const overlap = Math.max(0, Math.round(winH - top));
+  if (overlap <= 0) return 0;
   const topbar = document.querySelector('.topbar');
+  const topbarH = topbar ? topbar.getBoundingClientRect().height : 48;
+  const minPlay = CANVAS_H + topbarH + 48;
+  if (winH - overlap < minPlay) return 0;
+  return overlap;
+}
+
+function fitCanvas() {
+  const reserve = touchPadReserve();
+  document.documentElement.style.setProperty('--pad-reserve', `${reserve}px`);
+
+  const { w: winW, h: winH } = availableViewport();
   const hint = document.querySelector('.hint');
   const frame = document.querySelector('.frame');
+  const bodyStyle = getComputedStyle(document.body);
+  const padTop = parseFloat(bodyStyle.paddingTop) || 0;
+  const padBottom = parseFloat(bodyStyle.paddingBottom) || 0;
+  const padLeft = parseFloat(bodyStyle.paddingLeft) || 0;
+  const padRight = parseFloat(bodyStyle.paddingRight) || 0;
 
-  const topbarH = topbar ? topbar.getBoundingClientRect().height : 48;
+  const frameStyle = frame ? getComputedStyle(frame) : null;
+  const borderY = frameStyle ? parseFloat(frameStyle.borderTopWidth) || 0 : 0;
+  const borderX = frameStyle ? parseFloat(frameStyle.borderLeftWidth) || 0 : 0;
+
   const hintStyle = hint ? getComputedStyle(hint) : null;
-  const hintVisible = hint && hintStyle && hintStyle.display !== 'none';
+  const hintVisible = !!(
+    hint &&
+    hintStyle &&
+    hintStyle.display !== 'none' &&
+    hintStyle.visibility !== 'hidden'
+  );
   const hintH = hintVisible
-    ? hint.getBoundingClientRect().height + (parseFloat(hintStyle.marginTop) || 0)
+    ? hint.getBoundingClientRect().height +
+      (parseFloat(hintStyle.marginTop) || 0) +
+      (parseFloat(hintStyle.marginBottom) || 0)
     : 0;
 
-  // Frame border (each side) + modest outer padding already on body
-  const border = frame ? (parseFloat(getComputedStyle(frame).borderTopWidth) || 4) : 4;
-  const padX = 8;
-  const padY = 8;
+  const availW = Math.max(32, Math.floor(winW - padLeft - padRight - borderX * 2));
+  const availH = Math.max(32, Math.floor(winH - padTop - padBottom - hintH - borderY * 2));
 
-  const availW = Math.max(32, winW - padX * 2 - border * 2);
-  const availH = Math.max(32, winH - topbarH - hintH - padY * 2 - border * 2);
+  const dpr = window.devicePixelRatio || 1;
+  const scale = chooseCanvasScale(availW, availH, VIEW_W, CANVAS_H, dpr);
+  const { cssW, cssH } = canvasCssSize(scale, VIEW_W, CANVAS_H, availW, availH);
 
-  let scale = Math.min(availW / VIEW_W, availH / CANVAS_H);
-  // Prefer integer scale when it wastes less than ~15% of the fitted size
-  const intScale = Math.floor(scale);
-  if (intScale >= 1 && scale - intScale < 0.15 * scale) {
-    scale = intScale;
-  }
-  // Never overflow; allow fractional scales (no hard floor of 2)
-  scale = Math.max(0.25, scale);
+  // CSS box is the window fit. Backing store is that box × devicePixelRatio
+  // so text and chart strokes rasterize sharp. Scenes still use logical
+  // 320×280 coordinates (see applyLogicalTransform). DOM overlays map
+  // pointers through the CSS box, not the backing-store size.
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${cssH}px`;
+  const bufW = Math.max(1, Math.round(cssW * dpr));
+  const bufH = Math.max(1, Math.round(cssH * dpr));
+  if (canvas.width !== bufW) canvas.width = bufW;
+  if (canvas.height !== bufH) canvas.height = bufH;
+  applyLogicalTransform();
+}
 
-  canvas.width = VIEW_W;
-  canvas.height = CANVAS_H;
-  canvas.style.width = `${VIEW_W * scale}px`;
-  canvas.style.height = `${CANVAS_H * scale}px`;
-  ctx.imageSmoothingEnabled = false;
+function scheduleFit() {
+  fitCanvas();
+  requestAnimationFrame(fitCanvas);
 }
 
 fitCanvas();
 window.addEventListener('resize', fitCanvas);
+window.addEventListener('orientationchange', scheduleFit);
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', fitCanvas);
   window.visualViewport.addEventListener('scroll', fitCanvas);
+}
+if (window.screen?.orientation) {
+  window.screen.orientation.addEventListener('change', scheduleFit);
 }
 
 const virtualPadEl = document.getElementById('virtual-pad');
@@ -76,6 +129,9 @@ const virtualPad = new VirtualPad(virtualPadEl);
 virtualPad.mount();
 // Re-fit after pad / hint visibility changes layout
 requestAnimationFrame(fitCanvas);
+if (document.fonts?.ready) {
+  document.fonts.ready.then(() => fitCanvas());
+}
 
 initDebugFromEnvironment();
 
@@ -218,6 +274,7 @@ async function transition(to) {
 }
 
 function loop() {
+  applyLogicalTransform();
   ctx.fillStyle = '#0a0810';
   ctx.fillRect(0, 0, VIEW_W, CANVAS_H);
   ctx.imageSmoothingEnabled = false;

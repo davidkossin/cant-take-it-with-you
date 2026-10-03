@@ -5,6 +5,8 @@
   --text: #f0e8c8;
   --topbar-h: 48px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* Set by fitCanvas when the touch pad can sit below the playfield. */
+  --pad-reserve: 0px;
 }
 
 * {
@@ -32,7 +34,7 @@ body {
   padding:
     calc(var(--topbar-h) + 4px)
     8px
-    calc(8px + var(--safe-bottom))
+    calc(8px + var(--safe-bottom) + var(--pad-reserve))
     8px;
   background:
     radial-gradient(ellipse 60% 50% at 50% 0%, rgba(80, 60, 40, 0.35), transparent 70%),
@@ -73,7 +75,7 @@ body {
     inset 0 0 0 2px #1a1420;
   background: #000;
   line-height: 0;
-  max-width: 100%;
+  flex: 0 0 auto;
   touch-action: none;
 }
 
@@ -82,8 +84,7 @@ body {
   image-rendering: pixelated;
   image-rendering: crisp-edges;
   background: #000;
-  max-width: 100%;
-  height: auto;
+  /* Width/height come from fitCanvas so the CSS box tracks the window. */
   touch-action: none;
 }
 
@@ -139,7 +140,7 @@ body {
     padding:
       calc(var(--topbar-h) + 2px)
       4px
-      calc(4px + var(--safe-bottom))
+      calc(4px + var(--safe-bottom) + var(--pad-reserve))
       4px;
   }
 }

@@ -12,6 +12,13 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 - Published the Godot V2 HTML5 rebuild at `/v2/` (Starman standard portfolio, Hallway of Time, six tellers). V1 at the site root is unchanged.
 
+## [0.5.12] — 2026-10-03
+
+### Changed
+- Playfield scales with the browser window. The world stays a crisp 320×280 pixel grid, and the on-screen box fills the space under the top bar (aspect preserved). Whole-pixel snapping only happens when it stays within about 4% of that fit, so a large monitor is no longer stuck in a small frame. Relayout runs on resize and orientation change. On a tall phone the touch pad sits below the playfield; on a short landscape screen the pad still overlays the bottom so the world does not collapse.
+- Text and HUD labels are rasterized at the display resolution instead of blowing up an 8px bitmap. Chart strokes stay about a CSS pixel thick so lines stay sharp when the window is large.
+- Cache-bust / `GAME_VERSION` bumped to **0.5.12**
+
 ## [0.5.11] — 2026-10-01
 
 ### Added

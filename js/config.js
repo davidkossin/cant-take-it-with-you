@@ -9,7 +9,7 @@ export const HUD_H = 40;
 export const CANVAS_H = HUD_H + VIEW_H;
 
 /** Bump on each published build so players can confirm cache. */
-export const GAME_VERSION = '0.5.11';
+export const GAME_VERSION = '0.5.12';
 
 export const PALETTE = {
   bg: '#1a1420',

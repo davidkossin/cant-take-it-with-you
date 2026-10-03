@@ -4,6 +4,7 @@
  */
 
 import { PALETTE, VIEW_W, VIEW_H } from '../config.js';
+import { hairline } from './hdText.js';
 
 /** Distinct colors for Timeline A/B/C… overlays */
 export const BRANCH_COLORS = [
@@ -32,6 +33,7 @@ export function drawWorthChart(ctx, history, opts = {}) {
   ctx.fillStyle = 'rgba(0,0,0,0.72)';
   ctx.fillRect(x - 4, y - 4, w + 8, h + 8);
   ctx.strokeStyle = PALETTE.uiBorder;
+  hairline(ctx, 1);
   ctx.strokeRect(x - 4.5, y - 4.5, w + 8, h + 8);
 
   if (!history?.length) {
@@ -71,7 +73,8 @@ export function drawWorthChart(ctx, history, opts = {}) {
     maxV += 1;
   }
 
-  // axes
+  // axes — 1 CSS pixel, not one logical pixel blown up
+  hairline(ctx, 1);
   ctx.strokeStyle = '#444';
   ctx.beginPath();
   ctx.moveTo(x, y + h);
@@ -83,7 +86,7 @@ export function drawWorthChart(ctx, history, opts = {}) {
   const n = history.length;
   for (const key of series) {
     ctx.strokeStyle = colors[key] || '#fff';
-    ctx.lineWidth = 1;
+    hairline(ctx, 1.25);
     ctx.beginPath();
     let started = false;
     for (let i = 0; i < n; i++) {
@@ -139,6 +142,7 @@ export function drawCompareChart(ctx, branches, opts = {}) {
   ctx.fillStyle = 'rgba(0,0,0,0.72)';
   ctx.fillRect(x - 4, y - 4, w + 8, h + 8);
   ctx.strokeStyle = PALETTE.uiBorder;
+  hairline(ctx, 1);
   ctx.strokeRect(x - 4.5, y - 4.5, w + 8, h + 8);
 
   const usable = (branches || []).filter((b) => b.history?.length);
@@ -169,6 +173,7 @@ export function drawCompareChart(ctx, branches, opts = {}) {
     maxV += 1;
   }
 
+  hairline(ctx, 1);
   ctx.strokeStyle = '#444';
   ctx.beginPath();
   ctx.moveTo(x, y + h);
@@ -187,7 +192,7 @@ export function drawCompareChart(ctx, branches, opts = {}) {
   usable.forEach((b, i) => {
     const color = BRANCH_COLORS[i % BRANCH_COLORS.length];
     ctx.strokeStyle = color;
-    ctx.lineWidth = b.isCurrent ? 2 : 1;
+    hairline(ctx, b.isCurrent ? 2.25 : 1.25);
     ctx.beginPath();
     let started = false;
     const sorted = [...b.history].sort((a, c) => a.year - c.year || a.age - c.age);
@@ -202,7 +207,7 @@ export function drawCompareChart(ctx, branches, opts = {}) {
       } else ctx.lineTo(px, py);
     }
     if (started) ctx.stroke();
-    ctx.lineWidth = 1;
+    hairline(ctx, 1);
   });
 
   // legend — Timeline A / B ★
