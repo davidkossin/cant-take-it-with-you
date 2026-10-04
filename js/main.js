@@ -300,7 +300,28 @@ async function transition(to) {
   }
 }
 
+function syncVirtualPad() {
+  // Choice lists (title, setup, tellers, confirms, prompts, changelog) use arrows.
+  // A single OK text box does not, so the walk joystick stays up.
+  const choiceDialog =
+    dialog.active &&
+    (dialog.mode === 'menu' ||
+      dialog.mode === 'confirm' ||
+      dialog.mode === 'prompt' ||
+      (dialog.options && dialog.options.length > 1));
+  const endingMenu = mode === 'ending' && ending.phase === 2;
+  const discrete = !!(pause.open || choiceDialog || endingMenu);
+  const walking =
+    !discrete &&
+    !dialog.active &&
+    !pause.open &&
+    !interacting &&
+    (mode === 'room' || mode === 'hallway');
+  virtualPad.setLayout({ discrete, showRun: walking });
+}
+
 function loop() {
+  syncVirtualPad();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#0a0810';
   ctx.fillRect(0, 0, FRAME_W, FRAME_H);

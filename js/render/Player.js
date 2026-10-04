@@ -1,6 +1,6 @@
 import { KEYS, TILE, RUN_MULTIPLIER } from '../config.js';
 import { makePlayerSprite } from './Assets.js';
-import { virtualKeys, virtualRunHeld, virtualStick, virtualStickEvent } from '../input/VirtualPad.js';
+import { virtualKeys, virtualRunHeld, virtualStick } from '../input/VirtualPad.js';
 
 /** Movement keys only — typing never pollutes the pressed set. */
 const MOVE_KEYS = new Set([
@@ -42,8 +42,6 @@ export class Player {
 
   bindInput(target = window) {
     this._kd = (e) => {
-      // Joystick menu nudges must not become digital movement.
-      if (virtualStickEvent) return;
       if (e.key === ' ') {
         if (this.inputEnabled && !e.repeat) this.runHeld = true;
         return;

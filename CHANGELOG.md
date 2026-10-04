@@ -10,6 +10,15 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.5.19] — 2026-10-04
+
+### Fixed
+- Ending headline ("You can't take / it with you…") was hardcoded at 428px when the frame moved to 1920×1080 (it had been 9px on the old 320-wide canvas). Press Start 2P is one em per glyph, so that line was about 6000px wide: it clipped both sides of the gold frame and the two lines overlapped. The headline now caps at the title-screen size (64px) and shrinks until the widest line fits inside side margins (6% of the frame width, at least 96px). It stays centered. Stats, the New Game menu, and the "Your life ledger" heading use the same fit, with line spacing taken from the font size so nothing stacks on itself. Desktop and a portrait phone share this frame; the page only letterboxes it.
+
+### Changed
+- On-screen controls follow what you are doing. Walking the Decision Room or Hallway (no menu, and no dialog that needs up/down) keeps the joystick. A menu, the pause menu (Portfolio, Map, and Charts), the title menu, setup choices, the ending menu, and any dialog choice list (including Yes/No and prompt Accept/Back) hide the joystick and show a 4-way D-pad in the same corner. A D-pad tap sends one arrow key, the same step the keyboard uses, and does not confirm. Holding repeats after a short delay (about 140ms) and releasing stops. The joystick no longer nudges menu arrows. A and B stay. Run stays while walking and hides in menus. Opacity is unchanged.
+- Cache-bust / `GAME_VERSION` bumped to **0.5.19**
+
 ## [0.5.18] — 2026-10-03
 
 ### Added

@@ -279,6 +279,7 @@ body.has-virtual-pad .hint {
 }
 
 .virtual-pad .vp-stick,
+.virtual-pad .vp-dpad,
 .virtual-pad .vp-actions {
   pointer-events: auto;
   touch-action: none;
@@ -322,6 +323,69 @@ body.has-virtual-pad .hint {
   background: rgba(212, 168, 75, 0.7);
   box-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
   pointer-events: none;
+}
+
+/* Same corner and footprint as the joystick. Shown only for discrete menus. */
+.virtual-pad .vp-dpad {
+  display: none;
+  left: calc(10px + env(safe-area-inset-left, 0px));
+  width: 168px;
+  height: 168px;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  place-items: center;
+  pointer-events: none;
+}
+
+.virtual-pad.is-discrete .vp-stick {
+  display: none;
+}
+
+.virtual-pad.is-discrete .vp-dpad {
+  display: grid;
+}
+
+.virtual-pad .vp-dpad-up { grid-column: 2; grid-row: 1; }
+.virtual-pad .vp-dpad-left { grid-column: 1; grid-row: 2; }
+.virtual-pad .vp-dpad-right { grid-column: 3; grid-row: 2; }
+.virtual-pad .vp-dpad-down { grid-column: 2; grid-row: 3; }
+
+.virtual-pad .vp-dpad-btn {
+  pointer-events: auto;
+  width: 54px;
+  height: 54px;
+  padding: 0;
+}
+
+.virtual-pad .vp-arrow {
+  width: 0;
+  height: 0;
+  border-style: solid;
+  display: block;
+}
+
+.virtual-pad .vp-arrow-up {
+  border-width: 0 8px 13px 8px;
+  border-color: transparent transparent currentColor transparent;
+}
+
+.virtual-pad .vp-arrow-down {
+  border-width: 13px 8px 0 8px;
+  border-color: currentColor transparent transparent transparent;
+}
+
+.virtual-pad .vp-arrow-left {
+  border-width: 8px 13px 8px 0;
+  border-color: transparent currentColor transparent transparent;
+}
+
+.virtual-pad .vp-arrow-right {
+  border-width: 8px 0 8px 13px;
+  border-color: transparent transparent transparent currentColor;
+}
+
+.virtual-pad:not(.is-walking) .vp-run {
+  display: none;
 }
 
 .virtual-pad .vp-actions {
@@ -408,9 +472,14 @@ body.has-virtual-pad .hint {
 }
 
 @media (max-width: 420px) {
-  .virtual-pad .vp-stick {
+  .virtual-pad .vp-stick,
+  .virtual-pad .vp-dpad {
     width: 148px;
     height: 148px;
+  }
+  .virtual-pad .vp-dpad-btn {
+    width: 46px;
+    height: 46px;
   }
   .virtual-pad .vp-stick-knob {
     width: 56px;

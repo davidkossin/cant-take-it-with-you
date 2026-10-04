@@ -1,9 +1,14 @@
 /**
- * On-screen joystick + A/B/Run/Menu for smartphones.
- * The stick writes virtualStick (analog). It never confirms or opens a menu.
- * A strong deflection can nudge menu arrows only; those events are ignored
- * by the player so keyboard movement stays digital and unchanged.
- * Action buttons dispatch synthetic KeyboardEvents so existing handlers work.
+ * On-screen controls for smartphones.
+ * Walking (Decision Room / Hallway, no discrete menu) shows a joystick.
+ * The stick writes virtualStick (analog). It never confirms, never opens a
+ * menu, and never sends arrow keys.
+ * Menus, the pause menu, title/setup choices, the ending menu, and dialog
+ * choice lists hide the joystick and show a 4-way D-pad in the same corner.
+ * D-pad presses dispatch the same Arrow keys the keyboard uses. A tap is one
+ * step. Holding repeats. Releasing stops. The D-pad never confirms.
+ * A, B, Run, and Menu dispatch the same actions as before. Run is hidden
+ * when it would not move the player.
  */
 
 export const virtualKeys = new Set();
@@ -18,14 +23,16 @@ export let virtualRunHeld = false;
  */
 export const virtualStick = { x: 0, y: 0 };
 
-/** True only while a stick-driven menu arrow is being dispatched. */
-export let virtualStickEvent = false;
-
 /** Fraction of the travel radius that does not move (light touch). */
 const STICK_DEADZONE = 0.18;
 
-/** Remapped deflection (0 at the deadzone edge, 1 at the rim) before a menu nudge. */
-const STICK_MENU_AT = 0.55;
+/**
+ * Hold-to-repeat for the D-pad. Keyboard menus already step on each keydown
+ * (including the browser's key-repeat). A tap fires once. After a short
+ * delay, holding fires again at a menu-friendly rate, and pointer-up stops it.
+ */
+const DPAD_REPEAT_DELAY = 420;
+const DPAD_REPEAT_EVERY = 140;
 
 const DIR_KEYS = {
   up: 'ArrowUp',
@@ -47,24 +54,16 @@ function isTouchish() {
   return false;
 }
 
-function fireKey(key, type = 'keydown') {
+function fireKey(key, type = 'keydown', repeat = false) {
   window.dispatchEvent(
     new KeyboardEvent(type, {
       key,
       code: key,
       bubbles: true,
       cancelable: true,
+      repeat,
     })
   );
-}
-
-function fireStickArrow(key) {
-  virtualStickEvent = true;
-  try {
-    fireKey(key, 'keydown');
-  } finally {
-    virtualStickEvent = false;
-  }
 }
 
 export class VirtualPad {
@@ -76,8 +75,18 @@ export class VirtualPad {
     this.visible = false;
     this._bound = false;
     this._stickId = null;
-    this._menuKey = null;
-    this._menuTimer = 0;
+    this._discrete = false;
+    this._showRun = false;
+    this._dirPointer = null;
+    this._dirKey = null;
+    this._dirBtn = null;
+    this._dirDelay = 0;
+    this._dirRepeat = 0;
+    this._dirWatch = (e) => {
+      if (this._dirPointer == null || e.pointerId !== this._dirPointer) return;
+      e.preventDefault();
+      this._releaseDir();
+    };
   }
 
   mount() {
@@ -89,6 +98,12 @@ export class VirtualPad {
         <div class="vp-stick-base">
           <div class="vp-stick-knob" aria-hidden="true"></div>
         </div>
+      </div>
+      <div class="vp-dpad" aria-label="Menu directions">
+        <button type="button" class="vp-btn vp-dpad-btn vp-dpad-up" data-dir="up" aria-label="Up"><span class="vp-arrow vp-arrow-up" aria-hidden="true"></span></button>
+        <button type="button" class="vp-btn vp-dpad-btn vp-dpad-left" data-dir="left" aria-label="Left"><span class="vp-arrow vp-arrow-left" aria-hidden="true"></span></button>
+        <button type="button" class="vp-btn vp-dpad-btn vp-dpad-right" data-dir="right" aria-label="Right"><span class="vp-arrow vp-arrow-right" aria-hidden="true"></span></button>
+        <button type="button" class="vp-btn vp-dpad-btn vp-dpad-down" data-dir="down" aria-label="Down"><span class="vp-arrow vp-arrow-down" aria-hidden="true"></span></button>
       </div>
       <div class="vp-actions" aria-label="Action buttons">
         <button type="button" class="vp-btn vp-action vp-menu" data-action="menu" aria-label="Menu">Menu</button>
@@ -104,7 +119,7 @@ export class VirtualPad {
     this._knob = this.root.querySelector('.vp-stick-knob');
 
     const stickDown = (e) => {
-      if (this._stickId != null) return;
+      if (this._discrete || this._stickId != null) return;
       e.preventDefault();
       e.stopPropagation();
       this._stickId = e.pointerId;
@@ -134,10 +149,24 @@ export class VirtualPad {
     this._base.addEventListener('lostpointercapture', stickUp);
     this._base.addEventListener('contextmenu', (e) => e.preventDefault());
 
+    this.root.querySelectorAll('[data-dir]').forEach((btn) => {
+      const dir = btn.getAttribute('data-dir');
+      const key = DIR_KEYS[dir];
+      if (!key) return;
+      btn.addEventListener('pointerdown', (e) => {
+        if (!this._discrete) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this._pressDir(key, btn, e.pointerId);
+      });
+      btn.addEventListener('contextmenu', (e) => e.preventDefault());
+    });
+
     // Run: hold only. Does not dispatch a key, so it cannot confirm or open a menu.
     const runBtn = this.root.querySelector('[data-run]');
     if (runBtn) {
       const runDown = (e) => {
+        if (!this._showRun) return;
         e.preventDefault();
         e.stopPropagation();
         virtualRunHeld = true;
@@ -161,7 +190,7 @@ export class VirtualPad {
       runBtn.addEventListener('contextmenu', (e) => e.preventDefault());
     }
 
-    // Actions: tap. Joystick never uses this path.
+    // Actions: tap. Joystick and D-pad never use this path.
     this.root.querySelectorAll('[data-action]').forEach((btn) => {
       const action = btn.getAttribute('data-action');
       const key = ACTION_KEYS[action];
@@ -189,6 +218,7 @@ export class VirtualPad {
       { passive: false }
     );
 
+    this.setLayout({ discrete: false, showRun: false });
     this.refreshVisibility();
     window.addEventListener('resize', () => this.refreshVisibility());
     if (window.visualViewport) {
@@ -204,10 +234,93 @@ export class VirtualPad {
   }
 
   /**
+   * Switch the lower-left control immediately.
+   * @param {{ discrete?: boolean, showRun?: boolean }} layout
+   *   discrete — 4-way D-pad (menus). Otherwise the walk joystick.
+   *   showRun — Run button. Hidden in menus and whenever the player is not walking.
+   */
+  setLayout({ discrete = false, showRun = false } = {}) {
+    if (!this._bound) return;
+    if (discrete !== this._discrete) {
+      this._discrete = discrete;
+      this.root.classList.toggle('is-discrete', discrete);
+      if (discrete) this._releaseStick();
+      else this._releaseDir();
+    }
+    if (showRun !== this._showRun) {
+      this._showRun = showRun;
+      this.root.classList.toggle('is-walking', showRun);
+      if (!showRun) {
+        virtualRunHeld = false;
+        this.root.querySelector('[data-run]')?.classList.remove('is-down');
+      }
+    }
+  }
+
+  _pressDir(key, btn, pointerId) {
+    if (this._dirPointer != null && this._dirPointer !== pointerId) return;
+    if (this._dirKey === key && this._dirPointer === pointerId) return;
+    this._releaseDir();
+    this._dirPointer = pointerId;
+    this._dirKey = key;
+    this._dirBtn = btn;
+    btn.classList.add('is-down');
+    try {
+      btn.setPointerCapture?.(pointerId);
+    } catch (_) {
+      /* ignore */
+    }
+    fireKey(key, 'keydown', false);
+    window.addEventListener('pointerup', this._dirWatch);
+    window.addEventListener('pointercancel', this._dirWatch);
+    this._dirDelay = window.setTimeout(() => {
+      this._dirDelay = 0;
+      if (this._dirKey !== key) return;
+      this._dirRepeat = window.setInterval(() => {
+        if (this._dirKey !== key) return;
+        fireKey(key, 'keydown', true);
+      }, DPAD_REPEAT_EVERY);
+    }, DPAD_REPEAT_DELAY);
+  }
+
+  _releaseDir() {
+    if (this._dirDelay) {
+      window.clearTimeout(this._dirDelay);
+      this._dirDelay = 0;
+    }
+    if (this._dirRepeat) {
+      window.clearInterval(this._dirRepeat);
+      this._dirRepeat = 0;
+    }
+    window.removeEventListener('pointerup', this._dirWatch);
+    window.removeEventListener('pointercancel', this._dirWatch);
+    const key = this._dirKey;
+    const btn = this._dirBtn;
+    const pointerId = this._dirPointer;
+    this._dirKey = null;
+    this._dirBtn = null;
+    this._dirPointer = null;
+    btn?.classList.remove('is-down');
+    if (pointerId != null && btn?.hasPointerCapture?.(pointerId)) {
+      try {
+        btn.releasePointerCapture(pointerId);
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    if (key) fireKey(key, 'keyup', false);
+  }
+
+  /**
    * Knob center follows the finger, clamped so the knob stays inside the base.
    * Full travel = full walk speed. Inside STICK_DEADZONE, speed is zero.
+   * Does not dispatch arrow keys.
    */
   _applyStick(e) {
+    if (this._discrete) {
+      this._releaseStick();
+      return;
+    }
     const rect = this._base.getBoundingClientRect();
     const radius = rect.width / 2;
     const knobRect = this._knob.getBoundingClientRect();
@@ -233,44 +346,27 @@ export class VirtualPad {
     if (len <= STICK_DEADZONE || len === 0) {
       virtualStick.x = 0;
       virtualStick.y = 0;
-      this._setMenuKey(null);
       return;
     }
     const scale = (len - STICK_DEADZONE) / (1 - STICK_DEADZONE);
     virtualStick.x = (nx / len) * scale;
     virtualStick.y = (ny / len) * scale;
-
-    let menuKey = null;
-    if (scale >= STICK_MENU_AT) {
-      if (Math.abs(virtualStick.x) >= Math.abs(virtualStick.y)) {
-        menuKey = virtualStick.x < 0 ? DIR_KEYS.left : DIR_KEYS.right;
-      } else {
-        menuKey = virtualStick.y < 0 ? DIR_KEYS.up : DIR_KEYS.down;
-      }
-    }
-    this._setMenuKey(menuKey);
-  }
-
-  _setMenuKey(key) {
-    if (key === this._menuKey) {
-      if (key && performance.now() - this._menuTimer >= 180) {
-        this._menuTimer = performance.now();
-        fireStickArrow(key);
-      }
-      return;
-    }
-    this._menuKey = key;
-    this._menuTimer = performance.now();
-    if (key) fireStickArrow(key);
   }
 
   _releaseStick() {
+    const id = this._stickId;
     this._stickId = null;
     virtualStick.x = 0;
     virtualStick.y = 0;
-    this._menuKey = null;
     if (this._knob) this._knob.style.transform = 'translate(0px, 0px)';
     this._base?.classList.remove('is-down');
+    if (id != null && this._base?.hasPointerCapture?.(id)) {
+      try {
+        this._base.releasePointerCapture(id);
+      } catch (_) {
+        /* ignore */
+      }
+    }
   }
 
   refreshVisibility() {
@@ -296,6 +392,7 @@ export class VirtualPad {
     window.dispatchEvent(new Event('resize'));
     virtualRunHeld = false;
     this._releaseStick();
+    this._releaseDir();
     for (const key of [...virtualKeys]) {
       virtualKeys.delete(key);
       fireKey(key, 'keyup');
