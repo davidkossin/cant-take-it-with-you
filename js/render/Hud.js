@@ -1,4 +1,4 @@
-import { PALETTE, FRAME_W, HUD_H } from '../config.js';
+import { PALETTE, FRAME_W, FRAME_H, HUD_H } from '../config.js';
 import { computeWorth } from '../finance/Engine.js';
 import { makeHudIcon, makeHudBox } from './Assets.js';
 
@@ -71,4 +71,40 @@ export class Hud {
       ctx.fillText(names, clusters[0].x, y + boxH + 10);
     }
   }
+}
+
+/** Backdrop bottom sits this far inside the 1920×1080 frame. */
+export const ACTION_PROMPT_BOTTOM = 60;
+
+const PROMPT_FONT = 18;
+const PROMPT_PAD_Y = 8;
+
+/** Box the interact prompt will occupy. Used so banners can sit above it. */
+export function actionPromptBox() {
+  const boxH = PROMPT_FONT + PROMPT_PAD_Y * 2;
+  const bottom = FRAME_H - ACTION_PROMPT_BOTTOM;
+  return { top: bottom - boxH, bottom, boxH };
+}
+
+/**
+ * Bottom interact line. A text-sized translucent black chip, not a full-width bar.
+ * Bottom of the chip is ACTION_PROMPT_BOTTOM px above the frame edge.
+ */
+export function drawActionPrompt(ctx, label) {
+  const text = `[E] ${label}`;
+  ctx.save();
+  ctx.font = `${PROMPT_FONT}px "Press Start 2P", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const padX = 14;
+  const tw = Math.ceil(ctx.measureText(text).width);
+  const box = actionPromptBox();
+  const boxW = tw + padX * 2;
+  const boxX = Math.round(FRAME_W / 2 - boxW / 2);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.fillRect(boxX, box.top, boxW, box.boxH);
+  ctx.fillStyle = '#f0e8c8';
+  ctx.fillText(text, FRAME_W / 2, box.top + PROMPT_PAD_Y);
+  ctx.restore();
+  return box;
 }

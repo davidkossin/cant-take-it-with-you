@@ -10,6 +10,19 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.5.18] — 2026-10-03
+
+### Added
+- On-screen **joystick** replaces the mobile d-pad (same lower-left corner). Touch the base or the stick and drag: the stick follows the finger and stays inside the base. Full deflection is full walk speed. Past a small deadzone (18% of travel), shorter deflection scales speed down to a stop. Releasing centers the stick and stops movement. A, B, and Run stay separate buttons. The joystick does not confirm dialogs or open the menu. Keyboard movement is unchanged.
+
+### Changed
+- On-screen controls are a bit more transparent and still readable: joystick base fill 0.58 (knob 0.70), Run 0.66, A 0.62, B and other buttons 0.58, Menu 0.78. Was about 0.70–0.80 (Menu 0.90).
+- The bottom interact prompt sits higher in the 1920×1080 frame (chip bottom is 60px above the frame edge; it was about 18px). A slightly transparent black chip sits behind the text only, not a full-width bar.
+- Cache-bust / `GAME_VERSION` bumped to **0.5.18**
+
+### Fixed
+- Door collision is the painted door slab, flush with the wall face. The north Decision Room door, Hallway south door, and End of the Line door no longer let the player walk into the art. Year doors and the west return door use the same slab; those already sat on wall tiles, so the walkable floor there does not shrink. Which doors can be used is unchanged.
+
 ## [0.5.17] — 2026-10-03
 
 ### Added

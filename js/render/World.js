@@ -515,6 +515,32 @@ function drawYearTimeline(ctx, world, camX, camY) {
   ctx.restore();
 }
 
+const DOOR_KINDS = new Set(['door', 'year-door', 'west-door', 'south-door', 'end-door']);
+
+/**
+ * Painted door slab in world pixels. Same size and origin as paintDoor plus
+ * spriteOx/spriteOy. This is the solid, not the interact rect (those sit
+ * a few pixels into the room so facing range still reaches the door).
+ * Keep w/h in sync with paintDoor ('h' 32×16, 'v' 16×26).
+ */
+export function doorSpriteRect(obj) {
+  const facing =
+    obj.facing ||
+    (obj.wallSide === 'west' || obj.wallSide === 'east' || obj.kind === 'year-door' ? 'v' : 'h');
+  const w = facing === 'h' ? 32 : 16;
+  const h = facing === 'h' ? 16 : 26;
+  return {
+    x: obj.x + (obj.spriteOx || 0),
+    y: obj.y + (obj.spriteOy || 0),
+    w,
+    h,
+  };
+}
+
+function overlapsRect(x, y, w, h, r) {
+  return x < r.x + r.w && x + w > r.x && y < r.y + r.h && y + h > r.y;
+}
+
 export function isSolid(world, x, y, w, h) {
   const points = [
     [x, y],
@@ -528,6 +554,14 @@ export function isSolid(world, x, y, w, h) {
     if (ty < 0 || tx < 0 || ty >= world.rows || tx >= world.cols) return true;
     const t = world.map[ty][tx];
     if (t === 'wall' || t === 'wallPurple' || t === 'void') return true;
+  }
+  // Door art that sits on an opened wall tile (north room door, south door,
+  // end door) must stop the body on the same face as a wall tile. Year doors
+  // and the west return door are painted on tiles that are already walls;
+  // their rects match that wall face and do not eat extra floor.
+  for (const obj of world.interactables || []) {
+    if (!DOOR_KINDS.has(obj.kind)) continue;
+    if (overlapsRect(x, y, w, h, doorSpriteRect(obj))) return true;
   }
   return false;
 }

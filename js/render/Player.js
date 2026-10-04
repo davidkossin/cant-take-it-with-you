@@ -1,6 +1,6 @@
 import { KEYS, TILE, RUN_MULTIPLIER } from '../config.js';
 import { makePlayerSprite } from './Assets.js';
-import { virtualKeys, virtualRunHeld } from '../input/VirtualPad.js';
+import { virtualKeys, virtualRunHeld, virtualStick, virtualStickEvent } from '../input/VirtualPad.js';
 
 /** Movement keys only — typing never pollutes the pressed set. */
 const MOVE_KEYS = new Set([
@@ -42,6 +42,8 @@ export class Player {
 
   bindInput(target = window) {
     this._kd = (e) => {
+      // Joystick menu nudges must not become digital movement.
+      if (virtualStickEvent) return;
       if (e.key === ' ') {
         if (this.inputEnabled && !e.repeat) this.runHeld = true;
         return;
@@ -87,10 +89,18 @@ export class Player {
   update(solidAt) {
     let dx = 0;
     let dy = 0;
-    if (this.pressed(KEYS.left)) dx -= 1;
-    if (this.pressed(KEYS.right)) dx += 1;
-    if (this.pressed(KEYS.up)) dy -= 1;
-    if (this.pressed(KEYS.down)) dy += 1;
+    const keyX = (this.pressed(KEYS.right) ? 1 : 0) - (this.pressed(KEYS.left) ? 1 : 0);
+    const keyY = (this.pressed(KEYS.down) ? 1 : 0) - (this.pressed(KEYS.up) ? 1 : 0);
+    const stickMag = Math.hypot(virtualStick.x, virtualStick.y);
+    // Keyboard stays digital full-speed, even if the stick is also deflected.
+    const usingKeys = keyX !== 0 || keyY !== 0;
+    if (usingKeys) {
+      dx = keyX;
+      dy = keyY;
+    } else if (stickMag > 0) {
+      dx = virtualStick.x;
+      dy = virtualStick.y;
+    }
 
     this.moving = dx !== 0 || dy !== 0;
     if (!this.moving) {
@@ -105,8 +115,14 @@ export class Player {
     // Keyboard Space or the touch Run button. Run does not confirm dialogs.
     const running = this.runHeld || virtualRunHeld;
     const speed = this.speed * (running ? RUN_MULTIPLIER : 1);
-    dx = (dx / len) * speed;
-    dy = (dy / len) * speed;
+    if (usingKeys) {
+      dx = (dx / len) * speed;
+      dy = (dy / len) * speed;
+    } else {
+      // Stick x/y already has length 0..1 (1 = full walk). Do not renormalize.
+      dx = dx * speed;
+      dy = dy * speed;
+    }
 
     const tryMove = (mx, my) => {
       const nx = this.x + mx;

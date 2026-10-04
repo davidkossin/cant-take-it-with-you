@@ -38,7 +38,7 @@ function touchPadReserve() {
   if (!document.body.classList.contains('has-virtual-pad')) return 0;
   const { h: winH } = availableViewport();
   let top = winH;
-  for (const el of document.querySelectorAll('.vp-dpad, .vp-actions')) {
+  for (const el of document.querySelectorAll('.vp-stick, .vp-actions')) {
     const r = el.getBoundingClientRect();
     if (r.height > 0) top = Math.min(top, r.top);
   }

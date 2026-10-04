@@ -15,7 +15,7 @@ import {
   SB_LTV,
 } from '../config.js';
 import { Player } from '../render/Player.js';
-import { Hud } from '../render/Hud.js';
+import { Hud, drawActionPrompt } from '../render/Hud.js';
 import {
   buildDecisionRoom,
   drawWorld,
@@ -705,12 +705,7 @@ export class RoomScene {
     this.hud.draw(ctx, game.portfolio);
 
     if (this.prompt && !this.locked) {
-      ctx.font = '18px "Press Start 2P", monospace';
-      ctx.fillStyle = '#f0e8c8';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillText(`[E] ${this.prompt.label}`, FRAME_W / 2, HUD_H + VIEW_H * WORLD_SCALE - 36);
-      ctx.textAlign = 'left';
+      drawActionPrompt(ctx, this.prompt.label);
     }
   }
 }
