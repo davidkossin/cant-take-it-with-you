@@ -142,7 +142,7 @@ const dialog = new Dialog();
 installFullscreen({
   button: document.getElementById('fs-btn'),
   onChange: () => fitCanvas(),
-  allowKey: () => !(dialog.active && dialog.mode === 'prompt'),
+  allowKey: () => !(dialog.active && (dialog.mode === 'prompt' || dialog.mode === 'form')),
 });
 const mobileText = new MobileTextInput(canvas, dialog);
 mobileText.mount();
@@ -197,6 +197,11 @@ async function startTitle() {
     // Custom setup (one-off; not auto-saved as a profile)
     mode = 'setup';
     game = await setup.run(dialog);
+    if (!game) {
+      // Cancelled at name step — back to main menu
+      startTitle();
+      return;
+    }
     mode = 'room';
     room.enter(game, false);
   }
@@ -214,6 +219,27 @@ function directionHeld() {
   );
 }
 
+
+/** Map CSS-pixel click → logical 1920×1080 canvas coords. */
+function canvasLogicalXY(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  const lx = ((clientX - rect.left) / rect.width) * FRAME_W;
+  const ly = ((clientY - rect.top) / rect.height) * FRAME_H;
+  return { x: lx, y: ly };
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.button != null && e.button !== 0) return;
+  const pt = canvasLogicalXY(e.clientX, e.clientY);
+  if (!pt) return;
+  if (dialog.active) {
+    if (dialog.handlePointer(pt.x, pt.y)) {
+      e.preventDefault();
+    }
+  }
+});
+
 window.addEventListener('keydown', async (e) => {
   if (dialog.active) {
     dialog.handleKeyDown(e);
@@ -225,6 +251,12 @@ window.addEventListener('keydown', async (e) => {
     if (result === 'close') {
       if (mode === 'room') room.setInputBlocked(false);
       else if (mode === 'hallway') hallway.setInputBlocked(false);
+    }
+    if (result === 'quit') {
+      room.leave();
+      hallway.leave();
+      startTitle();
+      return;
     }
     if (result && typeof result === 'object' && result.jump) {
       // Restored hallway branch — re-enter hallway scene
@@ -308,6 +340,8 @@ function syncVirtualPad() {
     (dialog.mode === 'menu' ||
       dialog.mode === 'confirm' ||
       dialog.mode === 'prompt' ||
+      dialog.mode === 'form' ||
+      dialog.mode === 'multi' ||
       (dialog.options && dialog.options.length > 1));
   const endingMenu = mode === 'ending' && ending.phase === 2;
   const discrete = !!(pause.open || choiceDialog || endingMenu);

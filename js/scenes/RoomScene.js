@@ -424,6 +424,8 @@ export class RoomScene {
       );
     } else if (action === 'borrow') {
       await this.handleBorrow(game, dialog);
+    } else if (action === 'portfolio') {
+      await this.handlePortfolioEditor(game, dialog, diff);
     }
   }
 
@@ -590,7 +592,166 @@ export class RoomScene {
     );
   }
 
-    async handleSellStock(game, dialog, diff) {
+  
+  /**
+   * Portfolio teller — edit any current portfolio parameter.
+   */
+  async handlePortfolioEditor(game, dialog, diff) {
+    const p = game.portfolio;
+    while (true) {
+      const choice = await dialog.menu(
+        'Edit portfolio parameters',
+        [
+          { label: 'Cash (checking)', value: 'cash' },
+          { label: 'Savings / rate', value: 'savings' },
+          { label: 'Salary', value: 'salary' },
+          { label: 'Stocks total', value: 'stocks' },
+          { label: '401(k) / Roth', value: 'retire' },
+          { label: 'Retirement age', value: 'retireAge' },
+          { label: 'ZIP / filing status', value: 'tax' },
+          { label: 'Difficulty rates', value: 'rates' },
+          { label: 'Annual spending', value: 'spend' },
+          { label: 'Housing / rent', value: 'housing' },
+          { label: 'Done', value: null },
+        ],
+        { title: 'Portfolio' }
+      );
+      if (!choice) return;
+      if (choice === 'cash') {
+        const v = await dialog.prompt('Cash (checking)', {
+          title: 'Portfolio',
+          defaultValue: String(p.cash || 0),
+          type: 'money',
+          prefix: '$',
+        });
+        if (v != null) p.cash = Math.max(0, v);
+      } else if (choice === 'savings') {
+        const pct = ((p.savingsRate || 0) * 100).toFixed(2).replace(/\.?0+$/, '');
+        const form = await dialog.form('Savings', [
+          { key: 'bal', label: 'Savings', type: 'money', prefix: '$', defaultValue: String(p.savings || 0) },
+          { key: 'rate', label: 'Interest rate', type: 'percent', defaultValue: pct },
+        ], { title: 'Portfolio' });
+        if (form) {
+          p.savings = Math.max(0, form.bal || 0);
+          p.savingsRate = Math.max(0, (form.rate || 0) / 100);
+        }
+      } else if (choice === 'salary') {
+        const v = await dialog.prompt('Annual household salary', {
+          title: 'Portfolio',
+          defaultValue: String(p.salary || 0),
+          type: 'money',
+          prefix: '$',
+        });
+        if (v != null) {
+          p.salary = Math.max(0, v);
+          p.employed = p.salary > 0 && !p.retired;
+          p.peakSalary = Math.max(p.peakSalary || 0, p.salary);
+        }
+      } else if (choice === 'stocks') {
+        const v = await dialog.prompt('Stock portfolio total', {
+          title: 'Portfolio',
+          defaultValue: String(p.stocksTotal || 0),
+          type: 'money',
+          prefix: '$',
+        });
+        if (v != null) {
+          p.stocksTotal = Math.max(0, v);
+          if (!(p.stocksHoldings || []).length) {
+            p.stocksCostBasis = Math.min(p.stocksCostBasis || 0, p.stocksTotal) || p.stocksTotal;
+          }
+        }
+      } else if (choice === 'retire') {
+        const form = await dialog.form('Retirement accounts', [
+          { key: 'k401', label: '401(k) balance', type: 'money', prefix: '$', defaultValue: String(p.k401Balance || 0) },
+          { key: 'kRate', label: '401(k) contrib % of salary', type: 'percent', defaultValue: String(((p.k401ContribRate || 0) * 100).toFixed(2)) },
+          { key: 'roth', label: 'Roth IRA balance', type: 'money', prefix: '$', defaultValue: String(p.rothBalance || 0) },
+          { key: 'rothC', label: 'Roth annual contribution', type: 'money', prefix: '$', defaultValue: String(p.rothAnnualContribution || 0) },
+        ], { title: 'Portfolio' });
+        if (form) {
+          p.k401Balance = Math.max(0, form.k401 || 0);
+          p.k401ContribRate = Math.max(0, Math.min(1, (form.kRate || 0) / 100));
+          p.has401k = p.k401Balance > 0 || p.k401ContribRate > 0;
+          p.rothBalance = Math.max(0, form.roth || 0);
+          p.rothAnnualContribution = Math.max(0, form.rothC || 0);
+          p.hasRoth = p.rothBalance > 0 || p.rothAnnualContribution > 0;
+        }
+      } else if (choice === 'retireAge') {
+        const v = await dialog.prompt('Retirement age', {
+          title: 'Portfolio',
+          defaultValue: String(p.retirementAge || 65),
+          type: 'number',
+        });
+        if (v != null) p.retirementAge = Math.max(40, Math.min(100, Math.round(v)));
+      } else if (choice === 'tax') {
+        const form = await dialog.form('Tax profile', [
+          { key: 'zip', label: 'ZIP (blank = national avg)', type: 'text', defaultValue: p.zip || '' },
+        ], { title: 'Portfolio' });
+        if (form) {
+          p.zip = String(form.zip || '').replace(/\D/g, '').slice(0, 5);
+        }
+        const filing = await dialog.menu('Marital Status', [
+          { label: 'Single', value: 'single' },
+          { label: 'Married Filing Jointly', value: 'married' },
+          { label: 'Cancel', value: null },
+        ], { title: 'Portfolio', selected: p.married ? 1 : 0 });
+        if (filing) {
+          p.filingStatus = filing;
+          p.married = filing === 'married';
+        }
+      } else if (choice === 'rates') {
+        const o = p.rateOverrides || {};
+        const form = await dialog.form(
+          'Model rates (override difficulty defaults)',
+          [
+            { key: 'inf', label: 'Inflation %', type: 'percent', defaultValue: String(((o.inflation ?? diff.inflation) * 100).toFixed(2)) },
+            { key: 'eq', label: 'Equity growth %', type: 'percent', defaultValue: String(((o.equityReturn ?? diff.equityReturn) * 100).toFixed(2)) },
+            { key: 'vol', label: 'Equity volatility %', type: 'percent', defaultValue: String(((o.equityVolatility ?? diff.equityVolatility) * 100).toFixed(2)) },
+            { key: 'mort', label: 'Mortgage rate %', type: 'percent', defaultValue: String(((o.mortgageRate ?? diff.mortgageRate) * 100).toFixed(2)) },
+          ],
+          { title: 'Portfolio' }
+        );
+        if (form) {
+          p.rateOverrides = {
+            ...(p.rateOverrides || {}),
+            inflation: (form.inf || 0) / 100,
+            equityReturn: (form.eq || 0) / 100,
+            equityVolatility: (form.vol || 0) / 100,
+            mortgageRate: (form.mort || 0) / 100,
+          };
+        }
+      } else if (choice === 'spend') {
+        const v = await dialog.prompt('Annual household spending', {
+          title: 'Portfolio',
+          defaultValue: String(p.annualSpending || 0),
+          type: 'money',
+          prefix: '$',
+        });
+        if (v != null) {
+          p.annualSpending = Math.max(0, v);
+          p.spendingBreakdown = { ...(p.spendingBreakdown || {}), other: p.annualSpending };
+        }
+      } else if (choice === 'housing') {
+        const mode = await dialog.menu('Housing', [
+          { label: 'Own', value: 'own' },
+          { label: 'Rent', value: 'rent' },
+          { label: 'Cancel', value: null },
+        ], { title: 'Portfolio' });
+        if (!mode) continue;
+        p.housing = mode;
+        if (mode === 'rent') {
+          const r = await dialog.prompt('Monthly rent', {
+            title: 'Portfolio',
+            defaultValue: String(p.monthlyRent || 0),
+            type: 'money',
+            prefix: '$',
+          });
+          if (r != null) p.monthlyRent = Math.max(0, r);
+        }
+      }
+    }
+  }
+
+  async handleSellStock(game, dialog, diff) {
     const p = game.portfolio;
     const held = p.stocksTotal || 0;
     if (held <= 0) {

@@ -1,12 +1,20 @@
 /**
  * Contextual LTTP-styled setup questionnaires with Back on every step.
+ * v0.6.0 flow: Name → Year → Age → Difficulty → ZIP → Finances → Retirement →
+ * Investments → Homes → Family → Expenses → Portfolio overview.
  */
 
 import { CURRENT_YEAR, HOME_TYPES, FRAME_W, FRAME_H, TILE, WORLD_SCALE, PALETTE } from '../config.js';
 import { createDefaultSetup, createGameFromSetup } from '../state/GameState.js';
 import { saveProfile } from '../state/ProfileSystem.js';
-import { listDifficulties } from '../finance/Difficulty.js';
+import { listDifficulties, getDifficulty } from '../finance/Difficulty.js';
 import { makeTile } from '../render/Assets.js';
+import { stateFromZip, defaultPropertyTaxRate } from '../data/state-from-zip.js';
+import { estimateAnnualTax } from '../finance/Tax.js';
+import { annualMortgagePayment, syncStocksTotal } from '../finance/Engine.js';
+import { lookupStockWithLoading } from '../finance/stockQuotes.js';
+import { randomChildName, childOrdinal } from '../data/childNames.js';
+import { formatMoneyDisplay } from '../render/Dialog.js';
 
 const BACK = '__back__';
 
@@ -32,63 +40,76 @@ export class SetupScene {
     ctx.textAlign = 'left';
   }
 
-  /**
-   * Scrub temporary questionnaire fields from a setup object.
-   * @param {object} s
-   */
   scrubTemps(s) {
-    delete s._homeCount;
-    delete s._homeIdx;
-    delete s._homeType;
-    delete s._homeValue;
-    delete s._homeOwed;
-    delete s._homeRate;
-    delete s._kidCount;
-    delete s._kidIdx;
-    delete s._kidName;
+    for (const k of Object.keys(s)) {
+      if (k.startsWith('_')) delete s[k];
+    }
     return s;
   }
 
-  /**
-   * Run full setup via dialog.
-   * @param {object} dialog
-   * @param {{ mode?: 'game'|'profile' }} [options]
-   *   mode 'game' (default): welcome + createGameFromSetup
-   *   mode 'profile': return scrubbed setup (or null if cancelled at start)
-   * Every step supports Back to edit prior answers.
-   */
+  applyDifficultyDefaults(s) {
+    const d = getDifficulty(s.difficulty || 'standard');
+    if (s._diffDefaultsApplied !== s.difficulty) {
+      s.savingsRate = d.savingsRate;
+      s.rateOverrides = s.rateOverrides || {};
+      // Seed rate overrides with difficulty defaults so player can override later
+      s.rateOverrides.inflation = d.inflation;
+      s.rateOverrides.equityReturn = d.equityReturn;
+      s.rateOverrides.equityVolatility = d.equityVolatility;
+      s.rateOverrides.mortgageRate = d.mortgageRate;
+      s._diffDefaultsApplied = s.difficulty;
+    }
+  }
+
   async run(dialog, options = {}) {
     const mode = options.mode === 'profile' ? 'profile' : 'game';
-    const allowCancelAtStart = mode === 'profile';
+    const allowCancelAtStart = true; // Back on name → confirm return to menu
     const s = createDefaultSetup();
     let step = 0;
 
     const withBack = (opts) => [...opts, { label: '← Back', value: BACK }];
 
+    const lookupOnline = async (ticker) => {
+      let loading = false;
+      const result = await lookupStockWithLoading(ticker, {
+        wantHistory: true,
+        onLoading: () => {
+          loading = true;
+          dialog.showLoading('Loading…');
+        },
+        onLoadingDone: () => {
+          if (loading) dialog.hideLoading();
+        },
+      });
+      if (loading) dialog.hideLoading();
+      return result;
+    };
+
     while (true) {
       let result;
 
+      // ── 0 Name ──────────────────────────────────────────────
       if (step === 0) {
         result = await dialog.prompt('What is your name?', {
-          title: 'Identity',
+          title: '',
           defaultValue: s.playerName,
         });
         if (result == null) {
-          if (allowCancelAtStart) {
-            const exit = await dialog.confirm(
-              'Do you want to return to the main menu? Current profile will not be saved',
-              { title: 'Create a Profile' }
-            );
-            if (exit) return null;
-          }
-          /* game mode: first step cancel stays */
+          const exit = await dialog.confirm(
+            'Are you sure? Profile will not be saved',
+            { title: '', yes: 'Yes', no: 'No' }
+          );
+          if (exit) return null;
           continue;
         }
         s.playerName = result || s.playerName;
         step++;
-      } else if (step === 1) {
-        result = await dialog.prompt('Starting calendar year?', {
-          title: 'When',
+      }
+
+      // ── 1 Starting year ─────────────────────────────────────
+      else if (step === 1) {
+        result = await dialog.prompt('Starting year?', {
+          title: '',
           defaultValue: String(s.year),
           type: 'number',
         });
@@ -98,9 +119,12 @@ export class SetupScene {
         }
         s.year = Math.round(result);
         step++;
-      } else if (step === 2) {
-        result = await dialog.prompt('Your age?', {
-          title: 'When',
+      }
+
+      // ── 2 Age ───────────────────────────────────────────────
+      else if (step === 2) {
+        result = await dialog.prompt('Age?', {
+          title: '',
           defaultValue: String(s.age),
           type: 'number',
         });
@@ -110,42 +134,58 @@ export class SetupScene {
         }
         s.age = Math.max(18, Math.min(99, Math.round(result)));
         step++;
-      } else if (step === 3) {
+      }
+
+      // ── 3 Difficulty ────────────────────────────────────────
+      else if (step === 3) {
+        const diffs = listDifficulties();
+        const stdIdx = Math.max(
+          0,
+          diffs.findIndex((d) => d.id === 'standard')
+        );
         result = await dialog.menu(
-          'Hair color?',
-          withBack([
-            { label: 'Dark', value: 'dark' },
-            { label: 'Blonde', value: 'blonde' },
-            { label: 'Red', value: 'red' },
-          ]),
-          { title: 'Appearance' }
+          'Sets the model’s rates for inflation, interest, etc.',
+          withBack(
+            diffs.map((d) => ({
+              label: d.label,
+              value: d.id,
+              subtext: d.subtext || '',
+            }))
+          ),
+          { title: 'Difficulty', selected: stdIdx }
         );
         if (result === BACK) {
           step--;
           continue;
         }
-        s.hairColor = result;
+        s.difficulty = result || 'standard';
+        this.applyDifficultyDefaults(s);
         step++;
-      } else if (step === 4) {
-        result = await dialog.menu(
-          'Hair length?',
-          withBack([
-            { label: 'Short', value: 'short' },
-            { label: 'Long', value: 'long' },
-          ]),
-          { title: 'Appearance' }
-        );
-        if (result === BACK) {
+      }
+
+      // ── 4 ZIP ───────────────────────────────────────────────
+      else if (step === 4) {
+        result = await dialog.prompt('Zip Code', {
+          title: 'Zip Code',
+          subtitle: 'Used to estimate taxes (leave blank to use national averages)',
+          defaultValue: s.zip || '',
+        });
+        if (result == null) {
           step--;
           continue;
         }
-        s.hairLength = result;
+        const digits = String(result).replace(/\D/g, '').slice(0, 5);
+        s.zip = digits; // may be ''
         step++;
-      } else if (step === 5) {
-        result = await dialog.prompt('Starting Cash ($)?', {
+      }
+
+      // ── 5 Starting Cash (checking) ──────────────────────────
+      else if (step === 5) {
+        result = await dialog.prompt('Starting Cash in checking account', {
           title: 'Finances',
           defaultValue: String(s.cash),
           type: 'money',
+          prefix: '$',
         });
         if (result == null) {
           step--;
@@ -153,11 +193,46 @@ export class SetupScene {
         }
         s.cash = Math.max(0, result);
         step++;
-      } else if (step === 6) {
-        result = await dialog.prompt('Annual household gross salary ($)?', {
+      }
+
+      // ── 6 Savings + interest (same page) ────────────────────
+      else if (step === 6) {
+        const pctDefault = ((s.savingsRate || 0) * 100).toFixed(2).replace(/\.?0+$/, '') || '0';
+        result = await dialog.form(
+          'Savings',
+          [
+            {
+              key: 'savings',
+              label: 'Savings',
+              type: 'money',
+              prefix: '$',
+              defaultValue: String(s.savings),
+            },
+            {
+              key: 'rate',
+              label: 'Savings interest rate',
+              type: 'percent',
+              defaultValue: pctDefault,
+            },
+          ],
+          { title: 'Finances' }
+        );
+        if (result == null) {
+          step--;
+          continue;
+        }
+        s.savings = Math.max(0, result.savings || 0);
+        s.savingsRate = Math.max(0, Math.min(0.5, (result.rate || 0) / 100));
+        step++;
+      }
+
+      // ── 7 Salary ────────────────────────────────────────────
+      else if (step === 7) {
+        result = await dialog.prompt('Annual household salary (before taxes)', {
           title: 'Finances',
           defaultValue: String(s.salary),
           type: 'money',
+          prefix: '$',
         });
         if (result == null) {
           step--;
@@ -166,107 +241,485 @@ export class SetupScene {
         s.salary = Math.max(0, result);
         s.employed = s.salary > 0;
         step++;
-      } else if (step === 7) {
-        result = await dialog.prompt('Savings balance ($)?', {
-          title: 'Finances',
-          defaultValue: String(s.savings),
-          type: 'money',
-        });
-        if (result == null) {
-          step--;
-          continue;
-        }
-        s.savings = Math.max(0, result);
-        step++;
-      } else if (step === 8) {
-        const pctDefault = ((s.savingsRate || 0.02) * 100).toFixed(2).replace(/\.?0+$/, '');
-        result = await dialog.prompt('Savings interest rate (%)?', {
-          title: 'Finances',
-          defaultValue: pctDefault,
-          type: 'percent',
-        });
-        if (result == null) {
-          step--;
-          continue;
-        }
-        // Store as decimal: 3.2 → 0.032
-        s.savingsRate = Math.max(0, Math.min(0.2, result / 100));
-        step++;
-      } else if (step === 9) {
-        result = await dialog.prompt('401(k) balance ($)?', {
+      }
+
+      // ── 8 Retirement age ────────────────────────────────────
+      else if (step === 8) {
+        result = await dialog.prompt('Retirement age', {
           title: 'Retirement',
-          defaultValue: String(s.k401Balance ?? 0),
-          type: 'money',
+          defaultValue: String(s.retirementAge || 65),
+          type: 'number',
         });
         if (result == null) {
           step--;
+          continue;
+        }
+        s.retirementAge = Math.max(40, Math.min(100, Math.round(result || 65)));
+        step++;
+      }
+
+      // ── 9 Retirement accounts (checkboxes) ──────────────────
+      else if (step === 9) {
+        const selected = [];
+        if (s.has401k) selected.push('k401');
+        if (s.hasRoth) selected.push('roth');
+        result = await dialog.multiSelect(
+          'Which retirement accounts do you have?',
+          [
+            { label: '401(k)', value: 'k401' },
+            { label: 'Roth IRA', value: 'roth' },
+          ],
+          { title: 'Retirement', selected }
+        );
+        if (result == null) {
+          step--;
+          continue;
+        }
+        s.has401k = result.includes('k401');
+        s.hasRoth = result.includes('roth');
+        if (!s.has401k) {
+          s.k401Balance = 0;
+          s.k401ContribRate = 0;
+          s.k401MatchRate = 0;
+          s.k401MatchOnFirst = 0;
+        }
+        if (!s.hasRoth) {
+          s.rothBalance = 0;
+          s.rothAnnualContribution = 0;
+        }
+        step = s.has401k ? 10 : s.hasRoth ? 13 : 14;
+      }
+
+      // ── 10 401(k) balance ───────────────────────────────────
+      else if (step === 10) {
+        result = await dialog.prompt('401(k) balance / amount', {
+          title: 'Retirement',
+          defaultValue: String(s.k401Balance || 0),
+          type: 'money',
+          prefix: '$',
+        });
+        if (result == null) {
+          step = 9;
           continue;
         }
         s.k401Balance = Math.max(0, result);
-        step++;
-      } else if (step === 10) {
+        // Also ask contribution % for ongoing deferrals (feeds tax model)
         const pctDefault = ((s.k401ContribRate || 0.06) * 100).toFixed(2).replace(/\.?0+$/, '');
-        result = await dialog.prompt('401(k) contribution (% of salary)?', {
+        const contrib = await dialog.prompt('401(k) contribution (% of salary)', {
           title: 'Retirement',
           defaultValue: pctDefault,
           type: 'percent',
         });
-        if (result == null) {
-          step--;
+        if (contrib == null) {
+          step = 10;
           continue;
         }
-        // 0–100% of salary; annual $ cap applied in engine (K401_EMPLOYEE_LIMIT)
-        s.k401ContribRate = Math.max(0, Math.min(1, result / 100));
-        step++;
-      } else if (step === 11) {
-        // Classic “100% of first 3%”: matchRate + matchOnFirst (nested like home term)
-        const matchPctDef = ((s.k401MatchRate ?? 1) * 100).toFixed(0);
-        result = await dialog.prompt(
-          'Employer match (% of your deferrals, 0–100)?\n(e.g. 100 = dollar-for-dollar)',
-          {
-            title: 'Retirement',
-            defaultValue: matchPctDef,
-            type: 'percent',
-          }
+        s.k401ContribRate = Math.max(0, Math.min(1, contrib / 100));
+        step = 11;
+      }
+
+      // ── 11 Employer matching Yes/No ─────────────────────────
+      else if (step === 11) {
+        result = await dialog.menu(
+          'Employer matching?',
+          withBack([
+            { label: 'Yes', value: true },
+            { label: 'No', value: false },
+          ]),
+          { title: 'Retirement' }
         );
-        if (result == null) {
-          step--;
+        if (result === BACK) {
+          step = 10;
           continue;
         }
-        s.k401MatchRate = Math.max(0, Math.min(1, result / 100));
-        const onFirstDef = ((s.k401MatchOnFirst ?? 0.03) * 100).toFixed(2).replace(/\.?0+$/, '');
-        const onFirst = await dialog.prompt(
-          'Match applies on first (% of salary)?\n(e.g. 3 with 100% match = classic “100% of first 3%”)',
-          {
-            title: 'Retirement',
-            defaultValue: onFirstDef,
-            type: 'percent',
-          }
+        if (!result) {
+          s.k401MatchRate = 0;
+          s.k401MatchOnFirst = 0;
+          step = s.hasRoth ? 13 : 14;
+        } else {
+          step = 12;
+        }
+      }
+
+      // ── 12 Match questions (one page) ───────────────────────
+      else if (step === 12) {
+        const matchPctDef = ((s.k401MatchRate || 1) * 100).toFixed(0);
+        const onFirstDef = ((s.k401MatchOnFirst || 0.03) * 100).toFixed(2).replace(/\.?0+$/, '');
+        result = await dialog.form(
+          'Employer match details',
+          [
+            {
+              key: 'matchRate',
+              label: 'Match % of your deferrals (e.g. 100)',
+              type: 'percent',
+              defaultValue: matchPctDef,
+            },
+            {
+              key: 'onFirst',
+              label: 'On first % of salary (e.g. 3)',
+              type: 'percent',
+              defaultValue: onFirstDef,
+            },
+          ],
+          { title: 'Retirement' }
         );
-        if (onFirst == null) {
+        if (result == null) {
           step = 11;
           continue;
         }
-        s.k401MatchOnFirst = Math.max(0, Math.min(1, onFirst / 100));
-        step++;
-      } else if (step === 12) {
-        result = await dialog.prompt('Stock portfolio total ($)?', {
+        s.k401MatchRate = Math.max(0, Math.min(1, (result.matchRate || 0) / 100));
+        s.k401MatchOnFirst = Math.max(0, Math.min(1, (result.onFirst || 0) / 100));
+        step = s.hasRoth ? 13 : 14;
+      }
+
+      // ── 13 Roth balance + contribution ──────────────────────
+      else if (step === 13) {
+        result = await dialog.form(
+          'Roth IRA',
+          [
+            {
+              key: 'balance',
+              label: 'Roth IRA balance',
+              type: 'money',
+              prefix: '$',
+              defaultValue: String(s.rothBalance || 0),
+            },
+            {
+              key: 'contrib',
+              label: 'Annual contribution',
+              type: 'money',
+              prefix: '$',
+              defaultValue: String(s.rothAnnualContribution || 0),
+            },
+          ],
+          { title: 'Retirement' }
+        );
+        if (result == null) {
+          if (s.has401k) step = 11;
+          else step = 9;
+          continue;
+        }
+        s.rothBalance = Math.max(0, result.balance || 0);
+        s.rothAnnualContribution = Math.max(0, result.contrib || 0);
+        step = 14;
+      }
+
+      // ── 14 Investments mode ─────────────────────────────────
+      else if (step === 14) {
+        result = await dialog.menu(
+          'How do you want to enter investments?',
+          withBack([
+            { label: 'Set Total Investments', value: 'total' },
+            { label: 'Set Specific Stocks (advanced)', value: 'specific' },
+          ]),
+          { title: 'Investments' }
+        );
+        if (result === BACK) {
+          if (s.hasRoth) step = 13;
+          else if (s.has401k) step = 11;
+          else step = 9;
+          continue;
+        }
+        s.stocksMode = result;
+        s.stocksHoldings = s.stocksHoldings || [];
+        if (result === 'total') step = 15;
+        else {
+          s._stockIdx = 0;
+          step = 16;
+        }
+      }
+
+      // ── 15 Total portfolio ──────────────────────────────────
+      else if (step === 15) {
+        result = await dialog.prompt('Stock Portfolio Total', {
           title: 'Investments',
-          defaultValue: String(s.stocksTotal),
+          defaultValue: String(s.stocksTotal || 0),
           type: 'money',
+          prefix: '$',
         });
         if (result == null) {
-          step--;
+          step = 14;
           continue;
         }
         s.stocksTotal = Math.max(0, result);
-        s.stocksCostBasis = s.stocksTotal; // assume basis = market at setup
-        step++;
-      } else if (step === 13) {
+        s.stocksCostBasis = s.stocksTotal;
+        s.stocksHoldings = [];
+        step = 20;
+      }
+
+      // ── 16 Specific stock: online? ──────────────────────────
+      else if (step === 16) {
         result = await dialog.menu(
-          'How many homes (0–5)?',
+          "Use Today's Real Values?",
           withBack([
-            { label: '0', value: 0 },
+            { label: 'Yes', value: true },
+            { label: 'No', value: false },
+          ]),
+          { title: 'Investments' }
+        );
+        if (result === BACK) {
+          if ((s._stockIdx || 0) === 0) step = 14;
+          else {
+            s.stocksHoldings.pop();
+            s._stockIdx = Math.max(0, (s._stockIdx || 1) - 1);
+            step = 19; // add another?
+          }
+          continue;
+        }
+        s._online = !!result;
+        step = 17;
+      }
+
+      // ── 17 Ticker + price + shares + purchase + growth/vol ─
+      else if (step === 17) {
+        const d = getDifficulty(s.difficulty);
+        const defGrowth = ((s.rateOverrides?.equityReturn ?? d.equityReturn) * 100)
+          .toFixed(2)
+          .replace(/\.?0+$/, '');
+        const defVol = ((s.rateOverrides?.equityVolatility ?? d.equityVolatility) * 100)
+          .toFixed(2)
+          .replace(/\.?0+$/, '');
+
+        const tickerRes = await dialog.prompt('Stock Ticker', {
+          title: 'Investments',
+          defaultValue: '',
+        });
+        if (tickerRes == null) {
+          step = 16;
+          continue;
+        }
+        const ticker = String(tickerRes || '')
+          .trim()
+          .toUpperCase();
+        if (!ticker) {
+          await dialog.show('Enter a ticker symbol.', { title: 'Investments' });
+          continue;
+        }
+
+        let price = 0;
+        let growthPct = parseFloat(defGrowth) || 0;
+        let volPct = parseFloat(defVol) || 0;
+        let onlineNote = '';
+
+        if (s._online) {
+          const look = await lookupOnline(ticker);
+          if (look.ok && look.price > 0) {
+            price = look.price;
+            if (look.growth != null) growthPct = +(look.growth * 100).toFixed(2);
+            if (look.volatility != null) volPct = +(look.volatility * 100).toFixed(2);
+            onlineNote = `Online (${look.source})`;
+          } else {
+            await dialog.show(
+              look.error || 'Lookup failed. Enter price manually — growth/vol use difficulty averages.',
+              { title: 'Investments' }
+            );
+            s._online = false;
+          }
+        }
+
+        if (!s._online || !(price > 0)) {
+          const priceRes = await dialog.prompt('Current stock price', {
+            title: 'Investments',
+            defaultValue: price > 0 ? String(price) : '',
+            type: 'money',
+            prefix: '$',
+            subtitle: onlineNote || 'Enter per-share price',
+          });
+          if (priceRes == null) {
+            step = 16;
+            continue;
+          }
+          price = Math.max(0, priceRes);
+        } else {
+          await dialog.show(
+            `${ticker} @ ${formatMoneyDisplay(price)}${onlineNote ? '\n' + onlineNote : ''}`,
+            { title: 'Investments' }
+          );
+        }
+
+        if (!(price > 0)) {
+          await dialog.show('Price must be greater than zero.', { title: 'Investments' });
+          step = 16;
+          continue;
+        }
+
+        // Linked $ amount and # shares
+        let dollars = 0;
+        let shares = 0;
+        const link = await dialog.form(
+          'Shares owned (fill $ or # — the other calculates)',
+          [
+            {
+              key: 'dollars',
+              label: '$ amount',
+              type: 'money',
+              prefix: '$',
+              defaultValue: '0',
+            },
+            {
+              key: 'shares',
+              label: '# of shares',
+              type: 'number',
+              defaultValue: '0',
+            },
+          ],
+          { title: 'Investments' }
+        );
+        if (link == null) {
+          step = 16;
+          continue;
+        }
+        dollars = Math.max(0, link.dollars || 0);
+        shares = Math.max(0, link.shares || 0);
+        if (dollars > 0 && !(shares > 0)) shares = dollars / price;
+        else if (shares > 0 && !(dollars > 0)) dollars = shares * price;
+        else if (dollars > 0 && shares > 0) {
+          // Prefer dollars as source of truth for value
+          shares = dollars / price;
+        }
+
+        const purchase = await dialog.prompt('Purchase price', {
+          title: 'Investments',
+          subtitle: 'Used to determine taxable gain on sale. Leave blank to assume 0% gain.',
+          defaultValue: '',
+          type: 'money',
+          prefix: '$',
+        });
+        if (purchase == null) {
+          step = 16;
+          continue;
+        }
+        const purchasePrice = purchase === '' || purchase == null ? price : Math.max(0, purchase);
+        // blank → 0% gain means cost basis = current value
+        const costBasis = Math.round(shares * (purchase === '' || purchase == null ? price : purchasePrice));
+
+        const gv = await dialog.form(
+          'Expected return model',
+          [
+            {
+              key: 'growth',
+              label: 'Growth % per year',
+              type: 'percent',
+              defaultValue: String(growthPct),
+            },
+            {
+              key: 'vol',
+              label: 'Volatility %',
+              type: 'percent',
+              defaultValue: String(volPct),
+              subtitle: 'The amount the gains fluctuate year after year.',
+            },
+          ],
+          { title: 'Investments' }
+        );
+        if (gv == null) {
+          step = 16;
+          continue;
+        }
+
+        const holding = {
+          ticker,
+          price,
+          shares,
+          value: Math.round(dollars || shares * price),
+          purchasePrice: purchase === '' || purchase == null ? null : purchasePrice,
+          costBasis,
+          growth: (gv.growth || 0) / 100,
+          volatility: (gv.vol || 0) / 100,
+          online: !!s._online,
+        };
+        s._pendingHolding = holding;
+        step = 18;
+      }
+
+      // ── 18 Confirm add stock ────────────────────────────────
+      else if (step === 18) {
+        if (s._pendingHolding) {
+          s.stocksHoldings = s.stocksHoldings || [];
+          s.stocksHoldings.push(s._pendingHolding);
+          delete s._pendingHolding;
+          s._stockIdx = s.stocksHoldings.length;
+          syncStocksTotal(s);
+        }
+        step = 19;
+      }
+
+      // ── 19 Add another? ─────────────────────────────────────
+      else if (step === 19) {
+        result = await dialog.menu(
+          'Add Additional Stock?',
+          withBack([
+            { label: 'Add Additional Stock', value: 'add' },
+            { label: 'Done', value: 'done' },
+          ]),
+          { title: 'Investments' }
+        );
+        if (result === BACK) {
+          if (s.stocksHoldings?.length) {
+            s.stocksHoldings.pop();
+            syncStocksTotal(s);
+            s._stockIdx = s.stocksHoldings.length;
+          }
+          step = 16;
+          continue;
+        }
+        if (result === 'add') {
+          step = 16;
+        } else {
+          syncStocksTotal(s);
+          step = 20;
+        }
+      }
+
+      // ── 20 Homes: Own or Rent ───────────────────────────────
+      else if (step === 20) {
+        result = await dialog.menu(
+          'Own or Rent?',
+          withBack([
+            { label: 'Own', value: 'own' },
+            { label: 'Rent', value: 'rent' },
+          ]),
+          { title: 'Homes' }
+        );
+        if (result === BACK) {
+          if (s.stocksMode === 'specific') step = 19;
+          else step = 15;
+          continue;
+        }
+        s.housing = result;
+        if (result === 'rent') {
+          s.homes = [];
+          step = 21;
+        } else {
+          s.monthlyRent = 0;
+          s._homeCount = 0;
+          s._homeIdx = 0;
+          s.homes = [];
+          step = 22;
+        }
+      }
+
+      // ── 21 Monthly rent ─────────────────────────────────────
+      else if (step === 21) {
+        result = await dialog.prompt('Monthly rent', {
+          title: 'Homes',
+          defaultValue: String(s.monthlyRent || 1500),
+          type: 'money',
+          prefix: '$',
+        });
+        if (result == null) {
+          step = 20;
+          continue;
+        }
+        s.monthlyRent = Math.max(0, result);
+        step = 26;
+      }
+
+      // ── 22 How many homes ───────────────────────────────────
+      else if (step === 22) {
+        result = await dialog.menu(
+          'How many homes (1–5)?',
+          withBack([
             { label: '1', value: 1 },
             { label: '2', value: 2 },
             { label: '3', value: 3 },
@@ -276,15 +729,17 @@ export class SetupScene {
           { title: 'Homes' }
         );
         if (result === BACK) {
-          step--;
+          step = 20;
           continue;
         }
-        s._homeCount = result || 0;
+        s._homeCount = result || 1;
         s.homes = [];
         s._homeIdx = 0;
-        step = s._homeCount > 0 ? 14 : 18;
-      } else if (step === 14) {
-        // Home type
+        step = 23;
+      }
+
+      // ── 23 Home type ────────────────────────────────────────
+      else if (step === 23) {
         const i = s._homeIdx;
         result = await dialog.menu(
           `Home ${i + 1} type?`,
@@ -296,98 +751,125 @@ export class SetupScene {
           { title: 'Homes' }
         );
         if (result === BACK) {
-          if (i === 0) {
-            step = 13;
-          } else {
+          if (i === 0) step = 22;
+          else {
             s._homeIdx--;
             s.homes.pop();
-            step = 14;
+            step = 23;
           }
           continue;
         }
         s._homeType = result;
-        step = 15;
-      } else if (step === 15) {
+        step = 24;
+      }
+
+      // ── 24 All home follow-ups on one page ──────────────────
+      else if (step === 24) {
         const i = s._homeIdx;
-        result = await dialog.prompt(`Home ${i + 1} market value ($)?`, {
-          title: 'Homes',
-          defaultValue: '350000',
-          type: 'money',
-        });
+        const propRate = defaultPropertyTaxRate(s.zip);
+        const d = getDifficulty(s.difficulty);
+        const mortDefault = ((s.rateOverrides?.mortgageRate ?? d.mortgageRate) * 100)
+          .toFixed(2)
+          .replace(/\.?0+$/, '');
+        const fields = [
+          {
+            key: 'value',
+            label: 'Market value',
+            type: 'money',
+            prefix: '$',
+            defaultValue: '350000',
+          },
+          {
+            key: 'owed',
+            label: 'Mortgage owed',
+            type: 'money',
+            prefix: '$',
+            defaultValue: '280000',
+          },
+          {
+            key: 'rate',
+            label: 'Mortgage rate',
+            type: 'percent',
+            defaultValue: mortDefault || '6.5',
+          },
+          {
+            key: 'term',
+            label: 'Remaining term (years)',
+            type: 'number',
+            defaultValue: '28',
+          },
+          {
+            key: 'propTax',
+            label: 'Annual Property Tax',
+            type: 'money',
+            prefix: '$',
+            defaultValue: String(Math.round(350000 * propRate)),
+            subtitle: s.zip
+              ? `Default from ZIP ${s.zip}`
+              : 'Default from national average',
+          },
+        ];
+        if (s._homeType === 'investment') {
+          fields.push({
+            key: 'revenue',
+            label: 'Monthly revenue',
+            type: 'money',
+            prefix: '$',
+            defaultValue: '0',
+          });
+        }
+        result = await dialog.form(`Home ${i + 1} details`, fields, { title: 'Homes' });
         if (result == null) {
-          step = 14;
+          step = 23;
           continue;
         }
-        s._homeValue = Math.max(0, result);
-        step = 16;
-      } else if (step === 16) {
-        const i = s._homeIdx;
-        result = await dialog.prompt(`Home ${i + 1} mortgage owed ($)?`, {
-          title: 'Homes',
-          defaultValue: '280000',
-          type: 'money',
-        });
-        if (result == null) {
-          step = 15;
-          continue;
-        }
-        s._homeOwed = Math.max(0, result);
-        step = 17;
-      } else if (step === 17) {
-        const i = s._homeIdx;
-        result = await dialog.prompt(`Home ${i + 1} mortgage rate (%)?`, {
-          title: 'Homes',
-          defaultValue: '6.5',
-          type: 'percent',
-        });
-        if (result == null) {
-          step = 16;
-          continue;
-        }
-        s._homeRate = Math.max(0, result / 100);
-        const term = await dialog.prompt(`Home ${i + 1} remaining term (years)?`, {
-          title: 'Homes',
-          defaultValue: '28',
-          type: 'number',
-        });
-        if (term == null) {
-          step = 17;
-          continue;
-        }
+        const value = Math.max(0, result.value || 0);
+        const propTax = Math.max(0, result.propTax || 0);
+        const rate = Math.max(0, (result.rate || 0) / 100);
         s.homes.push({
           type: s._homeType,
           label: HOME_TYPES[s._homeType]?.label || 'Home',
-          value: s._homeValue,
-          mortgageOwed: s._homeOwed,
-          rate: s._homeRate,
-          remainingTerm: Math.max(0, Math.round(term || 30)),
-          propertyTaxRate: HOME_TYPES[s._homeType]?.taxRate ?? 0.012,
+          value,
+          mortgageOwed: Math.max(0, result.owed || 0),
+          rate,
+          remainingTerm: Math.max(0, Math.round(result.term || 30)),
+          propertyTaxRate: value > 0 ? propTax / value : propRate,
+          annualPropertyTax: propTax,
+          monthlyRevenue: Math.max(0, result.revenue || 0),
         });
         s._homeIdx++;
-        if (s._homeIdx < s._homeCount) step = 14;
-        else step = 18;
-      } else if (step === 18) {
+        if (s._homeIdx < s._homeCount) step = 23;
+        else step = 26;
+      }
+
+      // ── 26 Marital status ───────────────────────────────────
+      else if (step === 26) {
         result = await dialog.menu(
-          'Married? (household = one entity for now)',
+          'Marital Status',
           withBack([
-            { label: 'Yes', value: true },
-            { label: 'No', value: false },
+            { label: 'Single', value: 'single' },
+            { label: 'Married Filing Jointly', value: 'married' },
           ]),
           { title: 'Family' }
         );
         if (result === BACK) {
-          if (s._homeCount > 0) {
+          if (s.housing === 'rent') step = 21;
+          else if (s._homeCount > 0) {
             s._homeIdx = s._homeCount - 1;
             s.homes.pop();
-            step = 14;
-          } else step = 13;
+            step = 23;
+          } else step = 20;
           continue;
         }
-        s.married = !!result;
-        step++;
-      } else if (step === 19) {
+        s.filingStatus = result;
+        s.married = result === 'married';
+        step = 27;
+      }
+
+      // ── 27 Kids count ───────────────────────────────────────
+      else if (step === 27) {
         result = await dialog.menu(
-          'How many kids (0–4)?',
+          'How many children (0–4)?',
           withBack([
             { label: '0', value: 0 },
             { label: '1', value: 1 },
@@ -398,39 +880,46 @@ export class SetupScene {
           { title: 'Family' }
         );
         if (result === BACK) {
-          step--;
+          step = 26;
           continue;
         }
         s._kidCount = result || 0;
         s.kids = [];
         s._kidIdx = 0;
-        step = s._kidCount > 0 ? 20 : 22;
-      } else if (step === 20) {
+        step = s._kidCount > 0 ? 28 : 30;
+      }
+
+      // ── 28 Child name ───────────────────────────────────────
+      else if (step === 28) {
         const i = s._kidIdx;
-        result = await dialog.prompt(`Name of child ${i + 1}?`, {
+        const defName = randomChildName();
+        result = await dialog.prompt(`Name of ${childOrdinal(i)}`, {
           title: 'Family',
-          defaultValue: `Child ${i + 1}`,
+          defaultValue: defName,
         });
         if (result == null) {
-          if (i === 0) step = 19;
+          if (i === 0) step = 27;
           else {
             s._kidIdx--;
             s.kids.pop();
-            step = 20;
+            step = 28;
           }
           continue;
         }
-        s._kidName = result || `Child ${i + 1}`;
-        step = 21;
-      } else if (step === 21) {
+        s._kidName = result || defName;
+        step = 29;
+      }
+
+      // ── 29 Child age ────────────────────────────────────────
+      else if (step === 29) {
         const i = s._kidIdx;
-        result = await dialog.prompt(`Age of ${s._kidName}?`, {
+        result = await dialog.prompt(`Age of ${childOrdinal(i)}`, {
           title: 'Family',
           defaultValue: String(5 + i * 3),
           type: 'number',
         });
         if (result == null) {
-          step = 20;
+          step = 28;
           continue;
         }
         s.kids.push({
@@ -438,75 +927,198 @@ export class SetupScene {
           age: Math.max(0, Math.round(result || 0)),
         });
         s._kidIdx++;
-        if (s._kidIdx < s._kidCount) step = 20;
-        else step = 22;
-      } else if (step === 22) {
-        result = await dialog.prompt('Annual household spending ($)?', {
-          title: 'Spending',
-          defaultValue: String(s.annualSpending),
-          type: 'money',
-        });
+        if (s._kidIdx < s._kidCount) step = 28;
+        else step = 30;
+      }
+
+      // ── 30 Expenses (prefilled, overridable) ────────────────
+      else if (step === 30) {
+        const d = getDifficulty(s.difficulty);
+        // Prefill housing
+        let housingAnnual = 0;
+        if (s.housing === 'rent') {
+          housingAnnual = Math.round((s.monthlyRent || 0) * 12);
+        } else {
+          for (const h of s.homes || []) {
+            housingAnnual += Math.round(annualMortgagePayment(h));
+          }
+        }
+        let propTaxAnnual = 0;
+        for (const h of s.homes || []) {
+          if (h.annualPropertyTax != null) propTaxAnnual += h.annualPropertyTax;
+          else propTaxAnnual += Math.round((h.value || 0) * (h.propertyTaxRate || 0.01));
+        }
+        // Temp portfolio for tax estimate
+        const temp = {
+          ...s,
+          employed: s.salary > 0,
+          retired: false,
+          socialSecurity: 0,
+          _extraOrdinaryIncome: 0,
+        };
+        const tax = estimateAnnualTax(temp, d);
+        const incomeTax = tax.federal + tax.state;
+        // Previous spending default as household total baseline
+        const householdTotal = s.annualSpending || 35000;
+        const otherDefault = Math.max(
+          0,
+          householdTotal - housingAnnual - propTaxAnnual - incomeTax
+        );
+
+        result = await dialog.form(
+          'Annual expenses (override any field)',
+          [
+            {
+              key: 'housing',
+              label:
+                s.housing === 'rent' ? 'Annual Rent' : 'Annual Mortgage',
+              type: 'money',
+              prefix: '$',
+              defaultValue: String(housingAnnual),
+            },
+            {
+              key: 'propTax',
+              label: 'Annual Property Tax',
+              type: 'money',
+              prefix: '$',
+              defaultValue: String(propTaxAnnual),
+            },
+            {
+              key: 'incomeTax',
+              label: 'Annual Federal And State Taxes',
+              type: 'money',
+              prefix: '$',
+              defaultValue: String(incomeTax),
+            },
+            {
+              key: 'other',
+              label: 'Other Expense',
+              type: 'money',
+              prefix: '$',
+              defaultValue: String(otherDefault),
+            },
+          ],
+          { title: 'Expenses' }
+        );
         if (result == null) {
           if (s._kidCount > 0) {
             s._kidIdx = s._kidCount - 1;
             s.kids.pop();
-            step = 20;
-          } else step = 19;
+            step = 28;
+          } else step = 27;
           continue;
         }
-        s.annualSpending = Math.max(0, result);
-        s.spendingBreakdown = { other: s.annualSpending };
-        step++;
-      } else if (step === 23) {
-        result = await dialog.prompt('Primary ZIP (for tax estimate)?', {
-          title: 'Taxes',
-          defaultValue: s.zip,
-        });
-        if (result == null) {
-          step--;
-          continue;
+        const housing = Math.max(0, result.housing || 0);
+        const propT = Math.max(0, result.propTax || 0);
+        const incT = Math.max(0, result.incomeTax || 0);
+        const other = Math.max(0, result.other || 0);
+        s.spendingBreakdown = {
+          mortgage: s.housing === 'own' ? housing : 0,
+          rent: s.housing === 'rent' ? housing : 0,
+          propertyTax: propT,
+          incomeTax: incT,
+          other,
+        };
+        s.annualSpending = housing + propT + incT + other;
+        // If user overrode property tax total and has one home, sync it
+        if ((s.homes || []).length === 1) {
+          s.homes[0].annualPropertyTax = propT;
         }
-        s.zip = String(result).replace(/\D/g, '').slice(0, 5) || '85001';
-        step++;
-      } else if (step === 24) {
-        const diffs = listDifficulties();
-        const stdIdx = Math.max(
-          0,
-          diffs.findIndex((d) => d.id === 'standard')
-        );
-        result = await dialog.menu(
-          'Difficulty?',
-          withBack(
-            diffs.map((d) => ({
-              label: d.label,
-              value: d.id,
-              subtext: d.subtext || '',
-            }))
-          ),
-          { title: 'Challenge', selected: stdIdx }
-        );
-        if (result === BACK) {
-          step--;
-          continue;
-        }
-        s.difficulty = result || 'standard';
-        step++;
-      } else if (step === 25) {
+        step = 31;
+      }
+
+      // ── 31 Portfolio overview ───────────────────────────────
+      else if (step === 31) {
         this.scrubTemps(s);
+        const overview = buildOverview(s);
+        result = await dialog.menu(overview, [
+          { label: 'Enter The World', value: 'go' },
+          { label: '← Back', value: BACK },
+        ], { title: 'Portfolio' });
+        if (result === BACK) {
+          step = 30;
+          continue;
+        }
         if (mode === 'profile') {
           return s;
         }
-        const saveAsProfile = await dialog.confirm(
-          'Save this as a profile for later?',
-          { title: 'Custom Setup' }
-        );
+        const saveAsProfile = await dialog.confirm('Save this as a profile for later?', {
+          title: 'Custom Setup',
+        });
         if (saveAsProfile) saveProfile(s);
-        await dialog.show(
-          `Welcome, ${s.playerName}. Year ${s.year}, age ${s.age}. Your Decision Room awaits.`,
-          { title: 'Begin' }
-        );
         return createGameFromSetup(s);
       }
     }
   }
+}
+
+function buildOverview(s) {
+  const d = getDifficulty(s.difficulty);
+  const lines = [];
+  lines.push(`${s.playerName} · Age ${s.age} · Year ${s.year}`);
+  lines.push(`Difficulty: ${d.label}`);
+  lines.push(
+    s.zip
+      ? `ZIP ${s.zip} → ${stateFromZip(s.zip).abbr}`
+      : 'ZIP blank → national tax averages'
+  );
+  lines.push('');
+  lines.push('Finances:');
+  lines.push(`  Cash (checking): ${formatMoneyDisplay(s.cash)}`);
+  lines.push(
+    `  Savings: ${formatMoneyDisplay(s.savings)} @ ${((s.savingsRate || 0) * 100).toFixed(2)}%`
+  );
+  lines.push(`  Salary: ${formatMoneyDisplay(s.salary)}`);
+  lines.push('');
+  lines.push('Retirement:');
+  lines.push(`  Retirement age: ${s.retirementAge || 65}`);
+  if (s.has401k) {
+    lines.push(
+      `  401(k): ${formatMoneyDisplay(s.k401Balance)} · contrib ${((s.k401ContribRate || 0) * 100).toFixed(1)}% · match ${((s.k401MatchRate || 0) * 100).toFixed(0)}% of first ${((s.k401MatchOnFirst || 0) * 100).toFixed(1)}%`
+    );
+  } else lines.push('  401(k): none');
+  if (s.hasRoth) {
+    lines.push(
+      `  Roth IRA: ${formatMoneyDisplay(s.rothBalance)} · contrib ${formatMoneyDisplay(s.rothAnnualContribution)}/yr`
+    );
+  } else lines.push('  Roth IRA: none');
+  lines.push('');
+  lines.push('Investments:');
+  if (s.stocksMode === 'specific' && (s.stocksHoldings || []).length) {
+    for (const h of s.stocksHoldings) {
+      lines.push(
+        `  ${h.ticker}: ${formatMoneyDisplay(h.value)} (${(h.shares || 0).toFixed(2)} sh @ ${formatMoneyDisplay(h.price)}) g ${((h.growth || 0) * 100).toFixed(1)}% vol ${((h.volatility || 0) * 100).toFixed(1)}%`
+      );
+    }
+  } else {
+    lines.push(`  Stock portfolio total: ${formatMoneyDisplay(s.stocksTotal)}`);
+  }
+  lines.push('');
+  lines.push('Homes:');
+  if (s.housing === 'rent') {
+    lines.push(`  Renting @ ${formatMoneyDisplay(s.monthlyRent)}/mo`);
+  } else if (!(s.homes || []).length) {
+    lines.push('  None');
+  } else {
+    for (const h of s.homes) {
+      lines.push(
+        `  ${h.label}: ${formatMoneyDisplay(h.value)} · mortgage ${formatMoneyDisplay(h.mortgageOwed)} @ ${((h.rate || 0) * 100).toFixed(2)}%`
+      );
+      if (h.monthlyRevenue) lines.push(`    Revenue ${formatMoneyDisplay(h.monthlyRevenue)}/mo`);
+    }
+  }
+  lines.push('');
+  lines.push('Family:');
+  lines.push(`  ${s.filingStatus === 'married' ? 'Married Filing Jointly' : 'Single'}`);
+  if ((s.kids || []).length) {
+    for (const k of s.kids) lines.push(`  ${k.name}, age ${k.age}`);
+  } else lines.push('  Children: none');
+  lines.push('');
+  lines.push('Expenses (annual):');
+  const b = s.spendingBreakdown || {};
+  lines.push(
+    `  Housing ${formatMoneyDisplay((b.mortgage || 0) + (b.rent || 0))} · Prop tax ${formatMoneyDisplay(b.propertyTax)} · Income tax ${formatMoneyDisplay(b.incomeTax)} · Other ${formatMoneyDisplay(b.other)}`
+  );
+  lines.push(`  Total ${formatMoneyDisplay(s.annualSpending)}`);
+  return lines.join('\n');
 }

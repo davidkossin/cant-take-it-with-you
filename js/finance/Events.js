@@ -20,17 +20,17 @@ export function applyAutoEvents(state, difficulty, opts = {}) {
     state.peakSalary = Math.max(state.peakSalary || 0, state.salary || 0);
   }
 
-  // Retirement
-  if (state.age >= RETIREMENT_AGE && state.employed && !state.retired) {
+  // Retirement (player-chosen age; default RETIREMENT_AGE)
+  const retireAt = Number(state.retirementAge) > 0 ? Number(state.retirementAge) : RETIREMENT_AGE;
+  if (state.age >= retireAt && state.employed && !state.retired) {
     state.retired = true;
     state.employed = false;
     state.salary = 0;
     log.push(`Retired`);
   }
 
-  // Simplified Social Security stub: after 65 if retired, ~35% of peak salary
-  // (illustrative — not a real SSA formula)
-  if (state.retired && state.age >= RETIREMENT_AGE) {
+  // Simplified Social Security stub: at/after retirement age if retired, ~35% of peak
+  if (state.retired && state.age >= retireAt) {
     const peak = state.peakSalary || 40000;
     state.socialSecurity = Math.round(peak * 0.35);
   } else {

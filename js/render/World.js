@@ -36,7 +36,7 @@ export function buildDecisionRoom(opts = {}) {
   const westHomeY = hasWestReturn ? 2 * TILE : 3 * TILE;
   const westStockY = hasWestReturn ? 10 * TILE : 8 * TILE;
 
-  // Teller windows on east / south / west (2 + 2 + 2). North = forward hallway door.
+  // Teller windows on east / south / west (2 + 3 + 2). North = forward hallway door.
   const interactables = [
     {
       id: 'door-hallway',
@@ -101,10 +101,10 @@ export function buildDecisionRoom(opts = {}) {
   }
 
   interactables.push(
-    // South wall (2)
+    // South wall (3) — kid, portfolio, purchase
     {
       id: 'teller-kid',
-      x: 4 * TILE,
+      x: 3 * TILE,
       y: (rows - 1) * TILE - 4,
       w: 32,
       h: 22,
@@ -115,8 +115,20 @@ export function buildDecisionRoom(opts = {}) {
       wallSide: 'south',
     },
     {
+      id: 'teller-portfolio',
+      x: 9 * TILE,
+      y: (rows - 1) * TILE - 4,
+      w: 32,
+      h: 22,
+      label: 'Portfolio',
+      kind: 'teller',
+      action: 'portfolio',
+      wall: true,
+      wallSide: 'south',
+    },
+    {
       id: 'teller-buy',
-      x: 13 * TILE,
+      x: 14 * TILE,
       y: (rows - 1) * TILE - 4,
       w: 32,
       h: 22,

@@ -8,6 +8,26 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ---
 
+## [0.6.0] — 2026-10-04
+
+### Added
+- Researched USA market assumptions (2016–2025) drive Difficulty defaults: S&P 500 total-return growth/volatility, CPI inflation, national savings APY, 30-year mortgage rate. Optimistic / Standard / Grim packs with documented deltas (`js/finance/marketAssumptions.js`).
+- Online stock quote lookup (Yahoo chart → stockprices.dev → Stooq) with ~0.5s Loading indicator, ~10s timeout, and clean fallback; per-ticker growth/volatility from up to 10y history when available.
+- Character creation reorder: Name → Year → Age → Difficulty → ZIP → Finances (Cash checking, Savings+rate, Salary) → Retirement (age, 401(k), Roth) → Investments (total or specific stocks with volatility) → Homes (own/rent) → Family (marital status, children) → Expenses (prefilled) → Portfolio overview (“Enter The World”).
+- Roth IRA balances/contributions with after-tax contribution and untaxed qualified withdrawals; traditional 401(k) tax treatment unchanged in spirit.
+- Per-stock holdings with growth % and volatility %; yearly equity path uses growth ± volatility via existing seeded RNG.
+- Blank ZIP uses national tax/property averages; ZIP sets state income + property tax defaults.
+- New Decision Room **Portfolio** teller to edit portfolio parameters; pause menu **Quit** returns to main menu.
+- Mouse/pointer can select dialog Accept / Back / menu options.
+
+### Changed
+- Player-facing liquid cash labeled **Cash (checking)** (internal keys may stay `bank` / `cash`).
+- Difficulty options renamed Optimistic / Standard / Grim (legacy `easy`/`difficult` still resolve).
+- Cache-bust / `GAME_VERSION` bumped to **0.6.0**
+
+### Notes
+- Do not invent stock prices; failed lookups fall back to manual entry + difficulty market averages.
+
 ## [Unreleased]
 
 ## [0.5.19] — 2026-10-04

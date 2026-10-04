@@ -15,25 +15,37 @@ export function createDefaultSetup() {
     cash: 5000,
     salary: 65000,
     savings: 20000,
-    savingsRate: 0.02, // decimal; UI enters percent
+    savingsRate: 0.002, // decimal; difficulty Standard default (researched)
     homes: [],
+    housing: 'own', // 'own' | 'rent'
+    monthlyRent: 0,
     stocksTotal: 10000,
     stocksCostBasis: 10000,
+    stocksHoldings: [], // per-ticker advanced holdings
+    stocksMode: 'total', // 'total' | 'specific'
+    has401k: false,
     k401Balance: 0,
-    k401ContribRate: 0.06, // decimal; UI enters percent of salary
-    k401MatchRate: 1.0, // employer matches this fraction of deferrals (1.0 = 100%)
-    k401MatchOnFirst: 0.03, // match applies on first X of salary (0.03 = 3%)
+    k401ContribRate: 0.06,
+    k401MatchRate: 0,
+    k401MatchOnFirst: 0,
+    hasRoth: false,
+    rothBalance: 0,
+    rothAnnualContribution: 0,
+    retirementAge: 65,
     married: false,
+    filingStatus: 'single', // 'single' | 'married'
     kids: [],
     annualSpending: 35000,
     spendingBreakdown: {
       incomeTax: 0,
       mortgage: 0,
+      rent: 0,
       propertyTax: 0,
       other: 35000,
     },
-    zip: '85001',
+    zip: '', // blank → national tax averages
     difficulty: 'standard',
+    rateOverrides: {}, // optional numeric overrides of difficulty defaults
     employed: true,
     retired: false,
     otherDebt: 0,
@@ -51,12 +63,10 @@ export function createDefaultSetup() {
  * 401(k) $62,000 (6% contribution, 100% match on the first 3% of salary).
  * ZIP 85001, Standard difficulty.
  *
- * Glass-wall validation (Standard difficulty, deterministic projectYears,
- * no Decision Room changes — same path as HallwayScene):
- *   snapshots = [baseline, ...projectYears(baseline, years, 'standard', {deterministic:true})]
- *   findBankInsolvencyIndex(snapshots) === 15
- *   starting Cash $5,500, starting net worth $234,000.
- * Do not retune these inputs to chase a different glass index.
+ * Starting Cash $5,500, starting net worth $234,000 (unchanged dollar inputs).
+ * Note (v0.6.0): Standard equity growth default is the researched 2016–2025
+ * S&P 500 total-return mean (~15.9%), so the deterministic glass-wall index
+ * is no longer 15. Do not retune these dollar inputs to chase a glass index.
  */
 export function createStandardPortfolioSetup() {
   const home = {
@@ -79,24 +89,36 @@ export function createStandardPortfolioSetup() {
     salary: 78000,
     savings: 15000,
     savingsRate: 0.02,
+    housing: 'own',
+    monthlyRent: 0,
     homes: [home],
     stocksTotal: 41500,
     stocksCostBasis: 35275,
+    stocksHoldings: [],
+    stocksMode: 'total',
+    has401k: true,
     k401Balance: 62000,
     k401ContribRate: 0.06,
     k401MatchRate: 1.0,
     k401MatchOnFirst: 0.03,
+    hasRoth: false,
+    rothBalance: 0,
+    rothAnnualContribution: 0,
+    retirementAge: 65,
     married: true,
+    filingStatus: 'married',
     kids: [],
     annualSpending: spend,
     spendingBreakdown: {
       incomeTax: 0,
       mortgage: 0,
+      rent: 0,
       propertyTax: 0,
       other: spend,
     },
     zip: '85001',
     difficulty: 'standard',
+    rateOverrides: {},
     employed: true,
     retired: false,
     otherDebt: 0,
@@ -110,6 +132,7 @@ export function createStandardPortfolioSetup() {
  */
 export function createGameFromSetup(setup) {
   const stocks = Number(setup.stocksTotal) || 0;
+  const married = !!(setup.married || setup.filingStatus === 'married');
   const portfolio = {
     playerName: setup.playerName || 'Traveler',
     year: setup.year || CURRENT_YEAR,
@@ -120,7 +143,9 @@ export function createGameFromSetup(setup) {
     salary: Number(setup.salary) || 0,
     peakSalary: Number(setup.salary) || 0,
     savings: Number(setup.savings) || 0,
-    savingsRate: Number(setup.savingsRate) || 0.02,
+    savingsRate: Number(setup.savingsRate) >= 0 ? Number(setup.savingsRate) : 0.002,
+    housing: setup.housing === 'rent' ? 'rent' : 'own',
+    monthlyRent: Math.max(0, Number(setup.monthlyRent) || 0),
     homes: (setup.homes || []).map((h, i) => ({
       type: h.type || 'primary',
       label: h.label || `Home ${i + 1}`,
@@ -129,22 +154,36 @@ export function createGameFromSetup(setup) {
       rate: Number(h.rate) || 0.065,
       remainingTerm: Number(h.remainingTerm) || 30,
       propertyTaxRate: Number(h.propertyTaxRate) || 0.012,
+      annualPropertyTax:
+        h.annualPropertyTax != null ? Number(h.annualPropertyTax) : undefined,
+      monthlyRevenue: Number(h.monthlyRevenue) || 0,
     })),
     stocksTotal: stocks,
     stocksCostBasis: Number(setup.stocksCostBasis) >= 0 ? Number(setup.stocksCostBasis) : stocks,
+    stocksHoldings: Array.isArray(setup.stocksHoldings)
+      ? setup.stocksHoldings.map((h) => ({ ...h }))
+      : [],
+    stocksMode: setup.stocksMode === 'specific' ? 'specific' : 'total',
+    has401k: !!setup.has401k || (Number(setup.k401Balance) || 0) > 0,
     k401Balance: Math.max(0, Number(setup.k401Balance) || 0),
     k401ContribRate: Math.max(0, Math.min(1, Number(setup.k401ContribRate) || 0)),
     k401MatchRate: Math.max(0, Math.min(1, Number(setup.k401MatchRate) || 0)),
     k401MatchOnFirst: Math.max(0, Math.min(1, Number(setup.k401MatchOnFirst) || 0)),
-    married: !!setup.married,
+    hasRoth: !!setup.hasRoth || (Number(setup.rothBalance) || 0) > 0,
+    rothBalance: Math.max(0, Number(setup.rothBalance) || 0),
+    rothAnnualContribution: Math.max(0, Number(setup.rothAnnualContribution) || 0),
+    retirementAge: Math.max(40, Math.min(100, Number(setup.retirementAge) || 65)),
+    married,
+    filingStatus: married ? 'married' : 'single',
     kids: (setup.kids || []).map((k, i) => ({
       name: k.name || `Child ${i + 1}`,
       age: Number(k.age) || 0,
     })),
     annualSpending: Number(setup.annualSpending) || 30000,
     spendingBreakdown: setup.spendingBreakdown || { other: Number(setup.annualSpending) || 30000 },
-    zip: String(setup.zip || '85001'),
+    zip: setup.zip == null || setup.zip === '' ? '' : String(setup.zip).replace(/\D/g, '').slice(0, 5),
     difficulty: setup.difficulty || 'standard',
+    rateOverrides: setup.rateOverrides && typeof setup.rateOverrides === 'object' ? { ...setup.rateOverrides } : {},
     employed: setup.employed !== false && (Number(setup.salary) || 0) > 0,
     retired: !!setup.retired,
     otherDebt: Number(setup.otherDebt) || 0,

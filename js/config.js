@@ -1,3 +1,5 @@
+import { MARKET_DIFFICULTIES } from './finance/marketAssumptions.js';
+
 /** Game-wide constants and LTTP-inspired palette. */
 
 export const TILE = 16;
@@ -19,7 +21,7 @@ export const CANVAS_W = FRAME_W;
 export const CANVAS_H = FRAME_H;
 
 /** Bump on each published build so players can confirm cache. */
-export const GAME_VERSION = '0.5.19';
+export const GAME_VERSION = '0.6.0';
 
 export const PALETTE = {
   bg: '#1a1420',
@@ -68,46 +70,16 @@ export const HAIR_COLORS = {
   red: PALETTE.hairRed,
 };
 
+/**
+ * Difficulty packs from researched 2016–2025 averages (see marketAssumptions.js).
+ * Legacy ids `easy` / `difficult` alias optimistic / grim.
+ */
 export const DIFFICULTIES = {
-  easy: {
-    id: 'easy',
-    label: 'Easy',
-    subtext: 'The world becomes a better place for all',
-    inflation: 0.02,
-    equityReturn: 0.09,
-    salaryGrowth: 0.04,
-    expensePressure: 0.9,
-    taxMult: 0.9,
-    collegeCost: 18000,
-    shockChance: 0.02,
-    shockMax: 5000,
-  },
-  standard: {
-    id: 'standard',
-    label: 'Standard',
-    subtext: 'The world stays relatively stable',
-    inflation: 0.025,
-    equityReturn: 0.07,
-    salaryGrowth: 0.03,
-    expensePressure: 1.0,
-    taxMult: 1.0,
-    collegeCost: 25000,
-    shockChance: 0.04,
-    shockMax: 8000,
-  },
-  difficult: {
-    id: 'difficult',
-    label: 'Difficult',
-    subtext: 'A grim outlook — life gets harder for everyone',
-    inflation: 0.035,
-    equityReturn: 0.045,
-    salaryGrowth: 0.02,
-    expensePressure: 1.2,
-    taxMult: 1.1,
-    collegeCost: 35000,
-    shockChance: 0.07,
-    shockMax: 12000,
-  },
+  optimistic: MARKET_DIFFICULTIES.optimistic,
+  standard: MARKET_DIFFICULTIES.standard,
+  grim: MARKET_DIFFICULTIES.grim,
+  easy: MARKET_DIFFICULTIES.optimistic,
+  difficult: MARKET_DIFFICULTIES.grim,
 };
 
 /** USDA-style annual child cost bands (2020s USD, pre-pressure / pre-inflation). */

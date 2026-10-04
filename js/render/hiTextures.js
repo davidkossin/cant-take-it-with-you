@@ -468,7 +468,22 @@ const TELLER_ICONS = {
   purchase: iconBag,
   job: iconPaycheck,
   borrow: iconVault,
+  portfolio: iconPortfolio,
 };
+
+function iconPortfolio(ctx, x, y, w, h) {
+  // Briefcase / ledger
+  ctx.fillStyle = '#6b4a2e';
+  ctx.fillRect(x + w * 0.12, y + h * 0.28, w * 0.76, h * 0.55);
+  ctx.fillStyle = '#e6c86a';
+  ctx.fillRect(x + w * 0.12, y + h * 0.28, w * 0.76, h * 0.1);
+  ctx.fillStyle = '#f4e7d0';
+  ctx.fillRect(x + w * 0.38, y + h * 0.18, w * 0.24, h * 0.14);
+  ctx.fillStyle = '#2c6eac';
+  ctx.fillRect(x + w * 0.22, y + h * 0.48, w * 0.2, h * 0.08);
+  ctx.fillRect(x + w * 0.48, y + h * 0.48, w * 0.3, h * 0.08);
+  ctx.fillRect(x + w * 0.22, y + h * 0.62, w * 0.56, h * 0.08);
+}
 
 function iconHome(ctx, x, y, w, h) {
   ctx.fillStyle = '#9a342c';

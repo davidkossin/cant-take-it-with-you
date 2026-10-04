@@ -1,5 +1,6 @@
 /**
- * Curated static federal income-tax brackets (single filer) by year.
+ * Curated static federal income-tax brackets by year.
+ * Single filer tables stored; Married Filing Jointly ≈ 2× bracket tops + 2× std deduction.
  * Used offline. Hook for live IRS / Tax Foundation fetch is in Tax.js.
  *
  * Amounts are approximate historical / projected figures for gameplay.
@@ -101,29 +102,41 @@ export const FALLBACK_YEAR = 2026;
  * Get federal table for a calendar year, inflating brackets if needed.
  * @param {number} year
  * @param {number} [inflation=0.025]
+ * @param {'single'|'married'|boolean} [filing='single']
+ *   true / 'married' → Married Filing Jointly (≈ double single tops + std deduction)
  */
-export function getFederalTable(year, inflation = 0.025) {
-  if (FEDERAL_BY_YEAR[year]) return FEDERAL_BY_YEAR[year];
-
+export function getFederalTable(year, inflation = 0.025, filing = 'single') {
   const years = Object.keys(FEDERAL_BY_YEAR).map(Number).sort((a, b) => a - b);
   let baseYear = FALLBACK_YEAR;
-  if (year < years[0]) baseYear = years[0];
+  if (FEDERAL_BY_YEAR[year]) baseYear = year;
+  else if (year < years[0]) baseYear = years[0];
   else if (year > years[years.length - 1]) baseYear = years[years.length - 1];
   else {
-    // pick nearest lower
     baseYear = years.filter((y) => y <= year).pop() || FALLBACK_YEAR;
   }
 
   const base = FEDERAL_BY_YEAR[baseYear];
   const yearsDiff = year - baseYear;
-  if (yearsDiff === 0) return base;
-
-  const factor = Math.pow(1 + inflation, yearsDiff);
-  return {
+  const factor = yearsDiff === 0 ? 1 : Math.pow(1 + inflation, yearsDiff);
+  let table = {
     stdDeduction: Math.round(base.stdDeduction * factor),
     brackets: base.brackets.map((b) => ({
       upTo: b.upTo == null ? null : Math.round(b.upTo * factor),
       rate: b.rate,
     })),
+    filing: 'single',
   };
+
+  const married = filing === true || filing === 'married' || filing === 'mfj';
+  if (married) {
+    table = {
+      stdDeduction: Math.round(table.stdDeduction * 2),
+      brackets: table.brackets.map((b) => ({
+        upTo: b.upTo == null ? null : Math.round(b.upTo * 2),
+        rate: b.rate,
+      })),
+      filing: 'married',
+    };
+  }
+  return table;
 }

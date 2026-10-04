@@ -8,6 +8,12 @@
  *     on gains alone using federal brackets + state rate)
  *   - State CGT ≈ state income tax rate × gains (from ZIP)
  *
+ * Retirement tax treatment (gameplay):
+ *   - Traditional 401(k): employee deferral reduces taxable wages; withdrawals
+ *     taxed as ordinary income (see estimateTaxOnExtraIncome / Engine).
+ *   - Roth IRA: contributions are after-tax (no wage deduction); qualified
+ *     withdrawals at/after retirementAge are untaxed.
+ *
  * FUTURE HOOK — live tax data:
  *   await fetchTaxTables(year) could pull IRS SOI / Tax Foundation JSON
  *   and merge into getFederalTable. Game must remain playable offline
@@ -15,7 +21,7 @@
  */
 
 import { getFederalTable } from '../data/tax-brackets.js';
-import { stateFromZip } from '../data/state-from-zip.js';
+import { stateFromZip, NATIONAL_AVERAGES } from '../data/state-from-zip.js';
 import { LTCG_FEDERAL_RATE, K401_EMPLOYEE_LIMIT } from '../config.js';
 
 /**
@@ -38,12 +44,18 @@ export function federalTaxOn(taxable, table) {
   return Math.round(tax);
 }
 
+function filingStatus(state) {
+  if (state?.filingStatus === 'married' || state?.married === true) return 'married';
+  return 'single';
+}
 
 /**
  * Traditional 401(k) employee elective deferral for the year (while employed).
  * Caps at K401_EMPLOYEE_LIMIT (TY 2025 spirit). Reduces taxable wages.
+ * Only when has401k is not explicitly false and contrib rate > 0.
  */
 export function employee401kDeferral(state) {
+  if (state?.has401k === false) return 0;
   if (!state?.employed || state.retired || !(state.salary > 0)) return 0;
   const rate = Math.max(0, Math.min(1, Number(state.k401ContribRate) || 0));
   if (rate <= 0) return 0;
@@ -55,6 +67,7 @@ export function employee401kDeferral(state) {
  * (classic “100% of first 3%”: matchRate=1, matchOnFirst=0.03).
  */
 export function employer401kMatch(state, deferral) {
+  if (state?.has401k === false) return 0;
   if (!state?.employed || state.retired || !(state.salary > 0)) return 0;
   const d = Math.max(0, deferral || 0);
   if (d <= 0) return 0;
@@ -66,6 +79,16 @@ export function employer401kMatch(state, deferral) {
 }
 
 /**
+ * Roth IRA annual contribution (after-tax — does NOT reduce taxable wages).
+ * Stored as rothAnnualContribution dollars.
+ */
+export function rothAnnualContribution(state) {
+  if (state?.hasRoth === false) return 0;
+  if (!state?.employed || state.retired) return 0;
+  return Math.max(0, Math.round(Number(state.rothAnnualContribution) || 0));
+}
+
+/**
  * Estimate annual taxes for a portfolio snapshot.
  * @param {object} state - game financial state
  * @param {object} difficulty
@@ -73,10 +96,13 @@ export function employer401kMatch(state, deferral) {
  */
 export function estimateAnnualTax(state, difficulty) {
   const year = state.year;
-  const table = getFederalTable(year, difficulty.inflation);
-  const zipInfo = stateFromZip(state.zip || '85001');
+  const filing = filingStatus(state);
+  const table = getFederalTable(year, difficulty.inflation, filing);
+  const zipRaw = state.zip;
+  const zipInfo = stateFromZip(zipRaw == null || zipRaw === '' ? '' : zipRaw);
   const deferral = employee401kDeferral(state);
   const extraOrdinary = Math.max(0, Number(state._extraOrdinaryIncome) || 0);
+  // Roth contributions are after-tax: not deducted from wages here.
   const grossWages = Math.max(
     0,
     (state.salary || 0) + (state.socialSecurity || 0) - deferral + extraOrdinary
@@ -89,8 +115,16 @@ export function estimateAnnualTax(state, difficulty) {
 
   let property = 0;
   for (const home of state.homes || []) {
-    const rate = home.propertyTaxRate ?? 0.012;
-    property += Math.round((home.value || 0) * rate);
+    const rate =
+      home.propertyTaxRate ??
+      zipInfo.propertyTaxApprox ??
+      NATIONAL_AVERAGES.propertyTaxApprox;
+    // Prefer explicit annualPropertyTax dollar override when set
+    if (home.annualPropertyTax != null && Number.isFinite(Number(home.annualPropertyTax))) {
+      property += Math.round(Number(home.annualPropertyTax));
+    } else {
+      property += Math.round((home.value || 0) * rate);
+    }
   }
 
   return {
@@ -104,33 +138,28 @@ export function estimateAnnualTax(state, difficulty) {
       taxable,
       k401Deferral: deferral,
       extraOrdinary,
-      source: 'static-offline',
+      filing,
+      source: zipInfo.national ? 'national-average' : 'static-offline',
     },
   };
 }
 
 /**
  * Capital gains tax on a stock sale.
- * @param {object} opts
- * @param {number} opts.gains - realized gains ($) entered by player (can be 0)
- * @param {number} opts.yearsHeld
- * @param {object} state
- * @param {object} difficulty
- * @returns {{ federal: number, state: number, total: number, longTerm: boolean, rateNote: string }}
  */
 export function estimateCapitalGainsTax({ gains, yearsHeld, state, difficulty }) {
   const g = Math.max(0, Number(gains) || 0);
-  const zipInfo = stateFromZip(state.zip || '85001');
+  const zipInfo = stateFromZip(state.zip == null || state.zip === '' ? '' : state.zip);
   const longTerm = (Number(yearsHeld) || 0) >= 1;
   let federal = 0;
   let rateNote = '';
+  const filing = filingStatus(state);
 
   if (longTerm) {
     federal = Math.round(g * LTCG_FEDERAL_RATE * (difficulty.taxMult || 1));
     rateNote = `Long-term federal ≈ ${(LTCG_FEDERAL_RATE * 100).toFixed(0)}%`;
   } else {
-    // Short-term: tax gains as ordinary income on top of salary (simplified)
-    const table = getFederalTable(state.year, difficulty.inflation);
+    const table = getFederalTable(state.year, difficulty.inflation, filing);
     const gross = Math.max(0, (state.salary || 0) + (state.socialSecurity || 0));
     const baseTaxable = Math.max(0, gross - table.stdDeduction);
     const withGains = Math.max(0, gross + g - table.stdDeduction);
@@ -152,7 +181,6 @@ export function estimateCapitalGainsTax({ gains, yearsHeld, state, difficulty })
   };
 }
 
-
 /**
  * Incremental federal + state tax if `extraIncome` is added as ordinary income
  * (e.g. traditional 401(k) withdrawal in retirement). Property tax unchanged.
@@ -172,9 +200,7 @@ export function estimateTaxOnExtraIncome(state, difficulty, extraIncome) {
 
 /**
  * Optional online enhancement stub.
- * Returns null when offline / blocked; Engine ignores and uses static.
  */
 export async function fetchLiveTaxHint(year) {
-  // Hook: replace with IRS / Tax Foundation endpoint when available.
   return null;
 }

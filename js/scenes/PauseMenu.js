@@ -196,21 +196,25 @@ export class PauseMenu {
 
     if (this.screen === 'menu') {
       if (KEYS.up.includes(e.key)) {
-        this.selected = (this.selected - 1 + 4) % 4;
+        this.selected = (this.selected - 1 + 5) % 5;
         e.preventDefault();
         return undefined;
       }
       if (KEYS.down.includes(e.key)) {
-        this.selected = (this.selected + 1) % 4;
+        this.selected = (this.selected + 1) % 5;
         e.preventDefault();
         return undefined;
       }
       if (KEYS.confirm.includes(e.key)) {
         e.preventDefault();
-        const choice = ['portfolio', 'map', 'charts', 'resume'][this.selected];
+        const choice = ['portfolio', 'map', 'charts', 'quit', 'resume'][this.selected];
         if (choice === 'resume') {
           this.hide();
           return 'close';
+        }
+        if (choice === 'quit') {
+          this.hide();
+          return 'quit';
         }
         this.screen = choice;
         this.selected = 0;
@@ -430,8 +434,8 @@ export class PauseMenu {
     ctx.fillStyle = PALETTE.uiText;
     ctx.fillText('Choose a view', x + 48, y + 100);
 
-    const options = ['Portfolio', 'Map', 'Charts', 'Resume'];
-    let oy = y + 180;
+    const options = ['Portfolio', 'Map', 'Charts', 'Quit', 'Resume'];
+    let oy = y + 160;
     options.forEach((label, i) => {
       const selected = i === this.selected;
       if (selected) {
@@ -443,7 +447,7 @@ export class PauseMenu {
       }
       ctx.font = '28px "Press Start 2P", monospace';
       ctx.fillText(`${selected ? '▶' : ' '} ${label}`, x + 56, oy);
-      oy += 72;
+      oy += 64;
     });
 
     ctx.font = '16px "Press Start 2P", monospace';
@@ -580,7 +584,7 @@ export class PauseMenu {
   portfolioSummaryRows(p, worth) {
     const kids = p.kids || [];
     const kidsLine = kids.length
-      ? `Kids ${kids.length} · Ages ${kids.map((k) => Number(k.age) || 0).join(', ')}`
+      ? `Kids ${kids.length} · ${kids.map((k) => `${(k.name || '?').slice(0, 8)} ${Number(k.age) || 0}`).join(', ')}`
       : 'Kids none';
     const loanTotal =
       (p.otherDebt || 0) + (p.otherLoans || []).reduce((sum, l) => sum + (l.principal || 0), 0);
@@ -588,16 +592,32 @@ export class PauseMenu {
     const salaryRows = p.retired
       ? [{ text: 'Retired' }, { text: `Spend ${money(p.annualSpending)}/yr` }]
       : [{ text: `Salary ${money(p.salary)}` }, { text: `Spend ${money(p.annualSpending)}` }];
+    const housing =
+      p.housing === 'rent'
+        ? `Rent ${money(p.monthlyRent)}/mo`
+        : `Own · ${(p.homes || []).length} home(s)`;
+    const filing = p.filingStatus === 'married' || p.married ? 'MFJ' : 'Single';
+    const zipLine = p.zip ? `ZIP ${p.zip}` : 'ZIP blank (national avg)';
+    const holdings = p.stocksHoldings || [];
+    const stockLines =
+      holdings.length > 0
+        ? holdings.slice(0, 3).map((h) => ({
+            text: `  ${h.ticker} ${money(h.value)}`,
+          }))
+        : [];
     return [
-      { text: `Year ${p.year}` },
-      { text: `Age ${p.age}` },
+      { text: `Year ${p.year} · Age ${p.age} · ${filing}` },
+      { text: zipLine },
       ...salaryRows,
-      { text: `Cash ${money(worth.cash)}` },
+      { text: `Cash (checking) ${money(worth.cash)}` },
       { text: `Savings ${money(worth.savings)}${savingsRate}` },
       { text: `Stocks ${money(worth.stocks)}` },
+      ...stockLines,
       { text: `Basis ${money(worth.stocksCostBasis)}` },
       { text: `401(k) ${money(worth.k401Balance)}` },
-      { text: `Homes ${(p.homes || []).length}` },
+      { text: `Roth IRA ${money(worth.rothBalance || p.rothBalance || 0)}` },
+      { text: `Retire @ ${p.retirementAge || 65}` },
+      { text: housing },
       { text: `Equity ${money(worth.homeEquity)}` },
       { text: `Loans ${money(loanTotal)}` },
       { text: kidsLine },
@@ -609,13 +629,35 @@ export class PauseMenu {
     const rows = [];
     const homes = p.homes || [];
     const loans = p.otherLoans || [];
-    if (homes.length) {
+    const holdings = p.stocksHoldings || [];
+    if (holdings.length) {
+      rows.push({ text: 'Holdings', heading: true });
+      holdings.forEach((h) => {
+        rows.push({ text: `${h.ticker} ${money(h.value)}` });
+        rows.push({
+          text: `g ${((h.growth || 0) * 100).toFixed(1)}% vol ${((h.volatility || 0) * 100).toFixed(1)}%`,
+        });
+      });
+    }
+    rows.push({ text: 'Retirement', heading: true });
+    rows.push({ text: `401(k) ${money(p.k401Balance)}` });
+    rows.push({ text: `Roth ${money(p.rothBalance || 0)}` });
+    if (p.housing === 'rent') {
+      rows.push({ text: 'Housing: Rent', heading: true });
+      rows.push({ text: `${money(p.monthlyRent)}/mo` });
+    } else if (homes.length) {
       rows.push({ text: 'Homes', heading: true });
       homes.forEach((home, i) => {
         const label = (home.label || home.type || `Home ${i + 1}`).slice(0, 18);
         rows.push({ text: `${label}` });
         rows.push({ text: `Value ${money(home.value)}` });
         rows.push({ text: `Mortgage ${money(home.mortgageOwed)}` });
+        if (home.annualPropertyTax != null) {
+          rows.push({ text: `Prop tax ${money(home.annualPropertyTax)}/yr` });
+        }
+        if (home.monthlyRevenue) {
+          rows.push({ text: `Revenue ${money(home.monthlyRevenue)}/mo` });
+        }
       });
     } else {
       rows.push({ text: 'Homes: none' });

@@ -4,13 +4,14 @@
  * No DOM / scene coupling.
  */
 
-import { getDifficulty } from './Difficulty.js';
+import { getDifficulty, effectiveDifficulty } from './Difficulty.js';
 import {
   estimateAnnualTax,
   estimateCapitalGainsTax,
   employee401kDeferral,
   employer401kMatch,
   estimateTaxOnExtraIncome,
+  rothAnnualContribution,
 } from './Tax.js';
 import { applyAutoEvents, liquidTotal } from './Events.js';
 import { resolveRng } from './rng.js';
@@ -55,9 +56,10 @@ export function annualChildCost(age, difficulty, inflator = 1) {
 export function computeWorth(state) {
   const cash = state.cash || 0;
   const savings = state.savings || 0;
-  const stocks = state.stocksTotal || 0;
+  const stocks = syncStocksTotal(state);
   const k401 = state.k401Balance || 0;
-  // 401(k) is illiquid for Decision Room spending (not Cash) but counts in Portfolio
+  const roth = state.rothBalance || 0;
+  // 401(k) / Roth are illiquid for Decision Room spending (not Cash) but count in Portfolio
   const liquid = cash + savings + stocks;
 
   let homeValue = 0;
@@ -73,13 +75,13 @@ export function computeWorth(state) {
   }
   const unsecured = (state.otherDebt || 0) + otherLoansOwed;
   const debts = mortgage + unsecured;
-  const netWorth = Math.round(liquid + k401 + homeEquity - unsecured);
+  const netWorth = Math.round(liquid + k401 + roth + homeEquity - unsecured);
 
   return {
-    bank: Math.round(cash),
+    bank: Math.round(cash), // internal key; HUD labels as Cash (checking)
     portfolio: netWorth,
     liquid: Math.round(liquid),
-    illiquid: Math.round(homeValue + k401),
+    illiquid: Math.round(homeValue + k401 + roth),
     homeEquity: Math.round(homeEquity),
     debts: Math.round(debts),
     netWorth,
@@ -87,8 +89,35 @@ export function computeWorth(state) {
     savings,
     stocks,
     k401Balance: Math.round(k401),
+    rothBalance: Math.round(roth),
     stocksCostBasis: Math.round(state.stocksCostBasis || 0),
   };
+}
+
+/** Keep stocksTotal in sync with per-ticker holdings when present. */
+export function syncStocksTotal(state) {
+  const holdings = state.stocksHoldings;
+  if (Array.isArray(holdings) && holdings.length > 0) {
+    let total = 0;
+    let basis = 0;
+    for (const h of holdings) {
+      const value =
+        h.value != null
+          ? Number(h.value) || 0
+          : (Number(h.shares) || 0) * (Number(h.price) || 0);
+      total += value;
+      if (h.costBasis != null) basis += Number(h.costBasis) || 0;
+      else if (h.purchasePrice != null && h.shares != null) {
+        basis += (Number(h.shares) || 0) * (Number(h.purchasePrice) || 0);
+      }
+    }
+    state.stocksTotal = Math.round(total);
+    if (basis > 0 || holdings.some((h) => h.costBasis != null || h.purchasePrice != null)) {
+      state.stocksCostBasis = Math.round(basis);
+    }
+    return state.stocksTotal;
+  }
+  return state.stocksTotal || 0;
 }
 
 /**
@@ -131,7 +160,14 @@ export function annualLoanPayment(loan) {
  * @returns {{ state: object, events: string[], tax: object, worth: object }}
  */
 export function projectOneYear(state, difficultyId, opts = {}) {
-  const difficulty = typeof difficultyId === 'string' ? getDifficulty(difficultyId) : difficultyId;
+  // Always fold portfolio rateOverrides onto the difficulty pack.
+  const base =
+    typeof difficultyId === 'object' && difficultyId && difficultyId.inflation != null
+      ? difficultyId
+      : getDifficulty(
+          typeof difficultyId === 'string' ? difficultyId : state?.difficulty || 'standard'
+        );
+  const difficulty = effectiveDifficulty(state, base);
   const next = cloneState(state);
   const events = [];
   const rng = resolveRng(opts);
@@ -163,21 +199,55 @@ export function projectOneYear(state, difficultyId, opts = {}) {
     if (interest > 0) events.push(`Savings interest: +$${fmt(interest)}`);
   }
 
-  // Equity returns — stocks + 401(k) (retirement accounts are invested)
-  // Deterministic (no noise) when projecting hallway HUD
+  // Equity returns — stocks + 401(k) + Roth (invested)
+  // Yearly path: growth ± volatility fluctuation, seeded via resolveRng (saves stable).
+  // Deterministic hallway HUD: use growth only (no fluctuation).
   {
-    const ret = difficulty.equityReturn;
-    const noise = opts.deterministic ? 1 : 1 + (rng() * 0.04 - 0.02);
-    if (next.stocksTotal > 0) {
-      const gain = Math.round(next.stocksTotal * ret * noise);
+    const baseGrowth = difficulty.equityReturn ?? 0.07;
+    const baseVol = difficulty.equityVolatility ?? 0.04;
+    const yearReturn = (growth, vol) => {
+      if (opts.deterministic) return growth;
+      const g = growth == null ? baseGrowth : growth;
+      const v = vol == null ? baseVol : vol;
+      // Uniform fluctuation in [-vol, +vol] around growth (decimal).
+      return g + (rng() * 2 - 1) * v;
+    };
+
+    if (Array.isArray(next.stocksHoldings) && next.stocksHoldings.length > 0) {
+      let totalGain = 0;
+      for (const h of next.stocksHoldings) {
+        const g = h.growth != null ? Number(h.growth) : baseGrowth;
+        const v = h.volatility != null ? Number(h.volatility) : baseVol;
+        const ret = yearReturn(g, v);
+        const before =
+          h.value != null
+            ? Number(h.value) || 0
+            : (Number(h.shares) || 0) * (Number(h.price) || 0);
+        const gain = Math.round(before * ret);
+        const after = Math.max(0, before + gain);
+        h.value = after;
+        if (h.shares > 0) h.price = after / h.shares;
+        totalGain += gain;
+      }
+      syncStocksTotal(next);
+      events.push(`Market return (stocks): ${totalGain >= 0 ? '+' : ''}$${fmt(totalGain)}`);
+    } else if (next.stocksTotal > 0) {
+      const ret = yearReturn(baseGrowth, baseVol);
+      const gain = Math.round(next.stocksTotal * ret);
       next.stocksTotal = Math.max(0, next.stocksTotal + gain);
       events.push(`Market return (stocks): ${gain >= 0 ? '+' : ''}$${fmt(gain)}`);
     }
     if ((next.k401Balance || 0) > 0) {
-      const kNoise = opts.deterministic ? 1 : 1 + (rng() * 0.04 - 0.02);
-      const kGain = Math.round(next.k401Balance * ret * kNoise);
+      const ret = yearReturn(baseGrowth, baseVol);
+      const kGain = Math.round(next.k401Balance * ret);
       next.k401Balance = Math.max(0, next.k401Balance + kGain);
       events.push(`401(k) return: ${kGain >= 0 ? '+' : ''}$${fmt(kGain)}`);
+    }
+    if ((next.rothBalance || 0) > 0) {
+      const ret = yearReturn(baseGrowth, baseVol);
+      const rGain = Math.round(next.rothBalance * ret);
+      next.rothBalance = Math.max(0, next.rothBalance + rGain);
+      events.push(`Roth IRA return: ${rGain >= 0 ? '+' : ''}$${fmt(rGain)}`);
     }
   }
 
@@ -298,6 +368,30 @@ export function projectOneYear(state, difficultyId, opts = {}) {
     }
   }
 
+  // Roth IRA: after-tax contribution (does not reduce taxable wages)
+  let rothContrib = 0;
+  if (next.employed && !next.retired) {
+    rothContrib = rothAnnualContribution(next);
+    if (rothContrib > 0) {
+      next.rothBalance = (next.rothBalance || 0) + rothContrib;
+      events.push(`Roth IRA contribution: $${fmt(rothContrib)} (after-tax)`);
+    }
+  }
+
+  // Investment property / rent income
+  let rentalIncome = 0;
+  if (next.housing === 'rent') {
+    // Player rents — monthly rent is an expense (handled via spending / rentAnnual)
+  } else {
+    for (const home of next.homes || []) {
+      const rev = Number(home.monthlyRevenue) || 0;
+      if (rev > 0) rentalIncome += Math.round(rev * 12);
+    }
+  }
+  if (rentalIncome > 0) {
+    events.push(`Rental income: +$${fmt(rentalIncome)}`);
+  }
+
   // Taxes (traditional 401(k) deferral reduces taxable wages via Tax.js)
   const tax = estimateAnnualTax(next, difficulty);
   const incomeTax = tax.federal + tax.state;
@@ -308,18 +402,27 @@ export function projectOneYear(state, difficultyId, opts = {}) {
   // ORDER for glass wall: salary is included in inflow → Cash *before* the snapshot
   // is stored; findBankInsolvencyIndex / buildGlassWall must use this post-salary Cash.
   const inflow =
-    (next.retired ? 0 : next.salary || 0) + (next.socialSecurity || 0);
+    (next.retired ? 0 : next.salary || 0) +
+    (next.socialSecurity || 0) +
+    rentalIncome;
   const stated = next.annualSpending || 0;
   const statedHasMortgage = !!(next.spendingBreakdown?.mortgage);
+  const rentAnnual =
+    next.housing === 'rent'
+      ? Math.round((Number(next.monthlyRent) || 0) * 12)
+      : 0;
+  const statedHasRent = !!(next.spendingBreakdown?.rent || next.spendingBreakdown?.mortgage);
   const outflow =
     stated * difficulty.expensePressure +
     (statedHasMortgage ? 0 : mortgagePaid) +
+    (next.housing === 'rent' && !statedHasRent ? rentAnnual : 0) +
     otherLoanPaid +
     incomeTax +
     propertyTax +
     childCosts +
     collegeTuition +
-    k401Deferral;
+    k401Deferral +
+    rothContrib;
 
   const net = inflow - outflow;
   if (net >= 0) {
@@ -347,10 +450,13 @@ export function projectOneYear(state, difficultyId, opts = {}) {
       next[key] = have - take;
       left -= take;
     }
-    // Retired: auto-withdraw from 401(k) → Cash to cover remaining shortfall (taxable).
-    // Proceeds are deposited then immediately applied to the unpaid shortfall so Cash
-    // is not left inflated after the year's bills (prior Cash cushion is preserved
-    // when the withdrawal covers `left`).
+    // Retired: Roth (qualified, untaxed) then traditional 401(k) (taxable).
+    if (left > 0 && next.retired && (next.rothBalance || 0) > 0) {
+      withdrawRothToCover(next, left, events);
+      const applied = Math.min(next.cash || 0, left);
+      next.cash = (next.cash || 0) - applied;
+      left = Math.max(0, left - applied);
+    }
     if (left > 0 && next.retired && (next.k401Balance || 0) > 0) {
       withdraw401kToCover(next, left, difficulty, events);
       const applied = Math.min(next.cash || 0, left);
@@ -371,10 +477,13 @@ export function projectOneYear(state, difficultyId, opts = {}) {
     }
   }
 
-  // If retired and Cash still < 0 (edge), pull from 401(k) to zero Cash
-  if (next.retired && (next.cash || 0) < 0 && (next.k401Balance || 0) > 0) {
+  // If retired and Cash still < 0 (edge), pull Roth then 401(k)
+  if (next.retired && (next.cash || 0) < 0) {
     const short = Math.round(-(next.cash || 0));
-    withdraw401kToCover(next, short, difficulty, events);
+    if ((next.rothBalance || 0) > 0) withdrawRothToCover(next, short, events);
+    if ((next.cash || 0) < 0 && (next.k401Balance || 0) > 0) {
+      withdraw401kToCover(next, Math.round(-(next.cash || 0)), difficulty, events);
+    }
   }
 
   // Securities-backed loan maintenance (margin call if over SB_LTV)
@@ -855,6 +964,21 @@ function applySecuritiesMarginCall(next, events) {
   if (excess > 0.5) {
     events.push(`Margin call: still $${fmt(excess)} over LTV after liquidation.`);
   }
+}
+
+
+/**
+ * Qualified Roth withdrawal (untaxed) → Cash to cover shortfall.
+ */
+function withdrawRothToCover(next, needNet, events) {
+  const need = Math.max(0, Math.round(needNet || 0));
+  let bal = next.rothBalance || 0;
+  if (need <= 0 || bal <= 0) return 0;
+  const take = Math.min(bal, need);
+  next.rothBalance = bal - take;
+  next.cash = Math.round((next.cash || 0) + take);
+  events.push(`Roth IRA withdrawal → Cash: $${fmt(take)} (qualified, untaxed)`);
+  return take;
 }
 
 /**
