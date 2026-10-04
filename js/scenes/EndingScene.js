@@ -43,6 +43,10 @@ export class EndingScene {
   }
 
   handleKey(e) {
+    if (e.key === ' ' && e.repeat) {
+      e.preventDefault();
+      return true;
+    }
     if (this.phase === 3) {
       if (KEYS.confirm.includes(e.key) || KEYS.cancel.includes(e.key)) {
         this.phase = 2;

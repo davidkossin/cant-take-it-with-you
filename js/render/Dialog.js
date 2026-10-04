@@ -63,7 +63,7 @@ export class Dialog {
       this.active = true;
       this.mode = 'text';
       this.title = title;
-      this.lines = wrapText(text, 52);
+      this.lines = wrapText(text, 40);
       this.options = [{ label: 'OK', value: true }];
       this.selected = 0;
       this.resolve = resolve;
@@ -80,7 +80,7 @@ export class Dialog {
       this.active = true;
       this.mode = 'menu';
       this.title = title;
-      this.lines = wrapText(text, 52);
+      this.lines = wrapText(text, 40);
       this.options = options;
       this.selected = Math.max(0, Math.min(options.length - 1, selected));
       this.resolve = resolve;
@@ -110,7 +110,7 @@ export class Dialog {
       this.active = true;
       this.mode = 'prompt';
       this.title = title;
-      this.lines = wrapText(text, 52);
+      this.lines = wrapText(text, 40);
       this.promptType = type;
       let initial = String(defaultValue ?? '');
       if (type === 'money') initial = formatMoneyInput(initial);
@@ -149,7 +149,7 @@ export class Dialog {
 
   _layout() {
     const boxW = Math.min(1500, FRAME_W - 120);
-    const lineH = 32;
+    const lineH = 28;
     const hasSub = this.options.some((o) => o.subtext);
     const optH = hasSub ? 58 : 40;
     const pad = 36;
@@ -172,6 +172,12 @@ export class Dialog {
 
   handleKeyDown(e) {
     if (!this.active) return false;
+    // Space confirms on the initial press only, so holding it to run
+    // cannot step through a dialog that opened underneath.
+    if (e.key === ' ' && e.repeat) {
+      e.preventDefault();
+      return true;
+    }
 
     // When the mobile HTML input is focused, let it own typing / Backspace.
     // Letter shortcuts (z/x/wasd/space) must NOT Accept/Cancel — only Enter/Escape.
@@ -291,7 +297,7 @@ export class Dialog {
 
     ctx.imageSmoothingEnabled = false;
     let ty = y + pad;
-    ctx.font = '22px "Press Start 2P", monospace';
+    ctx.font = '18px "Press Start 2P", monospace';
     ctx.textBaseline = 'top';
 
     if (this.title) {
@@ -328,11 +334,11 @@ export class Dialog {
         ctx.fillStyle = 'rgba(200,160,80,0.25)';
         ctx.fillRect(x + pad - 2, ty - 1, boxW - pad * 2 + 4, optH);
         ctx.fillStyle = PALETTE.gold;
-        ctx.font = '22px "Press Start 2P", monospace';
+        ctx.font = '18px "Press Start 2P", monospace';
         ctx.fillText('▶', x + pad, ty);
       } else {
         ctx.fillStyle = PALETTE.uiText;
-        ctx.font = '22px "Press Start 2P", monospace';
+        ctx.font = '18px "Press Start 2P", monospace';
       }
       ctx.fillText(opt.label, x + pad + 36, ty);
       if (opt.subtext) {
@@ -340,7 +346,7 @@ export class Dialog {
         ctx.fillStyle = selected ? '#c8b878' : '#888070';
         const sub = wrapText(opt.subtext, 64);
         ctx.fillText(sub[0] || '', x + pad + 36, ty + 28);
-        ctx.font = '22px "Press Start 2P", monospace';
+        ctx.font = '18px "Press Start 2P", monospace';
       }
       ty += optH;
     });

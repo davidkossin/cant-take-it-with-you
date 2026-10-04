@@ -1,4 +1,4 @@
-import { KEYS, TILE } from '../config.js';
+import { KEYS, TILE, RUN_MULTIPLIER } from '../config.js';
 import { makePlayerSprite } from './Assets.js';
 import { virtualKeys } from '../input/VirtualPad.js';
 
@@ -22,17 +22,24 @@ export class Player {
     this.frame = 0;
     this.animTimer = 0;
     this.keys = new Set();
+    /** Space held. Run only applies while a direction is also held. */
+    this.runHeld = false;
     /** When false, keydown does not add keys (dialogs / locked / pause). */
     this.inputEnabled = true;
   }
 
   bindInput(target = window) {
     this._kd = (e) => {
+      if (e.key === ' ') {
+        if (this.inputEnabled && !e.repeat) this.runHeld = true;
+        return;
+      }
       if (!this.inputEnabled) return;
       if (!MOVE_KEYS.has(e.key)) return;
       this.keys.add(e.key);
     };
     this._ku = (e) => {
+      if (e.key === ' ') this.runHeld = false;
       // Always process keyup so held keys don't stick after re-enable
       this.keys.delete(e.key);
       if (e.key.length === 1) {
@@ -51,6 +58,7 @@ export class Player {
 
   clearKeys() {
     this.keys.clear();
+    this.runHeld = false;
   }
 
   pressed(dirs) {
@@ -82,8 +90,9 @@ export class Player {
     else this.facing = dy < 0 ? 'up' : 'down';
 
     const len = Math.hypot(dx, dy) || 1;
-    dx = (dx / len) * this.speed;
-    dy = (dy / len) * this.speed;
+    const speed = this.speed * (this.runHeld ? RUN_MULTIPLIER : 1);
+    dx = (dx / len) * speed;
+    dy = (dy / len) * speed;
 
     const tryMove = (mx, my) => {
       const nx = this.x + mx;
@@ -100,11 +109,12 @@ export class Player {
       if (!tryMove(dx, 0)) tryMove(0, dy);
     }
 
-    // Snappy 4-frame walk cycle
+    // Eight-frame cycle. Run uses the same poses, stepped faster.
     this.animTimer += 1;
-    if (this.animTimer >= 6) {
+    const frameEvery = this.runHeld ? 2 : 3;
+    if (this.animTimer >= frameEvery) {
       this.animTimer = 0;
-      this.frame = (this.frame + 1) % 4;
+      this.frame = (this.frame + 1) % 8;
     }
   }
 
@@ -115,11 +125,9 @@ export class Player {
       hairLength,
       gray,
       this.facing,
-      this.moving ? this.frame : 0
+      this.moving ? this.frame : -1
     );
-    // slight bob on odd frames
-    const bob = this.moving && (this.frame === 1 || this.frame === 3) ? -1 : 0;
-    ctx.drawImage(spr, Math.round(this.x - 2), Math.round(this.y - 12 + bob));
+    ctx.drawImage(spr, Math.round(this.x - 2), Math.round(this.y - 12));
   }
 
   center() {

@@ -192,6 +192,17 @@ async function startTitle() {
   booting = false;
 }
 
+function directionHeld() {
+  const p = mode === 'room' ? room.player : mode === 'hallway' ? hallway.player : null;
+  if (!p) return false;
+  return (
+    p.pressed(KEYS.up) ||
+    p.pressed(KEYS.down) ||
+    p.pressed(KEYS.left) ||
+    p.pressed(KEYS.right)
+  );
+}
+
 window.addEventListener('keydown', async (e) => {
   if (dialog.active) {
     dialog.handleKeyDown(e);
@@ -237,6 +248,12 @@ window.addEventListener('keydown', async (e) => {
   }
 
   if (KEYS.confirm.includes(e.key)) {
+    // Space is also run. A tap (first keydown, not already moving) still
+    // confirms. Repeats and Space held with a direction do not open tellers.
+    if (e.key === ' ' && (e.repeat || directionHeld())) {
+      e.preventDefault();
+      return;
+    }
     e.preventDefault();
     interacting = true;
     try {

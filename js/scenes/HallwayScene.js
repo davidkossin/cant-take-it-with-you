@@ -1,4 +1,4 @@
-import { FRAME_W, WORLD_SCALE, VIEW_W, VIEW_H, HUD_H, MAX_AGE, TILE, KEYS } from '../config.js';
+import { FRAME_W, WORLD_SCALE, VIEW_W, VIEW_H, HUD_H, MAX_AGE, TILE, KEYS, RUN_MULTIPLIER } from '../config.js';
 import { Player } from '../render/Player.js';
 import { Hud } from '../render/Hud.js';
 import {
@@ -215,7 +215,7 @@ export class HallwayScene {
     const inX = p.x + p.w > g.x && p.x < g.x + g.w;
     // Corridor: smaller y = north. Player approaches from south; blocked when a
     // northward step would overlap the glass AABB.
-    const step = Math.max(p.speed || 1, 1);
+    const step = Math.max((p.speed || 1) * (p.runHeld ? RUN_MULTIPLIER : 1), 1);
     const blockedByGlass =
       p.pressed(KEYS.up) && hitsGlassWall(g, p.x, p.y - step, p.w, p.h);
     // Abutting / overlapping from the south (player top near glass bottom)

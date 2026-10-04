@@ -3,7 +3,8 @@
  */
 
 import { TILE, VIEW_W, VIEW_H, PALETTE } from '../config.js';
-import { makeTile, makeDoor, makeLamp, makeBlueTorch, makeTellerWindow, makeTellerIcon } from './Assets.js';
+import { makeLamp, makeBlueTorch, makeTellerWindow, makeTellerIcon } from './Assets.js';
+import { paintSurface, paintWallShadow, paintRug, paintDoor, paintDecor, wallFace } from './hiTextures.js';
 
 /**
  * Decision Room — north wall is doorway to a (new) Hallway of Time; tellers on
@@ -23,8 +24,7 @@ export function buildDecisionRoom(opts = {}) {
     const row = [];
     for (let x = 0; x < cols; x++) {
       if (y === 0 || y === rows - 1 || x === 0 || x === cols - 1) row.push('wall');
-      else if (y >= 5 && y <= 9 && x >= 4 && x <= 15) row.push('carpet');
-      else row.push('floor');
+      else row.push('square');
     }
     map.push(row);
   }
@@ -46,6 +46,7 @@ export function buildDecisionRoom(opts = {}) {
       h: TILE,
       label: 'Hallway of Time',
       kind: 'door',
+      facing: 'h',
     },
     // West wall (2 tellers; optional center return door inserted below)
     {
@@ -93,6 +94,8 @@ export function buildDecisionRoom(opts = {}) {
       wall: true,
       sideways: true,
       wallSide: 'west',
+      facing: 'v',
+      spriteOx: -2,
       priorYear: priorYear ?? null,
     });
   }
@@ -152,12 +155,21 @@ export function buildDecisionRoom(opts = {}) {
     }
   );
 
+  // One corner piece inside the square, clear of the north door and tellers.
+  interactables.push(
+    { id: 'decor-pillar', kind: 'decor', decor: 'pillar', x: 1 * TILE, y: 1 * TILE, w: 18, h: 18 },
+    { id: 'decor-plant', kind: 'decor', decor: 'plant', x: (cols - 2) * TILE - 2, y: 1 * TILE, w: 18, h: 18 },
+    { id: 'decor-sconce', kind: 'decor', decor: 'sconce', x: 1 * TILE, y: (rows - 2) * TILE - 2, w: 18, h: 18 },
+    { id: 'decor-bracket', kind: 'decor', decor: 'bracket', x: (cols - 2) * TILE - 2, y: (rows - 2) * TILE - 2, w: 18, h: 18 }
+  );
+
   return {
     cols,
     rows,
     map,
     interactables,
-    spawn: { x: 10 * TILE - 6, y: 8 * TILE },
+    rug: { x: 5 * TILE, y: 4 * TILE, w: 10 * TILE, h: 6 * TILE },
+    spawn: { x: 10 * TILE - 6, y: 9 * TILE },
     width: cols * TILE,
     height: rows * TILE,
     theme: 'room',
@@ -175,7 +187,7 @@ export function buildDecisionRoom(opts = {}) {
  */
 export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
   // Narrow walkable: 4 tiles wide, thick 2-tile walls, void outside
-  const walkW = 4;
+  const walkW = 6;
   const wallThick = 2;
   // Corridor stays narrow; void and walls fill the wide 16:9 view.
   const cols = VIEW_W / TILE;
@@ -183,7 +195,7 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
   const walkLeft = voidPad + wallThick; // first walkable col
   const walkRight = walkLeft + walkW - 1;
 
-  const segment = 3; // tighter spacing — faster feel along corridor
+  const segment = 5; // a little more air between year doors
   const foyer = 5;
   const endPad = 7;
   const rows = foyer + doorCount * segment + endPad;
@@ -229,15 +241,18 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
     // Door on right inner wall edge
     const door = {
       id: `year-door-${year}`,
-      x: (walkRight + 1) * TILE - 2,
+      x: (walkRight + 1) * TILE - 4,
       y: yTile * TILE,
       w: 14,
       h: 22,
+      spriteOx: 4,
+      spriteOy: -2,
+      facing: 'v',
       label: `Year ${year} (age ${age})`,
       kind: 'year-door',
       year,
       age,
-      yearIndex: i + 1, // years projected from leave baseline
+      yearIndex: i + 1,
     };
     doors.push(door);
     interactables.push(door);
@@ -271,8 +286,8 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
     if (i % 5 === 0) {
       interactables.push({
         id: `torch-r-${year}`,
-        x: (walkRight + 1) * TILE - 2,
-        y: yTile * TILE + 20,
+        x: (walkRight + 1) * TILE,
+        y: (yTile + 2) * TILE,
         w: 16,
         h: 16,
         kind: 'lamp',
@@ -291,6 +306,7 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
     h: TILE + 8,
     label: 'End of the Line',
     kind: 'end-door',
+    facing: 'h',
   });
 
   // South spawn marker (not interactable — findFacing skips kind:'spawn')
@@ -314,6 +330,8 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
     h: TILE + 8,
     label: `Decision Room ${leaveYear}`,
     kind: 'south-door',
+    facing: 'h',
+    spriteOy: 8,
     year: leaveYear,
     age: leaveAge,
   });
@@ -346,27 +364,26 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
   };
 }
 
+const HI_TYPES = new Set(['square', 'floor', 'stone', 'wall', 'wallPurple', 'void']);
+
+function blitHi(ctx, img, x, y, w, h) {
+  ctx.drawImage(img, x, y, w, h);
+}
+
 export function drawWorld(ctx, world, camX, camY, animTime = 0) {
-  const tiles = {
-    floor: makeTile('floor'),
-    wall: makeTile('wall'),
-    wallPurple: makeTile('wallPurple'),
-    void: makeTile('void'),
-    wood: makeTile('wood'),
-    grass: makeTile('grass'),
-    stone: makeTile('stone'),
-    carpet: makeTile('carpet'),
-  };
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 
   // Hallway corridor and the squarer Decision Room both sit in the wide
-  // frame. Void fills the non-playable margins (same tile as the hallway).
+  // frame. Void fills the non-playable margins.
   if (world.theme === 'hallway' || world.theme === 'room') {
-    const voidTile = tiles.void;
+    const voidTile = paintSurface('void', 0, 's');
     const ox = ((camX % TILE) + TILE) % TILE;
     const oy = ((camY % TILE) + TILE) % TILE;
     for (let y = -TILE; y < VIEW_H + TILE; y += TILE) {
       for (let x = -TILE; x < VIEW_W + TILE; x += TILE) {
-        ctx.drawImage(voidTile, x - ox, y - oy);
+        blitHi(ctx, voidTile, x - ox, y - oy, TILE, TILE);
       }
     }
   }
@@ -379,12 +396,39 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
   for (let y = startRow; y < endRow; y++) {
     for (let x = startCol; x < endCol; x++) {
       const t = world.map[y][x];
-      const img = tiles[t] || tiles.floor;
-      ctx.drawImage(img, x * TILE - camX, y * TILE - camY);
+      if (!HI_TYPES.has(t)) continue;
+      const variant = Math.abs((x * 13 + y * 7) % 4);
+      const face = t === 'wall' || t === 'wallPurple' ? wallFace(world.map, x, y) : 's';
+      const img = paintSurface(t === 'floor' ? 'square' : t, variant, face);
+      blitHi(ctx, img, x * TILE - camX, y * TILE - camY, TILE, TILE);
     }
   }
 
-  const doorSpr = makeDoor(true);
+  // Wall face throws a soft shadow onto the floor beside it.
+  for (let y = startRow; y < endRow; y++) {
+    for (let x = startCol; x < endCol; x++) {
+      const t = world.map[y] && world.map[y][x];
+      if (t !== 'wall' && t !== 'wallPurple') continue;
+      const face = wallFace(world.map, x, y);
+      const sh = paintWallShadow(face);
+      const dx = x * TILE - camX;
+      const dy = y * TILE - camY;
+      if (face === 's') blitHi(ctx, sh, dx, dy + TILE - 2, TILE, 10);
+      else if (face === 'n') blitHi(ctx, sh, dx, dy - 8, TILE, 10);
+      else if (face === 'e') blitHi(ctx, sh, dx + TILE - 2, dy, 10, TILE);
+      else blitHi(ctx, sh, dx - 8, dy, 10, TILE);
+    }
+  }
+
+  if (world.theme === 'room' && world.rug) {
+    const rug = paintRug(world.rug.w, world.rug.h);
+    blitHi(ctx, rug, world.rug.x - camX - 2, world.rug.y - camY - 1, rug.lw, rug.lh);
+  }
+
+  if (world.theme === 'hallway') drawYearTimeline(ctx, world, camX, camY);
+
+  ctx.restore();
+
   const lampFrame = Math.floor(animTime / 8) % 4;
   const lampSpr = makeLamp(lampFrame);
   const tellerSpr = makeTellerWindow();
@@ -414,8 +458,24 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
       }
       // No wall text — full name shows in [E] prompt only
     } else if (obj.kind === 'year-door' || obj.kind === 'door' || obj.kind === 'end-door' || obj.kind === 'south-door' || obj.kind === 'west-door') {
-      ctx.drawImage(doorSpr, sx, sy - 4);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      const facing = obj.facing || (obj.wallSide === 'west' || obj.wallSide === 'east' || obj.kind === 'year-door' ? 'v' : 'h');
+      const doorSpr = paintDoor(facing);
+      ctx.drawImage(
+        doorSpr,
+        sx + (obj.spriteOx || 0),
+        sy + (obj.spriteOy || 0),
+        doorSpr.lw,
+        doorSpr.lh
+      );
+    } else if (obj.kind === 'decor') {
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      const decor = paintDecor(obj.decor);
+      ctx.drawImage(decor, sx, sy, decor.lw, decor.lh);
     } else if (obj.kind === 'lamp') {
+      ctx.imageSmoothingEnabled = false;
       const isBlue = obj.style === 'blue';
       const spr = isBlue ? makeBlueTorch(lampFrame) : lampSpr;
       ctx.drawImage(spr, sx, sy);
@@ -428,13 +488,43 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
       ctx.arc(sx + 8, sy + 6, 14 + (lampFrame % 2), 0, Math.PI * 2);
       ctx.fill();
     } else if (obj.kind === 'marker') {
-      ctx.fillStyle = PALETTE.goldDark;
-      ctx.fillRect(sx, sy, 14, 10);
-      ctx.fillStyle = PALETTE.gold;
-      ctx.font = '5px "Press Start 2P", monospace';
-      ctx.fillText(String(obj.year).slice(2), sx + 1, sy + 2);
+      // Years are drawn in the side margin by drawYearTimeline.
     }
   }
+}
+
+/**
+ * White year spine in the left void margin. A long tick is January;
+ * exactly 11 short ticks sit between one year and the next.
+ */
+function drawYearTimeline(ctx, world, camX, camY) {
+  const doors = (world.doors || []).slice().sort((a, b) => a.y - b.y);
+  if (!doors.length) return;
+  const axisX = (world.walkLeft - 3) * TILE - camX;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.lineWidth = 1;
+  ctx.font = '5px "Press Start 2P", monospace';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'right';
+  const yOf = (d) => d.y + d.h / 2 - camY;
+  ctx.beginPath();
+  ctx.moveTo(axisX, yOf(doors[0]));
+  ctx.lineTo(axisX, yOf(doors[doors.length - 1]));
+  ctx.stroke();
+  for (let i = 0; i < doors.length; i++) {
+    const y = yOf(doors[i]);
+    ctx.fillRect(axisX - 8, y - 1, 8, 2);
+    ctx.fillText(String(doors[i].year), axisX - 10, y);
+    if (i + 1 >= doors.length) continue;
+    const y2 = yOf(doors[i + 1]);
+    for (let m = 1; m <= 11; m++) {
+      const my = y + ((y2 - y) * m) / 12;
+      ctx.fillRect(axisX - 3, Math.round(my), 3, 1);
+    }
+  }
+  ctx.restore();
 }
 
 export function isSolid(world, x, y, w, h) {
@@ -459,7 +549,7 @@ export function findFacingInteractable(player, world, range = 20) {
   let best = null;
   let bestDist = range;
   for (const obj of world.interactables) {
-    if (obj.kind === 'marker' || obj.kind === 'lamp' || obj.kind === 'spawn') continue;
+    if (obj.kind === 'marker' || obj.kind === 'lamp' || obj.kind === 'spawn' || obj.kind === 'decor') continue;
     const ox = obj.x + obj.w / 2;
     const oy = obj.y + obj.h / 2;
     const d = Math.hypot(c.x - ox, c.y - oy);

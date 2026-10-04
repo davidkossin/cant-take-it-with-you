@@ -19,7 +19,7 @@ export const CANVAS_W = FRAME_W;
 export const CANVAS_H = FRAME_H;
 
 /** Bump on each published build so players can confirm cache. */
-export const GAME_VERSION = '0.5.15';
+export const GAME_VERSION = '0.5.16';
 
 export const PALETTE = {
   bg: '#1a1420',
@@ -187,3 +187,5 @@ export const KEYS = {
   confirm: ['Enter', ' ', 'z', 'Z', 'e', 'E'],
   cancel: ['Escape', 'x', 'X'],
 };
+/** Held Space while moving. Walk speed is unchanged when Space is up. */
+export const RUN_MULTIPLIER = 1.8;

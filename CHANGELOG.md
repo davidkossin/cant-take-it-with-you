@@ -10,6 +10,15 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.5.16] — 2026-10-03
+
+### Changed
+- Player walk is an eight-frame cycle in four directions, with a small body lift and a slight hair bounce. The sprite is shaded so the hair, face, shirt, and legs read as round, and the back view shows the back of the head, ears, and shoulders. Running uses the same cycle, faster.
+- Decision Room floor is calm square tiles (not busy planks). Walls in the Decision Room and Hallway are shaded like raised walls: lighter along the top, darker where they meet the floor, with a soft shadow. Rug, doors, corner decor, and hallway stone are painted at higher resolution instead of blown-up 16px tiles. Doors stay flush in the wall.
+- Center rug is burgundy with a gold border and medallion. Each corner has one piece of decor (pillar, plant, sconce, bracket). Doors are top-down, set in the wall, with iron hinges and a round handle. Hallway floor and walls are cool blue-gray stone, the walk is a little wider, and year doors sit farther apart. Four-digit years and a white January-plus-11-months spine sit in the left margin, not on the doors. Pause portfolio text uses a slightly smaller font and more line breaks.
+- Hold Space while moving to run at 1.8× walk speed. A Space tap still confirms; holding Space does not repeat-confirm tellers or menus. Touch controls stay at walk speed.
+- Cache-bust / `GAME_VERSION` bumped to **0.5.16**
+
 ## [0.5.15] — 2026-10-03
 
 ### Changed

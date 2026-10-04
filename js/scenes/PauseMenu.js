@@ -174,6 +174,10 @@ export class PauseMenu {
    */
   handleKey(e, game) {
     if (!this.open) return null;
+    if (e.key === ' ' && e.repeat) {
+      e.preventDefault();
+      return undefined;
+    }
 
     if (KEYS.cancel.includes(e.key)) {
       e.preventDefault();
@@ -505,7 +509,7 @@ export class PauseMenu {
     const head = `${branch.letter}${branch.isCurrent ? '*' : ''}`;
     ctx.fillText(head, cx + 4, cy + 4);
 
-    ctx.font = compact ? '4px "Press Start 2P", monospace' : '5px "Press Start 2P", monospace';
+    ctx.font = compact ? '12px "Press Start 2P", monospace' : '14px "Press Start 2P", monospace';
     if (snap.status === 'before') {
       ctx.fillStyle = '#888';
       ctx.fillText('Before branch', cx + 4, cy + 18);
@@ -538,13 +542,13 @@ export class PauseMenu {
       if (ry > cy + colH - (compact ? 5 : 10)) break;
       ctx.fillStyle = line.heading ? PALETTE.gold : PALETTE.uiText;
       ctx.fillText(clip(line.text, colW - 8), cx + 4, ry);
-      ry += compact ? 7 : 9;
+      ry += compact ? 16 : 20;
     }
   }
 
   drawPortfolio(ctx, p, x, y, boxW, boxH) {
     const worth = computeWorth(p);
-    ctx.font = '5px "Press Start 2P", monospace';
+    ctx.font = '15px "Press Start 2P", monospace';
     ctx.textBaseline = 'top';
     ctx.fillStyle = PALETTE.uiText;
     const rows =
@@ -554,25 +558,26 @@ export class PauseMenu {
     let ry = y + 32;
     for (const row of rows) {
       ctx.fillStyle = row.heading ? PALETTE.gold : PALETTE.uiText;
-      ctx.fillText(row.text, x + 12, ry);
-      ry += 9;
+      ctx.fillText(row.text, x + 36, ry);
+      ry += 26;
     }
 
     ctx.fillStyle = '#777';
     ctx.font = '5px "Press Start 2P", monospace';
     if (this.portfolioPage === 0) {
-      ctx.fillText('Enter details · Tab next · Esc back', x + 12, y + boxH - 14);
+      ctx.font = '13px "Press Start 2P", monospace';
+      ctx.fillText('Enter details', x + 36, y + boxH - 52);
+      ctx.fillText('Tab next · Esc back', x + 36, y + boxH - 28);
     } else {
       const pages = this.portfolioDetailPages(p).length;
       const pageLabel = pages > 1 ? ` · Page ${this.portfolioDetailPage + 1}/${pages}` : '';
-      ctx.fillText(`Enter summary · Up/Down page${pageLabel}`, x + 12, y + boxH - 14);
+      ctx.font = '13px "Press Start 2P", monospace';
+      ctx.fillText('Enter summary', x + 36, y + boxH - 52);
+      ctx.fillText(`Up/Down page${pageLabel}`, x + 36, y + boxH - 28);
     }
   }
 
   portfolioSummaryRows(p, worth) {
-    const salaryLine = p.retired
-      ? `Retired · Spend ${money(p.annualSpending)}/yr`
-      : `Salary ${money(p.salary)} · Spend ${money(p.annualSpending)}`;
     const kids = p.kids || [];
     const kidsLine = kids.length
       ? `Kids ${kids.length} · Ages ${kids.map((k) => Number(k.age) || 0).join(', ')}`
@@ -580,14 +585,20 @@ export class PauseMenu {
     const loanTotal =
       (p.otherDebt || 0) + (p.otherLoans || []).reduce((sum, l) => sum + (l.principal || 0), 0);
     const savingsRate = p.savingsRate == null ? '' : ` @ ${percent(p.savingsRate)}`;
+    const salaryRows = p.retired
+      ? [{ text: 'Retired' }, { text: `Spend ${money(p.annualSpending)}/yr` }]
+      : [{ text: `Salary ${money(p.salary)}` }, { text: `Spend ${money(p.annualSpending)}` }];
     return [
-      { text: `Year ${p.year} · Age ${p.age}` },
-      { text: salaryLine },
+      { text: `Year ${p.year}` },
+      { text: `Age ${p.age}` },
+      ...salaryRows,
       { text: `Cash ${money(worth.cash)}` },
       { text: `Savings ${money(worth.savings)}${savingsRate}` },
-      { text: `Stocks ${money(worth.stocks)} · Basis ${money(worth.stocksCostBasis)}` },
+      { text: `Stocks ${money(worth.stocks)}` },
+      { text: `Basis ${money(worth.stocksCostBasis)}` },
       { text: `401(k) ${money(worth.k401Balance)}` },
-      { text: `Homes ${(p.homes || []).length} · Equity ${money(worth.homeEquity)}` },
+      { text: `Homes ${(p.homes || []).length}` },
+      { text: `Equity ${money(worth.homeEquity)}` },
       { text: `Loans ${money(loanTotal)}` },
       { text: kidsLine },
       { text: `Net worth ${money(worth.netWorth)}`, heading: true },
@@ -602,7 +613,9 @@ export class PauseMenu {
       rows.push({ text: 'Homes', heading: true });
       homes.forEach((home, i) => {
         const label = (home.label || home.type || `Home ${i + 1}`).slice(0, 18);
-        rows.push({ text: `${label}: V ${money(home.value)} · M ${money(home.mortgageOwed)}` });
+        rows.push({ text: `${label}` });
+        rows.push({ text: `Value ${money(home.value)}` });
+        rows.push({ text: `Mortgage ${money(home.mortgageOwed)}` });
       });
     } else {
       rows.push({ text: 'Homes: none' });
@@ -874,7 +887,7 @@ function snapshotLines(p, worth, snap) {
 
 function clip(text, maxPx) {
   // Press Start 2P ~5px/char at 5px font — rough fit for column width
-  const maxChars = Math.max(6, Math.floor(maxPx / 5));
+  const maxChars = Math.max(8, Math.floor(maxPx / 12));
   if (text.length <= maxChars) return text;
   return text.slice(0, maxChars - 1) + '…';
 }
