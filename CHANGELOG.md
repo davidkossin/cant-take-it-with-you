@@ -8,6 +8,16 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ---
 
+## [Unreleased]
+
+## [0.6.1] — 2026-10-04
+
+### Fixed
+- Stock lookup no longer fails immediately in the browser. Yahoo chart does not send Access-Control-Allow-Origin (and returns HTTP 429 without a browser User-Agent), stockprices.dev is a Cloudflare DNS error, and Stooq's TLS handshake fails, so every ticker including listed Nasdaq SPCX died before the timeout. The quote now comes from CNBC's keyless JSON, which sends Access-Control-Allow-Origin: * for https://dkossin.com, with the CNBC chart as a fallback. Prices are still only what the feed returns.
+
+### Changed
+- Cache-bust / `GAME_VERSION` bumped to **0.6.1**
+
 ## [0.6.0] — 2026-10-04
 
 ### Added
@@ -27,8 +37,6 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ### Notes
 - Do not invent stock prices; failed lookups fall back to manual entry + difficulty market averages.
-
-## [Unreleased]
 
 ## [0.5.19] — 2026-10-04
 
