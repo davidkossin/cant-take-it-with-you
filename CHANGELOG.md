@@ -10,6 +10,19 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.5.17] — 2026-10-03
+
+### Added
+- **Full screen** button (top bar) and the F key. Desktop and mobile browsers that support the Fullscreen API enter fullscreen on the page. Where that API is missing (iOS Safari on a normal element), the button instead fills the viewport (`100dvh` / `100vw`) and hides the page chrome we control. That fallback is not operating-system fullscreen. The label switches to **Exit full screen** on `fullscreenchange` or when the fallback is on.
+- Touch pad **Run** button. Hold it to move at 1.8× walk speed. Releasing it returns to a walk. It does not confirm dialogs or open menus.
+
+### Changed
+- Decision Room rug is deep blue, still with a gold border and medallion. The shadow ring around the rug is gone. Wall-to-floor shading is unchanged.
+- Hair fades toward white from age 50 to age 100 on the shaded walk sprite (standing and all eight frames, four directions). The amount is the live age: `0` at 50 and below, `1` at 100. Skin and clothes are not tinted.
+- Landscape (viewport wider than it is tall) uses a shorter top bar, no hint line, and tighter padding so the 16:9 frame fills more of the window without stretching. Portrait keeps the touch pad and the previous spacing.
+- Decision Room teller windows are painted like the doors (shaded wall, wood planks, iron). Each window keeps its hit target and shows one icon: house (home), rising chart (stocks), child (kid), shopping bag (large purchase), paycheck and coin (job / retire), stack of coins with an arrow (borrow).
+- Cache-bust / `GAME_VERSION` bumped to **0.5.17**
+
 ## [0.5.16] — 2026-10-03
 
 ### Changed

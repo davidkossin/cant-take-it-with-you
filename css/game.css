@@ -67,6 +67,105 @@ body {
   text-decoration: underline;
 }
 
+.topbar-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
+}
+
+.v2-link {
+  font-size: 10px;
+  opacity: 0.85;
+}
+
+.fs-btn {
+  appearance: none;
+  border: 2px solid rgba(212, 168, 75, 0.75);
+  background: rgba(20, 14, 28, 0.88);
+  color: var(--text);
+  font-family: "Outfit", system-ui, sans-serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+  padding: 0.28rem 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.fs-btn:hover,
+.fs-btn:focus-visible {
+  background: rgba(212, 168, 75, 0.28);
+  outline: none;
+}
+
+/* Wide window: less chrome so the 16:9 frame uses more of the viewport. */
+body.is-landscape {
+  --topbar-h: 32px;
+  padding:
+    calc(var(--topbar-h) + 2px)
+    4px
+    calc(2px + var(--safe-bottom) + var(--pad-reserve))
+    4px;
+}
+
+body.is-landscape .hint {
+  display: none;
+}
+
+body.is-landscape .frame {
+  border-width: 2px;
+}
+
+body.is-landscape .topbar {
+  padding: 0.2rem 0.7rem;
+  padding-top: max(0.2rem, env(safe-area-inset-top, 0px));
+  font-size: 0.72rem;
+}
+
+/* OS fullscreen, or the iOS-style viewport fill when that API is missing. */
+body.is-max-fill {
+  --topbar-h: 0px;
+  padding: 0 !important;
+  width: 100vw;
+  height: 100dvh;
+  min-height: 100dvh;
+}
+
+body.is-max-fill .hint {
+  display: none !important;
+}
+
+body.is-max-fill .frame {
+  border-width: 0;
+  box-shadow: none;
+}
+
+body.is-max-fill .topbar {
+  height: auto;
+  padding: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+body.is-max-fill .topbar .back,
+body.is-max-fill .topbar .title {
+  display: none;
+}
+
+body.is-max-fill .topbar-tools {
+  pointer-events: auto;
+  position: fixed;
+  top: max(6px, env(safe-area-inset-top, 0px));
+  right: max(6px, env(safe-area-inset-right, 0px));
+  z-index: 40;
+}
+
+body.is-max-fill .v2-link {
+  display: none;
+}
+
 .frame {
   border: 4px solid #5c4510;
   box-shadow:
@@ -276,6 +375,18 @@ body.has-virtual-pad .hint {
   letter-spacing: 0.04em;
   border-radius: 8px;
   opacity: 0.9;
+}
+
+.virtual-pad .vp-run {
+  width: auto;
+  min-width: 72px;
+  height: 44px;
+  padding: 0 12px;
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  border-radius: 10px;
+  background: rgba(36, 96, 52, 0.8);
+  border-color: rgba(150, 220, 160, 0.6);
 }
 
 @media (max-width: 420px) {

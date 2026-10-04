@@ -1,6 +1,6 @@
 import { KEYS, TILE, RUN_MULTIPLIER } from '../config.js';
 import { makePlayerSprite } from './Assets.js';
-import { virtualKeys } from '../input/VirtualPad.js';
+import { virtualKeys, virtualRunHeld } from '../input/VirtualPad.js';
 
 /** Movement keys only — typing never pollutes the pressed set. */
 const MOVE_KEYS = new Set([
@@ -9,6 +9,18 @@ const MOVE_KEYS = new Set([
   ...KEYS.left,
   ...KEYS.right,
 ]);
+
+
+/**
+ * How white the hair is. 0 through age 50, then a straight line to 1 at age 100.
+ * `age` is the live portfolio age (room) or the hallway snapshot age, not a constant.
+ * @param {number} age
+ */
+export function hairWhiteAmount(age) {
+  const n = Number(age);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, (n - 50) / 50));
+}
 
 export class Player {
   constructor(x, y, { speed = 1.35 } = {}) {
@@ -90,7 +102,9 @@ export class Player {
     else this.facing = dy < 0 ? 'up' : 'down';
 
     const len = Math.hypot(dx, dy) || 1;
-    const speed = this.speed * (this.runHeld ? RUN_MULTIPLIER : 1);
+    // Keyboard Space or the touch Run button. Run does not confirm dialogs.
+    const running = this.runHeld || virtualRunHeld;
+    const speed = this.speed * (running ? RUN_MULTIPLIER : 1);
     dx = (dx / len) * speed;
     dy = (dy / len) * speed;
 
@@ -111,7 +125,7 @@ export class Player {
 
     // Eight-frame cycle. Run uses the same poses, stepped faster.
     this.animTimer += 1;
-    const frameEvery = this.runHeld ? 2 : 3;
+    const frameEvery = (this.runHeld || virtualRunHeld) ? 2 : 3;
     if (this.animTimer >= frameEvery) {
       this.animTimer = 0;
       this.frame = (this.frame + 1) % 8;
@@ -119,11 +133,10 @@ export class Player {
   }
 
   draw(ctx, hairColor, hairLength, age) {
-    const gray = Math.max(0, Math.min(1, (age - 50) / 50));
     const spr = makePlayerSprite(
       hairColor,
       hairLength,
-      gray,
+      hairWhiteAmount(age),
       this.facing,
       this.moving ? this.frame : -1
     );

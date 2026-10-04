@@ -6,6 +6,9 @@
 
 export const virtualKeys = new Set();
 
+/** True while the touch Run button is held. Not a confirm key. */
+export let virtualRunHeld = false;
+
 const DIR_KEYS = {
   up: 'ArrowUp',
   down: 'ArrowDown',
@@ -62,6 +65,7 @@ export class VirtualPad {
       </div>
       <div class="vp-actions" aria-label="Action buttons">
         <button type="button" class="vp-btn vp-action vp-menu" data-action="menu" aria-label="Menu">Menu</button>
+        <button type="button" class="vp-btn vp-action vp-run" data-run="1" aria-label="Run">Run</button>
         <div class="vp-ab">
           <button type="button" class="vp-btn vp-action vp-b" data-action="cancel" aria-label="B cancel">B</button>
           <button type="button" class="vp-btn vp-action vp-a" data-action="confirm" aria-label="A confirm">A</button>
@@ -121,6 +125,34 @@ export class VirtualPad {
       // Avoid context menu / focus scroll
       btn.addEventListener('contextmenu', (e) => e.preventDefault());
     });
+
+
+    // Run: hold only. Does not dispatch a key, so it cannot confirm or open a menu.
+    const runBtn = this.root.querySelector('[data-run]');
+    if (runBtn) {
+      const runDown = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        virtualRunHeld = true;
+        runBtn.classList.add('is-down');
+        try {
+          runBtn.setPointerCapture?.(e.pointerId);
+        } catch (_) {
+          /* ignore */
+        }
+      };
+      const runUp = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        virtualRunHeld = false;
+        runBtn.classList.remove('is-down');
+      };
+      runBtn.addEventListener('pointerdown', runDown);
+      runBtn.addEventListener('pointerup', runUp);
+      runBtn.addEventListener('pointercancel', runUp);
+      runBtn.addEventListener('lostpointercapture', runUp);
+      runBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
 
     // Actions: tap
     this.root.querySelectorAll('[data-action]').forEach((btn) => {
@@ -188,6 +220,7 @@ export class VirtualPad {
     this.root.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('has-virtual-pad');
     window.dispatchEvent(new Event('resize'));
+    virtualRunHeld = false;
     // Release any held dirs
     for (const key of [...virtualKeys]) {
       virtualKeys.delete(key);

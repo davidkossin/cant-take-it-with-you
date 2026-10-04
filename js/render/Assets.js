@@ -39,18 +39,18 @@ export function makePlayerSprite(
   const c = canvas(16, 24);
   const ctx = c.getContext('2d');
   const base = HAIR_COLORS[hairColor] || HAIR_COLORS.dark;
-  const hair = mixHex(base, PALETTE.hairGray, gray);
   const standing = frame < 0;
   const f = standing ? 0 : ((frame % 8) + 8) % 8;
+  const white = Math.max(0, Math.min(1, Number.isFinite(gray) ? gray : 0));
   // Shadow stays on the ground so the step reads as a lift, not a slide.
   px(ctx, 4, 22, 'rgba(0,0,0,0.35)', 8, 2);
 
   if (facing === 'left' || facing === 'right') {
-    drawSide(ctx, hair, hairLength, f, facing === 'left', standing);
+    drawSide(ctx, base, hairLength, f, facing === 'left', standing, white);
   } else if (facing === 'up') {
-    drawUp(ctx, hair, hairLength, f, standing);
+    drawUp(ctx, base, hairLength, f, standing, white);
   } else {
-    drawDown(ctx, hair, hairLength, f, standing);
+    drawDown(ctx, base, hairLength, f, standing, white);
   }
 
   cache.set(key, c);
@@ -77,12 +77,23 @@ function walkPose(f) {
   ][f];
 }
 
-/** Highlight / mid / shade ramps. Light comes from the upper left. */
-function playerTones(hair) {
+/**
+ * Highlight / mid / shade ramps. Light comes from the upper left.
+ * `white` is 0 at age 50 and below, 1 at age 100. It tints hair pixels only
+ * (H / h / d). The old sprite mixed the flat hair color toward gray, then
+ * this ramp mixed the dark hair pixels back toward black, so the white never
+ * showed. The black mix eases off as `white` rises.
+ */
+function playerTones(hair, white = 0) {
+  const t = Math.max(0, Math.min(1, white));
+  const aged = mixHex(hair, '#ffffff', t);
+  const shade = 0.55 * (1 - t) + 0.07 * t;
+  const lift = 0.28 * (1 - t) + 0.02 * t;
+  const mid = 0.1 * (1 - t);
   return {
-    H: mixHex(hair, '#ffffff', 0.28),
-    h: mixHex(hair, '#ffffff', 0.1),
-    d: mixHex(hair, '#000000', 0.55),
+    H: mixHex(aged, '#ffffff', lift),
+    h: mixHex(aged, '#ffffff', mid),
+    d: mixHex(aged, '#000000', shade),
     S: '#f8dcb8',
     s: '#e8b878',
     k: '#c09058',
@@ -136,9 +147,9 @@ function drawArms(ctx, pal, sx, y, arm, back) {
   blitCols(ctx, right, sx + 12, y + dropR, pal);
 }
 
-function drawDown(ctx, hair, hairLength, f, standing) {
+function drawDown(ctx, hair, hairLength, f, standing, white = 0) {
   const p = standing ? standPose() : walkPose(f);
-  const pal = playerTones(hair);
+  const pal = playerTones(hair, white);
   const sx = p.sway;
   const by = p.bob;
   drawLeg(ctx, pal, 4 + sx + p.lx, 16 + by, p.ll);
@@ -178,9 +189,9 @@ function drawDown(ctx, hair, hairLength, f, standing) {
   ], sx, 2 + by + p.hair, pal);
 }
 
-function drawUp(ctx, hair, hairLength, f, standing) {
+function drawUp(ctx, hair, hairLength, f, standing, white = 0) {
   const p = standing ? standPose() : walkPose(f);
-  const pal = playerTones(hair);
+  const pal = playerTones(hair, white);
   const sx = p.sway;
   const by = p.bob;
   drawLeg(ctx, pal, 4 + sx + p.lx, 16 + by, p.ll);
@@ -220,9 +231,9 @@ function drawUp(ctx, hair, hairLength, f, standing) {
   ], sx, 2 + by + p.hair, pal);
 }
 
-function drawSide(ctx, hair, hairLength, f, flip, standing) {
+function drawSide(ctx, hair, hairLength, f, flip, standing, white = 0) {
   const p = standing ? standPose() : walkPose(f);
-  const pal = playerTones(hair);
+  const pal = playerTones(hair, white);
   const y = p.bob;
   const stride = standing ? 0 : [-1, -2, 0, 1, 2, 1, 0, -1][f];
   const rear = standing ? 0 : [1, 0, 0, -1, -1, -2, 0, 1][f];

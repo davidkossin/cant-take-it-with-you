@@ -8,25 +8,28 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Outfit:wght@300;400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/game.css?v=0.5.16" />
+  <link rel="stylesheet" href="css/game.css?v=0.5.17" />
 </head>
 <body>
   <div class="topbar">
-    <a href="../">← Objects In Space</a>
-    <span>You Can't Take It With You</span>
-    <a href="./v2/" style="margin-left:auto;font-size:10px;opacity:0.85">V2</a>
+    <a class="back" href="../">← Objects In Space</a>
+    <span class="title">You Can't Take It With You</span>
+    <span class="topbar-tools">
+      <button type="button" id="fs-btn" class="fs-btn" aria-pressed="false">Full screen</button>
+      <a class="v2-link" href="./v2/">V2</a>
+    </span>
   </div>
 
   <div class="frame">
     <canvas id="game" width="1920" height="1080" aria-label="Game canvas"></canvas>
   </div>
   <p class="hint">
-    <span class="hint-desktop">Move with WASD / arrows · Hold Space to run · Talk with Enter / Z / E / Space · Esc = Pause (Portfolio / Map / Charts) · Auto-saves in localStorage</span>
-    <span class="hint-mobile">On phone: use on-screen pad · A = talk/confirm · B = back · Menu = pause</span>
+    <span class="hint-desktop">Move with WASD / arrows · Hold Space to run · Talk with Enter / Z / E / Space · Esc = Pause (Portfolio / Map / Charts) · F or Full screen · Auto-saves in localStorage</span>
+    <span class="hint-mobile">On phone: use on-screen pad · A = talk/confirm · B = back · Hold Run to run · Menu = pause</span>
   </p>
 
   <div id="virtual-pad" class="virtual-pad" hidden aria-hidden="true"></div>
 
-  <script type="module" src="js/main.js?v=0.5.16"></script>
+  <script type="module" src="js/main.js?v=0.5.17"></script>
 </body>
 </html>

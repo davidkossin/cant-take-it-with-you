@@ -3,8 +3,8 @@
  */
 
 import { TILE, VIEW_W, VIEW_H, PALETTE } from '../config.js';
-import { makeLamp, makeBlueTorch, makeTellerWindow, makeTellerIcon } from './Assets.js';
-import { paintSurface, paintWallShadow, paintRug, paintDoor, paintDecor, wallFace } from './hiTextures.js';
+import { makeLamp, makeBlueTorch } from './Assets.js';
+import { paintSurface, paintWallShadow, paintRug, paintDoor, paintDecor, paintTeller, wallFace } from './hiTextures.js';
 
 /**
  * Decision Room — north wall is doorway to a (new) Hallway of Time; tellers on
@@ -431,7 +431,6 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
 
   const lampFrame = Math.floor(animTime / 8) % 4;
   const lampSpr = makeLamp(lampFrame);
-  const tellerSpr = makeTellerWindow();
 
   for (const obj of world.interactables) {
     const sx = obj.x - camX;
@@ -439,24 +438,13 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
     if (sx < -40 || sy < -40 || sx > VIEW_W + 40 || sy > VIEW_H + 40) continue;
 
     if (obj.kind === 'teller') {
-      const icon = makeTellerIcon(obj.action || 'home');
-      if (obj.sideways) {
-        // Tall window on side wall; icon upright (not rotated with frame)
-        ctx.save();
-        ctx.translate(sx + 10, sy + 16);
-        ctx.rotate(-Math.PI / 2);
-        ctx.drawImage(tellerSpr, -16, -12);
-        ctx.restore();
-        // Icon centered on the tall pane, facing into the room
-        const ix = obj.wallSide === 'west' ? sx + 3 : sx + 1;
-        const iy = sy + 9;
-        ctx.drawImage(icon, ix, iy);
-      } else {
-        ctx.drawImage(tellerSpr, sx, sy);
-        // Icon centered on the glass pane (window is 32×24)
-        ctx.drawImage(icon, sx + 9, sy + 4);
-      }
-      // No wall text — full name shows in [E] prompt only
+      const spr = paintTeller(obj.action || 'home', obj.wallSide || 'south');
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(spr, sx + (spr.ox || 0), sy + (spr.oy || 0), spr.lw, spr.lh);
+      ctx.restore();
+      // No wall text — full name shows in the prompt only. Hit box is unchanged.
     } else if (obj.kind === 'year-door' || obj.kind === 'door' || obj.kind === 'end-door' || obj.kind === 'south-door' || obj.kind === 'west-door') {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';

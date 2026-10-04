@@ -12,6 +12,7 @@ import { HallwayScene } from './scenes/HallwayScene.js';
 import { EndingScene } from './scenes/EndingScene.js';
 import { PauseMenu } from './scenes/PauseMenu.js';
 import { VirtualPad } from './input/VirtualPad.js';
+import { installFullscreen, isOsFullscreen } from './input/Fullscreen.js';
 import { MobileTextInput } from './input/MobileTextInput.js';
 import {
   initDebugFromEnvironment,
@@ -53,6 +54,11 @@ function touchPadReserve() {
 }
 
 function fitCanvas() {
+  const { w: viewW, h: viewH } = availableViewport();
+  // Landscape (including a wide desktop window): drop extra chrome so the
+  // 16:9 frame can grow. Portrait keeps the roomier padding and the hint.
+  document.body.classList.toggle('is-landscape', viewW > viewH);
+
   const reserve = touchPadReserve();
   document.documentElement.style.setProperty('--pad-reserve', `${reserve}px`);
 
@@ -133,6 +139,11 @@ if (document.fonts?.ready) {
 initDebugFromEnvironment();
 
 const dialog = new Dialog();
+installFullscreen({
+  button: document.getElementById('fs-btn'),
+  onChange: () => fitCanvas(),
+  allowKey: () => !(dialog.active && dialog.mode === 'prompt'),
+});
 const mobileText = new MobileTextInput(canvas, dialog);
 mobileText.mount();
 const title = new TitleScene({});
@@ -240,6 +251,8 @@ window.addEventListener('keydown', async (e) => {
 
   // Esc opens pause map/charts during play
   if (KEYS.cancel.includes(e.key) && (mode === 'room' || mode === 'hallway') && game) {
+    // Escape leaves OS fullscreen. Don't also open pause in the same keypress.
+    if (isOsFullscreen()) return;
     e.preventDefault();
     if (mode === 'room') room.setInputBlocked(true);
     else hallway.setInputBlocked(true);

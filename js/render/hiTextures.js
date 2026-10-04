@@ -140,19 +140,15 @@ export function paintRug(w, h) {
   c.lw = w + pad;
   c.lh = h + pad;
   const ctx = c.getContext('2d');
-  const W = c.width;
-  const H = c.height;
-  ctx.fillStyle = 'rgba(0,0,0,0.35)';
-  roundRect(ctx, 10 * S, 8 * S, w * S, h * S, 8);
-  ctx.fill();
   const ox = 2 * S;
   const oy = 1 * S;
   const rw = w * S;
   const rh = h * S;
+  // No floor shadow under the rug. Wall-to-floor shading is painted separately.
   const g = ctx.createRadialGradient(ox + rw * 0.5, oy + rh * 0.45, 20, ox + rw * 0.5, oy + rh * 0.5, rw * 0.55);
-  g.addColorStop(0, '#a33a48');
-  g.addColorStop(0.7, '#7c2432');
-  g.addColorStop(1, '#5c1824');
+  g.addColorStop(0, '#2a62a0');
+  g.addColorStop(0.62, '#163e74');
+  g.addColorStop(1, '#0c274c');
   ctx.fillStyle = g;
   ctx.fillRect(ox, oy, rw, rh);
   ctx.strokeStyle = '#e6c86a';
@@ -168,7 +164,7 @@ export function paintRug(w, h) {
   ctx.rotate(Math.PI / 4);
   ctx.fillStyle = '#e6c86a';
   ctx.fillRect(-22 * (S / 4), -22 * (S / 4), 44 * (S / 4), 44 * (S / 4));
-  ctx.fillStyle = '#7c2432';
+  ctx.fillStyle = '#0c2a52';
   ctx.fillRect(-12 * (S / 4), -12 * (S / 4), 24 * (S / 4), 24 * (S / 4));
   ctx.restore();
   ctx.beginPath();
@@ -313,4 +309,322 @@ export function paintDecor(kind) {
   }
   cache.set(key, c);
   return c;
+}
+
+/**
+ * Decision Room teller window in the same painted language as the doors.
+ * Logical size matches the old stamp so hit targets do not move.
+ * South windows are wide; east/west windows are tall. Icons stay upright.
+ * @param {string} action
+ * @param {'south'|'west'|'east'|'north'} wallSide
+ */
+export function paintTeller(action, wallSide = 'south') {
+  const vertical = wallSide === 'west' || wallSide === 'east';
+  const lw = vertical ? 24 : 32;
+  const lh = vertical ? 32 : 24;
+  const key = `hiteller-${action}-${wallSide}-${lw}x${lh}`;
+  if (cache.has(key)) return cache.get(key);
+  const c = canvas(lw * S, lh * S);
+  c.lw = lw;
+  c.lh = lh;
+  // Side windows used to be the wide stamp rotated. Footprint stays 24×32 at x-2.
+  c.ox = vertical ? -2 : 0;
+  c.oy = 0;
+  const ctx = c.getContext('2d');
+  const W = c.width;
+  const H = c.height;
+  ctx.fillStyle = tellerWallGradient(ctx, W, H, wallSide);
+  ctx.fillRect(0, 0, W, H);
+
+  const wood = ctx.createLinearGradient(0, 0, W, H);
+  wood.addColorStop(0, '#e0b07a');
+  wood.addColorStop(0.45, '#a56b3c');
+  wood.addColorStop(1, '#5c3a22');
+  ctx.fillStyle = wood;
+  ctx.fillRect(W * 0.07, H * 0.07, W * 0.86, H * 0.86);
+  // Plank seams, same idea as the door boards.
+  ctx.strokeStyle = 'rgba(74, 42, 20, 0.4)';
+  ctx.lineWidth = Math.max(2, S / 2);
+  ctx.beginPath();
+  if (vertical) {
+    ctx.moveTo(W * 0.4, H * 0.1);
+    ctx.lineTo(W * 0.4, H * 0.9);
+    ctx.moveTo(W * 0.62, H * 0.1);
+    ctx.lineTo(W * 0.62, H * 0.9);
+  } else {
+    ctx.moveTo(W * 0.38, H * 0.1);
+    ctx.lineTo(W * 0.38, H * 0.9);
+    ctx.moveTo(W * 0.62, H * 0.1);
+    ctx.lineTo(W * 0.62, H * 0.9);
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = '#2e333b';
+  ctx.fillRect(W * 0.14, H * 0.14, W * 0.72, H * 0.72);
+  // Iron hinges on the outer stile.
+  ctx.fillStyle = '#3a3e46';
+  if (wallSide === 'east') {
+    ctx.fillRect(W * 0.78, H * 0.22, W * 0.1, H * 0.1);
+    ctx.fillRect(W * 0.78, H * 0.68, W * 0.1, H * 0.1);
+  } else if (vertical) {
+    ctx.fillRect(W * 0.12, H * 0.22, W * 0.1, H * 0.1);
+    ctx.fillRect(W * 0.12, H * 0.68, W * 0.1, H * 0.1);
+  } else {
+    ctx.fillRect(W * 0.16, H * 0.78, W * 0.16, H * 0.08);
+    ctx.fillRect(W * 0.68, H * 0.78, W * 0.16, H * 0.08);
+  }
+
+  const glass = glassRect(W, H, wallSide);
+  const gg = ctx.createLinearGradient(glass.x, glass.y, glass.x, glass.y + glass.h);
+  gg.addColorStop(0, '#d5e4ef');
+  gg.addColorStop(0.45, '#8eafc6');
+  gg.addColorStop(1, '#5d7c96');
+  ctx.fillStyle = gg;
+  ctx.fillRect(glass.x, glass.y, glass.w, glass.h);
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillRect(glass.x + glass.w * 0.08, glass.y + glass.h * 0.08, glass.w * 0.28, glass.h * 0.18);
+
+  drawTellerSill(ctx, W, H, wallSide);
+  paintTellerIcon(ctx, action, glass.x, glass.y, glass.w, glass.h);
+  cache.set(key, c);
+  return c;
+}
+
+function tellerWallGradient(ctx, W, H, wallSide) {
+  // Lighter at the outer top of the wall, darker where the wall meets the floor.
+  if (wallSide === 'west') {
+    const g = ctx.createLinearGradient(0, 0, W, 0);
+    g.addColorStop(0, '#c4b6a4');
+    g.addColorStop(0.35, '#7a6a58');
+    g.addColorStop(1, '#2e261e');
+    return g;
+  }
+  if (wallSide === 'east') {
+    const g = ctx.createLinearGradient(0, 0, W, 0);
+    g.addColorStop(0, '#2e261e');
+    g.addColorStop(0.65, '#7a6a58');
+    g.addColorStop(1, '#c4b6a4');
+    return g;
+  }
+  if (wallSide === 'north') {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#c4b6a4');
+    g.addColorStop(0.4, '#7a6a58');
+    g.addColorStop(1, '#2e261e');
+    return g;
+  }
+  // South wall: the room floor is above the window.
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#2e261e');
+  g.addColorStop(0.4, '#5c4c3c');
+  g.addColorStop(1, '#c4b6a4');
+  return g;
+}
+
+function glassRect(W, H, wallSide) {
+  if (wallSide === 'west') return { x: W * 0.18, y: H * 0.18, w: W * 0.5, h: H * 0.64 };
+  if (wallSide === 'east') return { x: W * 0.32, y: H * 0.18, w: W * 0.5, h: H * 0.64 };
+  return { x: W * 0.16, y: H * 0.28, w: W * 0.68, h: H * 0.48 };
+}
+
+function drawTellerSill(ctx, W, H, wallSide) {
+  ctx.fillStyle = '#6b4224';
+  if (wallSide === 'west') {
+    ctx.fillRect(W * 0.68, H * 0.12, W * 0.18, H * 0.76);
+    ctx.fillStyle = '#e6c86a';
+    ctx.fillRect(W * 0.68, H * 0.12, Math.max(3, W * 0.035), H * 0.76);
+    return;
+  }
+  if (wallSide === 'east') {
+    ctx.fillRect(W * 0.14, H * 0.12, W * 0.16, H * 0.76);
+    ctx.fillStyle = '#e6c86a';
+    ctx.fillRect(W * 0.27, H * 0.12, Math.max(3, W * 0.035), H * 0.76);
+    return;
+  }
+  ctx.fillRect(W * 0.1, H * 0.08, W * 0.8, H * 0.16);
+  ctx.fillStyle = '#e6c86a';
+  ctx.fillRect(W * 0.1, H * 0.22, W * 0.8, Math.max(3, H * 0.04));
+}
+
+function paintTellerIcon(ctx, action, x, y, w, h) {
+  const pad = Math.min(w, h) * 0.06;
+  const ix = x + pad;
+  const iy = y + pad;
+  const iw = w - pad * 2;
+  const ih = h - pad * 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  const draw = TELLER_ICONS[action] || TELLER_ICONS.home;
+  draw(ctx, ix, iy, iw, ih);
+  ctx.restore();
+}
+
+const TELLER_ICONS = {
+  home: iconHome,
+  stock: iconChart,
+  kid: iconKid,
+  purchase: iconBag,
+  job: iconPaycheck,
+  borrow: iconVault,
+};
+
+function iconHome(ctx, x, y, w, h) {
+  ctx.fillStyle = '#9a342c';
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.06, y + h * 0.44);
+  ctx.lineTo(x + w * 0.5, y + h * 0.06);
+  ctx.lineTo(x + w * 0.94, y + h * 0.44);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#f4e7d0';
+  ctx.fillRect(x + w * 0.18, y + h * 0.42, w * 0.64, h * 0.52);
+  ctx.fillStyle = '#5c3a22';
+  ctx.fillRect(x + w * 0.42, y + h * 0.64, w * 0.16, h * 0.3);
+  ctx.fillStyle = '#3d86b4';
+  ctx.fillRect(x + w * 0.26, y + h * 0.52, w * 0.12, h * 0.14);
+  ctx.fillRect(x + w * 0.62, y + h * 0.52, w * 0.12, h * 0.14);
+}
+
+function iconChart(ctx, x, y, w, h) {
+  ctx.strokeStyle = '#e6c86a';
+  ctx.lineWidth = Math.max(3, h * 0.07);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.1, y + h * 0.84);
+  ctx.lineTo(x + w * 0.92, y + h * 0.84);
+  ctx.stroke();
+  const heights = [0.26, 0.4, 0.56, 0.74];
+  const colors = ['#2c6eac', '#3c88c4', '#6eb0dc', '#f0d78a'];
+  heights.forEach((bh, i) => {
+    const bw = w * 0.14;
+    const bx = x + w * (0.16 + i * 0.18);
+    const top = y + h * (0.84 - bh);
+    ctx.fillStyle = colors[i];
+    ctx.fillRect(bx, top, bw, y + h * 0.84 - top);
+  });
+}
+
+function iconKid(ctx, x, y, w, h) {
+  const head = Math.min(w, h) * 0.16;
+  ctx.fillStyle = '#efc79a';
+  ctx.beginPath();
+  ctx.arc(x + w * 0.5, y + h * 0.26, head, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#6a4030';
+  ctx.beginPath();
+  ctx.arc(x + w * 0.5, y + h * 0.22, head, Math.PI * 1.05, Math.PI * 1.95);
+  ctx.fill();
+  ctx.fillStyle = '#3f9a62';
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.3, y + h * 0.44);
+  ctx.lineTo(x + w * 0.7, y + h * 0.44);
+  ctx.lineTo(x + w * 0.76, y + h * 0.72);
+  ctx.lineTo(x + w * 0.24, y + h * 0.72);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#2c3c5c';
+  ctx.fillRect(x + w * 0.36, y + h * 0.72, w * 0.1, h * 0.22);
+  ctx.fillRect(x + w * 0.54, y + h * 0.72, w * 0.1, h * 0.22);
+}
+
+function iconBag(ctx, x, y, w, h) {
+  ctx.strokeStyle = '#e6c86a';
+  ctx.lineWidth = Math.max(3, w * 0.07);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(x + w * 0.38, y + h * 0.3, w * 0.12, Math.PI, 0);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x + w * 0.62, y + h * 0.3, w * 0.12, Math.PI, 0);
+  ctx.stroke();
+  ctx.fillStyle = '#6a4584';
+  roundRect(ctx, x + w * 0.16, y + h * 0.32, w * 0.68, h * 0.58, Math.min(w, h) * 0.08);
+  ctx.fill();
+  ctx.fillStyle = '#f0d78a';
+  ctx.fillRect(x + w * 0.4, y + h * 0.5, w * 0.2, h * 0.18);
+}
+
+function iconPaycheck(ctx, x, y, w, h) {
+  ctx.fillStyle = '#f7f1e2';
+  roundRect(ctx, x + w * 0.06, y + h * 0.16, w * 0.7, h * 0.66, Math.min(w, h) * 0.06);
+  ctx.fill();
+  ctx.strokeStyle = '#8a7048';
+  ctx.lineWidth = Math.max(2, w * 0.035);
+  ctx.stroke();
+  ctx.strokeStyle = '#c8b898';
+  ctx.lineWidth = Math.max(2, h * 0.045);
+  ctx.beginPath();
+  for (const ly of [0.36, 0.5, 0.64]) {
+    ctx.moveTo(x + w * 0.16, y + h * ly);
+    ctx.lineTo(x + w * 0.58, y + h * ly);
+  }
+  ctx.stroke();
+  ctx.fillStyle = '#e6c86a';
+  ctx.beginPath();
+  ctx.arc(x + w * 0.74, y + h * 0.64, Math.min(w, h) * 0.18, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#8a6230';
+  ctx.beginPath();
+  ctx.arc(x + w * 0.74, y + h * 0.64, Math.min(w, h) * 0.07, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function iconVault(ctx, x, y, w, h) {
+  // Borrow: three gold coins and a curved arrow aimed at the stack.
+  // Kept inside the pane so the narrow east window does not clip it.
+  const cx = x + w * 0.36;
+  const layers = [
+    { t: 0.74, rx: 0.22 },
+    { t: 0.54, rx: 0.19 },
+    { t: 0.35, rx: 0.16 },
+  ];
+  for (const coin of layers) {
+    const cy = y + h * coin.t;
+    const rx = w * coin.rx;
+    const ry = Math.max(4, h * 0.09);
+    ctx.fillStyle = '#6e4c22';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + ry * 0.5, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#e6c86a';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f6e7b0';
+    ctx.beginPath();
+    ctx.ellipse(cx - rx * 0.15, cy - ry * 0.15, rx * 0.36, ry * 0.36, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const r = Math.min(w * 0.22, h * 0.2);
+  const acx = x + w * 0.64;
+  const acy = y + h * 0.38;
+  const a0 = -1.05;
+  const a1 = 1.05;
+  ctx.strokeStyle = '#f7f1e2';
+  ctx.lineWidth = Math.max(3, Math.min(w, h) * 0.055);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(acx, acy, r, a0, a1);
+  ctx.stroke();
+
+  const hx = acx + Math.cos(a1) * r;
+  const hy = acy + Math.sin(a1) * r;
+  const dir = a1 + Math.PI / 2;
+  const head = Math.min(w, h) * 0.11;
+  ctx.fillStyle = '#f7f1e2';
+  ctx.beginPath();
+  ctx.moveTo(hx + Math.cos(dir) * head, hy + Math.sin(dir) * head);
+  ctx.lineTo(
+    hx + Math.cos(dir + 2.45) * head * 0.78,
+    hy + Math.sin(dir + 2.45) * head * 0.78
+  );
+  ctx.lineTo(
+    hx + Math.cos(dir - 2.45) * head * 0.78,
+    hy + Math.sin(dir - 2.45) * head * 0.78
+  );
+  ctx.closePath();
+  ctx.fill();
 }
