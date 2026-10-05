@@ -282,10 +282,12 @@ window.addEventListener('keydown', async (e) => {
 
   if (booting || interacting) return;
 
-  // Esc opens pause map/charts during play
+  // Esc / Menu opens pause map/charts during play
   if (KEYS.cancel.includes(e.key) && (mode === 'room' || mode === 'hallway') && game) {
-    // Escape leaves OS fullscreen. Don't also open pause in the same keypress.
-    if (isOsFullscreen()) return;
+    // A trusted Escape exits OS fullscreen; do not also open pause on that keypress.
+    // Synthetic Escape from the on-screen Menu button must still open pause in
+    // OS fullscreen and in the iOS viewport-fill fallback (is-max-fill).
+    if (isOsFullscreen() && e.isTrusted && e.key === 'Escape') return;
     e.preventDefault();
     if (mode === 'room') room.setInputBlocked(true);
     else hallway.setInputBlocked(true);

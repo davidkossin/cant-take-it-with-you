@@ -11,6 +11,7 @@ import { projectYears, computeWorth, cloneState, findBankInsolvencyIndex } from 
 import { currentNode, enterYearRoom, commitHallwayNode, returnToLeftDecisionRoom, completeJourney } from '../state/GameState.js';
 import { autoSave } from '../state/SaveSystem.js';
 import { log as debugLog, setHallwayStash } from '../debug/Logger.js';
+import { virtualStick } from '../input/VirtualPad.js';
 
 export class HallwayScene {
   constructor() {
@@ -180,6 +181,9 @@ export class HallwayScene {
         return hitsGlassWall(this.glassWall, x, y, w, h);
       });
       this.prompt = findFacingInteractable(this.player, this.world, 22);
+      if (!this.prompt && this._canInteractGlassWall()) {
+        this.prompt = { label: 'Glass wall', kind: 'glass-wall' };
+      }
       this._detectGlassWallBump();
     }
 
@@ -203,30 +207,58 @@ export class HallwayScene {
   }
 
   /**
-   * Queue Out of Cash when the player is blocked by the glass while moving north.
-   * Previous justSouth band checked player-bottom vs glass-top (wrong edge) so the
-   * message almost never fired. Debounce: re-arm only after stepping away (or after
-   * dialog closes and the player leaves contact).
+   * True when the player is trying to move north (keyboard/D-pad or joystick).
+   * Joystick motion does not set ArrowUp in virtualKeys, so pressed(KEYS.up)
+   * alone missed glass bumps after the on-screen stick replaced the walk D-pad.
+   */
+  _wantingNorth() {
+    const p = this.player;
+    if (p?.pressed(KEYS.up)) return true;
+    // Match VirtualPad stick deadzone: only count a clear northward deflect.
+    return virtualStick.y < -0.18;
+  }
+
+  /** Standing just south of the glass, overlapping its X span. */
+  _abuttingGlassSouth() {
+    const g = this.glassWall;
+    const p = this.player;
+    if (!g || !p) return false;
+    const inX = p.x + p.w > g.x && p.x < g.x + g.w;
+    return inX && p.y <= g.y + g.h + 6 && p.y + p.h >= g.y - 2;
+  }
+
+  /** Close enough and facing the barrier for A / confirm to open the description. */
+  _canInteractGlassWall() {
+    const g = this.glassWall;
+    const p = this.player;
+    if (!g || !p || this._glassDialogShowing) return false;
+    const inX = p.x + p.w > g.x && p.x < g.x + g.w;
+    const near = inX && p.y <= g.y + g.h + 28 && p.y + p.h >= g.y - 8;
+    return near && p.facing === 'up';
+  }
+
+  /**
+   * Queue funding-shortfall dialog when the player is blocked by the glass while
+   * moving north (keys or stick). Debounce: re-arm only after stepping away (or
+   * after dialog closes and the player leaves contact).
    */
   _detectGlassWallBump() {
     if (!this.glassWall || this._glassDialogShowing) return;
     const g = this.glassWall;
     const p = this.player;
-    const inX = p.x + p.w > g.x && p.x < g.x + g.w;
+    const wantingNorth = this._wantingNorth();
     // Corridor: smaller y = north. Player approaches from south; blocked when a
     // northward step would overlap the glass AABB.
     const step = Math.max((p.speed || 1) * (p.runHeld ? RUN_MULTIPLIER : 1), 1);
     const blockedByGlass =
-      p.pressed(KEYS.up) && hitsGlassWall(g, p.x, p.y - step, p.w, p.h);
-    // Abutting / overlapping from the south (player top near glass bottom)
-    const abutSouth =
-      inX && p.y <= g.y + g.h + 6 && p.y + p.h >= g.y - 2;
+      wantingNorth && hitsGlassWall(g, p.x, p.y - step, p.w, p.h);
+    const abutSouth = this._abuttingGlassSouth();
 
     if (!abutSouth && !blockedByGlass) {
       this._glassCanShow = true;
       return;
     }
-    if ((blockedByGlass || (abutSouth && p.pressed(KEYS.up))) && this._glassCanShow) {
+    if ((blockedByGlass || (abutSouth && wantingNorth)) && this._glassCanShow) {
       this._glassMsgQueued = true;
       this._glassCanShow = false;
     }
@@ -271,6 +303,10 @@ export class HallwayScene {
   }
 
   async tryInteract(game, dialog) {
+    if (this._canInteractGlassWall()) {
+      await this.showGlassWallMessage(dialog);
+      return null;
+    }
     const obj = findFacingInteractable(this.player, this.world, 22);
     if (!obj) return null;
     this.player?.clearKeys();

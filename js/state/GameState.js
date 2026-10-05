@@ -64,16 +64,15 @@ export function createDefaultSetup() {
 /**
  * Standard starter for New Game → Standard portfolio (skip the questionnaire).
  *
- * Starman, age 30, married, no children. Salary $78k, spend $50k.
+ * Starman, age 30, married, no children. Salary $80k, spend $48k.
  * Primary home $380k, mortgage $270k @ 6.5% / 27 years left.
- * Cash $5,500, savings $15,000 @ 2%, stocks $41,500 (basis $35,275),
+ * Cash $15,000, savings $35,000 @ 2%, stocks $85,000 (basis $72,250),
  * 401(k) $62,000 (6% contribution, 100% match on the first 3% of salary).
  * ZIP 85001, Standard difficulty.
  *
- * Starting Cash $5,500, starting net worth $234,000 (unchanged dollar inputs).
- * Note (v0.6.0): Standard equity growth default is the researched 2016–2025
- * S&P 500 total-return mean (~15.9%), so the deterministic glass-wall index
- * is no longer 15. Do not retune these dollar inputs to chase a glass index.
+ * Smoke (deterministic hallway / projectYears): glass year index ≈ 15
+ * (age ~45), starting Cash $15,000, starting net worth $307,000.
+ * Dollar inputs only — engine math unchanged.
  */
 export function createStandardPortfolioSetup() {
   const home = {
@@ -87,7 +86,7 @@ export function createStandardPortfolioSetup() {
     costBasis: 380000,
     basisKnown: true,
   };
-  const spend = 50000;
+  const spend = 48000;
   return {
     financeVersion: 2,
     spouseSalary: 0,
@@ -99,15 +98,15 @@ export function createStandardPortfolioSetup() {
     age: 30,
     hairColor: 'dark',
     hairLength: 'short',
-    cash: 5500,
-    salary: 78000,
-    savings: 15000,
+    cash: 15000,
+    salary: 80000,
+    savings: 35000,
     savingsRate: 0.02,
     housing: 'own',
     monthlyRent: 0,
     homes: [home],
-    stocksTotal: 41500,
-    stocksCostBasis: 35275,
+    stocksTotal: 85000,
+    stocksCostBasis: 72250,
     stocksHoldings: [],
     stocksMode: 'total',
     has401k: true,

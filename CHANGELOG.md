@@ -10,6 +10,16 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-10-05
+
+### Fixed
+- Mobile fullscreen pause: on-screen **Menu** (synthetic Escape) no longer no-ops while OS fullscreen is active. Trusted Escape still exits fullscreen without opening pause; Menu and Escape still pause in the iOS viewport-fill fallback and on desktop.
+- Hallway glass wall description: bump detection again fires when walking north with the **joystick** (not only ArrowUp / D-pad keys), and **A** / confirm while facing the glass opens the funding-shortfall dialog.
+
+### Changed
+- Starman Standard portfolio retuned for engine v2 funding walls (dollar inputs only; no engine math changes): salary $80k, spend $48k, Cash $15k, savings $35k, stocks $85k (basis $72,250); home / mortgage / 401(k) / ZIP / difficulty unchanged. Deterministic hallway smoke: glass year index ≈ **15**, starting Cash **$15,000**, starting net worth **$307,000**.
+- Cache-bust / `GAME_VERSION` bumped to **0.6.3**; the Godot `v2/` export is unchanged.
+
 ## [0.6.2] — 2026-10-04
 
 ### Added
