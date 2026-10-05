@@ -10,6 +10,8 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-10-05
+
 ### Changed
 - Hallway of Time now follows one complete Monte Carlo path selected nearest the terminal net-worth median of 1,000 simulations, including failed paths. Simulated gains, losses, inflation and life events drive the HUD, year doors, funding wall and ending through the shared monthly engine.
 - Persist the selected seed/path on the game across saves, year rooms, timeline rewinds and changed decisions; larger chart ensembles refine uncertainty bands without rerolling the Hallway.
