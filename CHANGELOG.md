@@ -10,6 +10,8 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-10-04
+
 ### Added
 - Financial engine v2 with twelve monthly cash-flow periods, authoritative investment lots, tax-year records and annual reconciliation statements.
 - Seeded correlated lognormal equity/bond returns; shared account exposures; 1,000 / 5,000 / 10,000-path Monte Carlo in a worker.
@@ -28,7 +30,7 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ### Changed
 - Illustrative long-horizon planning defaults replace automatic extrapolation of 2016–2025 stock-market averages. Quotes update valuation only.
-- Next build version `0.6.2`; the Godot `v2/` export is unchanged.
+- Cache-bust / `GAME_VERSION` bumped to **0.6.2**; the Godot `v2/` export is unchanged.
 - State tax approximations and unsupported advanced tax/benefit cases are explicitly described in game and documentation.
 
 ## [0.6.1] — 2026-10-04
