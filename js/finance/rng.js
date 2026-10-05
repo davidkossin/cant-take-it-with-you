@@ -1,5 +1,5 @@
 /**
- * Seeded PRNG for deterministic hallway projections (no HUD jitter).
+ * Seeded PRNG for reproducible Monte Carlo paths and Hallway playback.
  * Mulberry32 — compact, decent distribution for gameplay noise.
  */
 

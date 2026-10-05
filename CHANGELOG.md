@@ -10,6 +10,13 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+### Changed
+- Hallway of Time now follows one complete Monte Carlo path selected nearest the terminal net-worth median of 1,000 simulations, including failed paths. Simulated gains, losses, inflation and life events drive the HUD, year doors, funding wall and ending through the shared monthly engine.
+- Persist the selected seed/path on the game across saves, year rooms, timeline rewinds and changed decisions; larger chart ensembles refine uncertainty bands without rerolling the Hallway.
+- Charts overlay the Hallway path separately from the pointwise median; yearly costs and CSV export use that same path. Existing recorded journeys are preserved.
+- Initial Hallway projections run in a worker with progress and blocked movement/doors until ready; Menu remains available, failed requests can be retried, and canceled workers cannot overwrite a newer result.
+- Added regression checks for path selection, continuity, persistence, loading/retry and worker behavior. Game/module cache version **0.6.4**, engine **2.0.1**; the v0.6.3 mobile-control fixes and Godot `v2/` export are preserved.
+
 ## [0.6.3] — 2026-10-05
 
 ### Fixed

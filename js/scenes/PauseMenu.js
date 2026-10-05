@@ -535,8 +535,10 @@ export class PauseMenu {
   exportForecast() {
     const f = this.forecast.result;
     if (!f) return;
-    const rows = [['year','age','net_worth_p10','net_worth_p50','net_worth_p90','real_net_worth_p50','liquid_p10','liquid_p50','liquid_p90','paths','success_rate','seed','engine','assumptions','tax_rules'],
-      ...f.series.map(r => [r.year,r.age,r.netWorth.p10,r.netWorth.p50,r.netWorth.p90,r.realNetWorth.p50,r.liquid.p10,r.liquid.p50,r.liquid.p90,f.count,f.successProbability,f.seed,f.engineVersion,f.assumptionVersion,f.taxRuleVersion])];
+    const rows = [['year','age','net_worth_p10','net_worth_p50','net_worth_p90','real_net_worth_p50','liquid_p10','liquid_p50','liquid_p90','hallway_net_worth','hallway_liquid','hallway_real_net_worth','hallway_real_liquid','hallway_path_index','hallway_selection_paths','hallway_origin_year','paths','success_rate','seed','engine','assumptions','tax_rules'],
+      ...f.series.map((r,i) => [r.year,r.age,r.netWorth.p10,r.netWorth.p50,r.netWorth.p90,r.realNetWorth.p50,r.liquid.p10,r.liquid.p50,r.liquid.p90,
+        f.scenarioSeries[i].netWorth,f.scenarioSeries[i].liquid,f.scenarioSeries[i].realNetWorth,f.scenarioSeries[i].realLiquid,
+        f.scenario.simulationIndex,f.scenario.selectionPaths,f.scenario.originYear,f.count,f.successProbability,f.seed,f.engineVersion,f.assumptionVersion,f.taxRuleVersion])];
     const blob = new Blob([rows.map(r => r.join(',')).join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob), anchor = document.createElement('a');
     anchor.href = url; anchor.download = 'cant-take-it-forecast.csv'; anchor.click();
@@ -550,10 +552,10 @@ export class PauseMenu {
       drawWorthChart(ctx, (game.worthHistory || []).map(r => ({ ...r,
         netWorth: this.chartReal && r.legacy ? null : r.netWorth / (this.chartReal ? r.priceIndex || 1 : 1), bank: this.chartReal && r.legacy ? null : r.bank / (this.chartReal ? r.priceIndex || 1 : 1) })),
         { x: x + 36, y: y + 108, w: boxW - 80, h: boxH - 200, series: ['netWorth', 'bank'] });
-      ctx.fillText('Recorded reference-path outcomes; old saves may contain legacy-engine years.', x + 28, y + boxH - 38);
+      ctx.fillText('Recorded journeys; earlier saves may contain reference-path or legacy-engine years.', x + 28, y + boxH - 38);
       return;
     }
-    this.forecast.request(game.portfolio, this.forecastPaths);
+    this.forecast.request(game.portfolio, this.forecastPaths, game.hallwayScenario || null);
     const f = this.forecast.result;
     if (!f) {
       ctx.fillStyle = '#d4a84b'; ctx.font = '20px "Press Start 2P", monospace';
@@ -577,9 +579,9 @@ export class PauseMenu {
     yy += 34;ctx.font = '14px "Press Start 2P", monospace';ctx.fillStyle = '#aaa';
     const reference = f.reference[Math.max(0,this.chartYear - 1)]?.statement;
     if (this.chartYear && reference) {
-      ctx.fillText('Reference year ' + reference.year + ': required costs ' + money(reference.requiredSpending) +
+      ctx.fillText('Hallway ' + money(f.scenarioSeries[this.chartYear][metric]) + ' · costs ' + money(reference.requiredSpending) +
         ' · income/payroll tax ' + money(reference.tax.total) + ' · shortfall ' + money(reference.unfunded), x + 28, yy);
-    } else ctx.fillText('Reference path uses median annual log shocks; it is separate from simulated percentile paths.', x + 28, yy);
+    } else ctx.fillText('Hallway follows one complete simulated path; the median line shows annual ensemble percentiles.', x + 28, yy);
     yy += 30;
     ctx.fillText('Stress: early crash ' + (f.stress.crash.success ? 'funded' : 'shortfall') + ' · persistent 7% inflation ' +
       (f.stress.inflation.success ? 'funded' : 'shortfall') + ' · seed ' + f.seed, x + 28, yy);

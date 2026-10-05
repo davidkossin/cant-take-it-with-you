@@ -16,7 +16,7 @@ A 16-bit, top-down life & finance RPG (A Link to the Past vibe) playable in the 
    - Job / Retire
    - **Borrow** — HELOC or loan against shares (asset-backed only; APRs shown)
 4. **North door** — “Hallway of Time.” Confirm leaving the year.
-5. **Hallway** — Narrow corridor through a dark purple stippled void. First door = **leave year + 1**. HUD age / year / Cash / portfolio project forward (deterministic). A **glass wall** blocks the reference path at its first unfunded obligation; zero checking cash alone is not a failure. Lanterns flicker beside doors.
+5. **Hallway** — Narrow corridor through a dark purple stippled void. First door = **leave year + 1**. HUD and year doors follow one complete Monte Carlo path selected near the terminal median of 1,000 simulations. Gains, losses and life-event shocks are saved and reused across year rooms and timeline branches. A **glass wall** blocks this path at its first unfunded obligation; zero checking cash alone is not a failure. Pause → Charts shows the Hallway path alongside the uncertainty bands. Lanterns flicker beside doors.
 6. **Esc** — Pause: **Portfolio** (holdings / net worth), **Map** (timeline tree — time ↑, forks ↗ right as Y branches; jump back to a Hallway node; **C Compare** selects two timelines and a year for side-by-side portfolio snapshots), and **Charts** (Monte Carlo forecasts and recorded history).
 7. **Age 100** — “End of the Line.” Ending → See your charts / New Game.
 8. **Saves** — Auto-save on entering a year’s room and when entering the hallway (`ycitwy_saves_v2`).

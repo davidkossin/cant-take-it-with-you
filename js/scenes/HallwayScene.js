@@ -7,14 +7,18 @@ import {
   isSolid,
   findFacingInteractable,
 } from '../render/World.js';
-import { projectYears, computeWorth, cloneState, findBankInsolvencyIndex } from '../finance/Engine.js';
+import { computeWorth, cloneState, findBankInsolvencyIndex } from '../finance/Engine.js';
+import { projectJourney, isJourneyScenario, HALLWAY_PATHS } from '../finance/Journey.js';
+import { ForecastClient } from '../finance/ForecastClient.js';
 import { currentNode, enterYearRoom, commitHallwayNode, returnToLeftDecisionRoom, completeJourney } from '../state/GameState.js';
 import { autoSave } from '../state/SaveSystem.js';
 import { log as debugLog, setHallwayStash } from '../debug/Logger.js';
 import { virtualStick } from '../input/VirtualPad.js';
 
 export class HallwayScene {
-  constructor() {
+  constructor({ forecast = new ForecastClient() } = {}) {
+    this.forecast = forecast;
+    this.ready = false;
     this.world = null;
     this.player = null;
     this.hud = new Hud();
@@ -45,7 +49,7 @@ export class HallwayScene {
       : node?.snapshotId
         ? game.timeline.snapshots[node.snapshotId]
         : cloneState(game.portfolio);
-    if (!this.baseline) this.baseline = cloneState(game.portfolio);
+    this.baseline = cloneState(this.baseline || game.portfolio);
 
     // Sync portfolio to baseline when entering hallway
     game.portfolio = cloneState(this.baseline);
@@ -70,23 +74,31 @@ export class HallwayScene {
     if (!(cur && cur.type === 'hallway' && cur.year === this.leaveYear && cur.age === this.leaveAge)) {
       commitHallwayNode(game);
     }
+    game.scene = 'hallway';
 
-    // Deterministic projection — no noise so HUD doesn't jitter
-    const yearsToProject = Math.max(0, MAX_AGE - this.leaveAge);
-    this.snapshots = [
-      { state: cloneState(this.baseline), worth: computeWorth(this.baseline), events: [] },
-    ];
-    if (yearsToProject > 0) {
-      const snaps = projectYears(
-        this.baseline,
-        yearsToProject,
-        game.portfolio.difficulty || this.baseline.difficulty,
-        { deterministic: true }
-      );
-      for (const s of snaps) {
-        this.snapshots.push({ state: s.state, worth: s.worth, events: s.events || [], statement: s.statement });
-      }
+    this.ready = false;
+    this.snapshots = [{ state: cloneState(this.baseline), worth: computeWorth(this.baseline), events: [] }];
+    this.visual = this.snapshots[0];
+    this.eventAuras = [];
+    this.eventBanner = null;
+    this.glassWall = null;
+    this._glassMsgQueued = false;
+    this._glassDialogShowing = false;
+    this._glassCanShow = true;
+    this.setInputBlocked(true);
+    if (isJourneyScenario(game.hallwayScenario)) {
+      this._installProjection(game, game.hallwayScenario);
+    } else {
+      this.forecast.request(this.baseline, HALLWAY_PATHS);
+      if (this.forecast.result) this._installProjection(game, this.forecast.result.scenario);
+      else autoSave(game, 'end');
     }
+  }
+
+  _installProjection(game, scenario) {
+    this.snapshots = projectJourney(this.baseline, scenario);
+    // Keep the scenario outside portfolio snapshots so rewinding cannot reroll the future.
+    game.hallwayScenario = cloneState(scenario);
     this.eventAuras = buildEventAuras(this.world, this.snapshots, this.leaveYear);
     this.eventBanner = null;
     this.visual = this.snapshots[0];
@@ -128,6 +140,7 @@ export class HallwayScene {
     debugLog('hallway_enter', {
       leaveYear: this.leaveYear,
       leaveAge: this.leaveAge,
+      scenario: game.hallwayScenario,
       baselineCash: this.baseline?.cash ?? null,
       baselineSalary: this.baseline?.salary ?? null,
       baselineSpending: this.baseline?.annualSpending ?? null,
@@ -148,15 +161,19 @@ export class HallwayScene {
         salary: s.state?.salary,
       })),
     });
+    this.ready = true;
+    this.setInputBlocked(false);
     autoSave(game, 'end');
   }
 
   leave() {
     this.player?.unbindInput();
+    this.forecast.cancel();
   }
 
   setInputBlocked(blocked) {
     if (!this.player) return;
+    blocked = blocked || !this.ready;
     if (blocked) {
       if (this.player.inputEnabled) this.player.clearKeys();
       this.player.inputEnabled = false;
@@ -168,6 +185,10 @@ export class HallwayScene {
 
   update(game, dialog) {
     this.animTime += 1;
+    if (!this.ready) {
+      if (this.forecast.result) this._installProjection(game, this.forecast.result.scenario);
+      else { this.setInputBlocked(true); return; }
+    }
     const blocked = !!dialog?.active || this._glassDialogShowing;
     if (blocked) {
       this.setInputBlocked(true);
@@ -284,7 +305,7 @@ export class HallwayScene {
       age: this.glassWall.age,
     });
     await dialog.show(
-      `The reference path cannot fund all required costs in ${y - 1}.\n` +
+      `This simulated path cannot fund all required costs in ${y - 1}.\n` +
         `You cannot continue until you make a financial decision:\n` +
         `enter an earlier year’s Decision Room to change income, spending, assets or borrowing.`,
       { title: 'Funding shortfall' }
@@ -303,6 +324,10 @@ export class HallwayScene {
   }
 
   async tryInteract(game, dialog) {
+    if (!this.ready) {
+      if (this.forecast.error) this.forecast.retry(this.baseline, HALLWAY_PATHS);
+      return null;
+    }
     if (this._canInteractGlassWall()) {
       await this.showGlassWallMessage(dialog);
       return null;
@@ -319,7 +344,7 @@ export class HallwayScene {
       state.age = obj.age;
 
       const ok = await dialog.confirm(
-        `Enter Decision Room for ${obj.year} (age ${obj.age})?\nContinues the reference path; view uncertainty in Pause → Charts.`,
+        `Enter Decision Room for ${obj.year} (age ${obj.age})?\nContinues your Monte Carlo path; view uncertainty in Pause → Charts.`,
         { title: 'Year Door', yes: 'Enter', no: 'Stay' }
       );
       if (!ok) {
@@ -415,6 +440,32 @@ export class HallwayScene {
     const portfolio = this.visual?.state || game.portfolio;
     const worth = this.visual?.worth || computeWorth(portfolio);
     this.hud.draw(ctx, portfolio, worth);
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    if (!this.ready) {
+      const top = HUD_H + 180, width = 1600, left = (FRAME_W - width) / 2;
+      ctx.fillStyle = 'rgba(10,8,24,0.94)';
+      ctx.fillRect(left, top, width, 230);
+      ctx.font = '24px "Press Start 2P", monospace';
+      ctx.fillStyle = '#d4a84b';
+      ctx.fillText('Preparing your Monte Carlo journey', FRAME_W / 2, top + 28);
+      ctx.font = '18px "Press Start 2P", monospace';
+      ctx.fillStyle = '#ddd';
+      ctx.fillText(this.forecast.error ? 'Projection unavailable. Press A / Enter to retry.' :
+        HALLWAY_PATHS + ' paths · ' + Math.round(this.forecast.progress * 100) + '%', FRAME_W / 2, top + 78);
+      ctx.fillStyle = '#aaa';
+      ctx.fillText('One complete path near the median final outcome.', FRAME_W / 2, top + 130);
+      ctx.fillText('Menu remains available while the projection runs.', FRAME_W / 2, top + 170);
+    } else {
+      ctx.font = '14px "Press Start 2P", monospace';
+      ctx.fillStyle = 'rgba(10,8,24,0.8)';
+      ctx.fillRect(280, HUD_H + 8, FRAME_W - 560, 30);
+      ctx.fillStyle = '#80e0ef';
+      ctx.fillText('Monte Carlo journey · gains and losses · Pause → Charts for the range', FRAME_W / 2, HUD_H + 16);
+    }
+    ctx.restore();
 
     // Life-event banner (playfield bottom); prompt sits just below if both active
     if (this.eventBanner) {

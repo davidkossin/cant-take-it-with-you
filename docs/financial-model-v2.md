@@ -1,6 +1,6 @@
 # Financial model v2 — existing JavaScript game
 
-Game version: **0.6.2**. Engine version: **2.0.0**. Assumptions: **planning-2026-1**. Federal rule set: **irs-2026-1**. Reviewed October 4, 2026 (America/Phoenix).
+Game version: **0.6.4**. Engine version: **2.0.1**. Assumptions: **planning-2026-1**. Federal rule set: **irs-2026-1**. Original rule review October 4, 2026 (America/Phoenix); Hallway integration updated October 5, 2026.
 
 This corrects the existing game’s financial system; it does not recreate the game. Room/teller decisions, the hallway, timeline forks, saves, profiles and ending remain in the root JavaScript application. The compiled Godot `v2/` export is separate and is not changed.
 
@@ -116,15 +116,19 @@ m = ln(1+a) - s²/2
 return = exp(m + s×z) - 1, z ~ Normal(0,1)
 ```
 
-This matches the configured simple-return moments. The hallway’s stable reference path uses `z=0`, the **median annual log shock**; it is not a percentile of a complete spending plan or a guaranteed future. Monte Carlo results are never copied into gameplay balances.
+This matches the configured simple-return moments. The Hallway now follows **one actual, complete Monte Carlo trajectory**, replacing the old zero-shock reference projection. On its first entry, a worker simulates 1,000 paths from the committed room baseline through age 100. The path whose terminal nominal net worth is closest to that ensemble's median becomes the Hallway scenario. Failed paths remain eligible; ties use the lowest simulation index. The selected path is replayed through the shared monthly accounting engine to populate the HUD, year doors, event auras, funding wall and age-100 ending. It contains simulated gains, losses, inflation and life events rather than a fixed annual growth rate.
 
-Forecasts use 1,000 paths initially; 5,000 and 10,000 are available. RNG keys contain the master seed, simulation index, calendar year and shock namespace. Branch alternatives therefore reuse economic shocks for the same year/path. Worker requests are canceled/replaced on changed inputs, with a bounded cache keyed by model inputs and engine/assumption/tax versions.
+The scenario's seed, simulation index and origin year are stored on the game, outside portfolio/timeline snapshots. Saves and reloads retain it. Moving to another room, returning to an earlier Hallway or changing a decision recalculates cash flows with the same calendar-year shocks; it does not select a more favorable path. The initial terminal-median selection is not repeated after decisions. Changing asset exposures changes their financial outcomes, while ticker/year shocks stay reproducible. Existing saves receive a scenario on their next Hallway entry; already recorded historical balances remain as recorded.
 
-Charts show pointwise P10/P25/P50/P75/P90 net worth or available liquid assets. Real values divide each path by its simulated price index in the **original setup-year** dollar base. Pointwise percentile lines are not individual attainable paths. Failed paths remain included. The 95% Wilson success interval covers Monte Carlo sampling error only, not economic-model uncertainty. Lognormal annual shocks are not a calibrated fat-tail/regime model and do not cover every future outcome.
+Selecting near the **terminal** median does not make this path the median at every age, a guaranteed future, or a path guaranteed to fund the plan. It can pass outside the chart's percentile bands or encounter a funding wall. While initial simulations run, movement and doors wait, progress is shown, and Menu remains available. A worker failure leaves the baseline intact and supports A / Enter to retry; there is no silent fallback to deterministic growth.
+
+Forecasts use 1,000 paths initially; 5,000 and 10,000 are available. Before a Hallway scenario is committed, larger chart ensembles use their first 1,000 paths for the same Hallway preview selection. After commitment, every chart ensemble overlays the saved scenario even if its simulation index lies outside the requested chart sample count. RNG keys contain the master seed, simulation index, calendar year and shock namespace. Branch alternatives therefore reuse economic shocks for the same year/path. Worker requests are canceled/replaced on changed inputs, with a bounded cache keyed by model inputs, the Hallway scenario and engine/assumption/tax versions. Canceled workers cannot replace a newer request's result.
+
+Charts show pointwise P10/P25/P50/P75/P90 net worth or available liquid assets, with the complete Hallway path drawn separately in cyan. Real values divide each path by its simulated price index in the **original setup-year** dollar base. Pointwise percentile lines are not individual attainable paths. Failed paths remain included. The 95% Wilson success interval covers Monte Carlo sampling error only, not economic-model uncertainty. Lognormal annual shocks are not a calibrated fat-tail/regime model and do not cover every future outcome. Return assumptions and explicit stock-growth overrides are unchanged; Monte Carlo does not correct an unrealistic input assumption by itself.
 
 Success means every modeled monthly obligation is funded through age 100. It excludes automatic home sales and treats optional Roth contributions separately. Stress examples apply an early -40%/-15% equity sequence or 7% inflation for five years; those are scenarios, not probabilities.
 
-CSV export includes year/age, nominal wealth/liquid percentiles, real median wealth, path count, success rate, seed and model versions. In-game coverage notes remain necessary context when sharing the export.
+CSV export includes year/age, nominal wealth/liquid percentiles, real median wealth, the Hallway's nominal/real wealth and liquid values, its simulation index/selection count/origin year, chart path count, success rate, seed and model versions. In-game coverage notes remain necessary context when sharing the export.
 
 ## Migration and validation
 
@@ -132,7 +136,7 @@ Loading clones and migrates a save/profile without overwriting the original loca
 
 Previously recorded worth rows and timeline nodes are marked legacy; their historic financial outcomes are not recomputed. Real-dollar historic values for legacy rows with no price index are not fabricated. New elapsed-year results are stored on the selected destination node, with exact-year comparison and one terminal commit.
 
-Validation commands: `npm test`, `npm run check`, `node scripts/benchmark.mjs 1000`. Thirty-three automated checks cover regression defects, known-answer tax/payroll fixtures, contributions, loans, funding/shortfalls, Roth/SSA/RMD rules, migration, history, market moments/correlation, reproducibility, percentiles and sequence risk. Financial fixtures use injected/zero-volatility paths where appropriate. The same Canvas renderer was used to inspect the room, hallway and forecast layout. A local interactive browser smoke test was blocked by the browser’s access to localhost; no claim of a completed browser test is made.
+Validation commands: `npm test`, `npm run check`, `node scripts/benchmark.mjs 1000`. Automated checks cover regression defects, known-answer tax/payroll fixtures, contributions, loans, funding/shortfalls, Roth/SSA/RMD rules, migration, history, market moments/correlation, reproducibility, percentiles and sequence risk. Additional Hallway checks verify complete-path selection, gains/losses, failed-path inclusion, year-room continuity, changed-decision shock continuity, chart sample-count independence, loading/retry behavior, save/reload/rewind persistence, worker replay and stale-worker rejection. Financial fixtures use injected/zero-volatility paths where appropriate. Canvas rendering checks inspect the room, loading Hallway, completed Hallway and forecast layout; these do not substitute for an interactive browser/device play test.
 
 ## Primary rule references
 

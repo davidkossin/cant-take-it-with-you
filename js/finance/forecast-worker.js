@@ -1,7 +1,7 @@
 import { createForecast, addForecastPaths, finishForecast } from './Forecast.js';
 self.onmessage=async ({data})=>{
   try {
-    const acc=createForecast(data.portfolio,{paths:data.paths,seed:data.seed});
+    const acc=createForecast(data.portfolio,{paths:data.paths,seed:data.seed,scenario:data.scenario});
     while (acc.count<data.paths) {
       addForecastPaths(acc,Math.min(25,data.paths-acc.count));
       self.postMessage({type:'progress',completed:acc.count,total:data.paths});

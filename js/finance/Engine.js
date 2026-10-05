@@ -13,7 +13,7 @@ import { hashSeed, mulberry32 } from './rng.js';
 import { HOME_TYPES, CHILD_COST_BANDS, HELOC_CLTV, SB_LTV,
   HELOC_DEFAULT_RATE, SECURITIES_LOAN_DEFAULT_RATE } from '../config.js';
 
-export const ENGINE_VERSION = '2.0.0';
+export const ENGINE_VERSION = '2.0.1';
 export const cloneState = copy;
 export const syncStocksTotal = syncBook;
 const fmt = n => Math.round(n).toLocaleString('en-US');

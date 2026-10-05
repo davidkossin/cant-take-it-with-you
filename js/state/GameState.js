@@ -70,8 +70,8 @@ export function createDefaultSetup() {
  * 401(k) $62,000 (6% contribution, 100% match on the first 3% of salary).
  * ZIP 85001, Standard difficulty.
  *
- * Smoke (deterministic hallway / projectYears): glass year index ≈ 15
- * (age ~45), starting Cash $15,000, starting net worth $307,000.
+ * Starting Cash $15,000, starting net worth $307,000.
+ * The Monte Carlo Hallway's funding-wall year depends on its saved scenario.
  * Dollar inputs only — engine math unchanged.
  */
 export function createStandardPortfolioSetup() {
@@ -215,6 +215,7 @@ export function createGameFromSetup(setup) {
 
   const game = {
     scene: 'room',
+    hallwayScenario: null,
     portfolio,
     timeline: {
       nodes: {

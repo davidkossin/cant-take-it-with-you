@@ -5,6 +5,7 @@ import { effectiveDifficulty } from './Difficulty.js';
 import { ASSUMPTION_VERSION } from './Market.js';
 import { estimateAnnualTax } from './Tax.js';
 import { TAX_RULE_VERSION } from '../data/tax-brackets.js';
+import { projectJourney, isJourneyScenario, HALLWAY_SELECTION, HALLWAY_PATHS } from './Journey.js';
 
 export const SUCCESS_DEFINITION = 'All modeled living costs, housing, child/college costs, debt payments and taxes funded through age 100. A shortfall in any month fails the path. Home equity is not automatically sold. Roth contribution goals are optional.';
 export const MODEL_SCOPE = [
@@ -14,7 +15,8 @@ export const MODEL_SCOPE = [
   'SSA statement benefit required. Survivor/spousal/disability benefits and later earnings-test credit adjustments are not modeled.',
   'One owner for retirement accounts. Roth conversions and inherited accounts are not modeled. High-income Roth 401(k) catch-up is excluded.',
   'Property costs/vacancy are modeled. Passive losses, depreciation recapture and sale-exclusion eligibility require verified inputs.',
-  'Annual shared lognormal market shocks and constant annual allocation; illustrative moments, no estimated forecasting precision or fat-tail model.'
+  'Annual shared lognormal market shocks and constant annual allocation; illustrative moments, no estimated forecasting precision or fat-tail model.',
+  'Hallway follows one complete simulated path selected near the initial terminal median, including failed paths. It can lose money or fail and is not the pointwise median. Decisions reuse its calendar-year shocks.'
 ];
 export function percentile(sorted, p) {
   if (!sorted.length) return null;
@@ -32,13 +34,17 @@ const METRICS=['netWorth','liquid','cash','investments','realNetWorth','realLiqu
 export function createForecast(baseline, opts={}) {
   const years=Math.max(0,Math.min(100-baseline.age,opts.years ?? 100-baseline.age));
   const samples=Array.from({length:years+1},()=>Object.fromEntries(METRICS.map(k=>[k,[]])));
-  return {baseline:copy(baseline),years,samples,successes:0,count:0,failures:[],
-    seed:opts.seed ?? baseline.simulationSeed ?? 20261004,options:opts};
+  if (opts.scenario != null && !isJourneyScenario(opts.scenario)) throw new TypeError('Invalid Hallway scenario');
+  return {baseline:copy(baseline),years,samples,successes:0,count:0,failures:[],terminalPaths:[],
+    seed:opts.scenario?.seed ?? opts.seed ?? baseline.simulationSeed ?? 20261004,options:opts};
+}
+function pathMetrics(s) {
+  const w=computeWorth(s), deflator=s.priceIndex || 1;
+  return {netWorth:w.exactNetWorth,liquid:w.availableLiquid,cash:w.cash,
+    investments:w.stocks+w.k401Balance+w.rothBalance,realNetWorth:w.exactNetWorth/deflator,realLiquid:w.availableLiquid/deflator};
 }
 function sampleInto(acc,s,index) {
-  const w=computeWorth(s), deflator=s.priceIndex || 1;
-  const values={netWorth:w.exactNetWorth,liquid:w.availableLiquid,cash:w.cash,
-    investments:w.stocks+w.k401Balance+w.rothBalance,realNetWorth:w.exactNetWorth/deflator,realLiquid:w.availableLiquid/deflator};
+  const values=pathMetrics(s);
   for (const k of METRICS) acc.samples[index][k].push(values[k]);
 }
 /** Calendar-year + simulation-index keys give competing branches common random numbers. */
@@ -47,16 +53,18 @@ export function addForecastPaths(acc,count) {
     let state=copy(acc.baseline); delete state.transactions; delete state.lastStatement;
     sampleInto(acc,state,0);
     for (let i=0;i<acc.years;i++) {
-      state=projectOneYear(state,state.difficulty,{...acc.options,seed:acc.seed,
+      state=projectOneYear(state,state.difficulty,{...acc.options,deterministic:false,seed:acc.seed,
         simulationIndex:path,startYear:acc.baseline.year,compact:true}).state;
       sampleInto(acc,state,i+1);
     }
+    acc.terminalPaths.push({simulationIndex:path,netWorth:computeWorth(state).exactNetWorth});
     if (!state.planFailed) acc.successes++;
     else acc.failures.push(state.firstFailureYear ?? acc.baseline.year);
   }
   acc.count+=count;
 }
 export function finishForecast(acc) {
+  if (!acc.count) throw new RangeError('A forecast requires at least one path');
   const series=acc.samples.map((row,i)=>{
     const metrics={};
     for (const k of METRICS) {
@@ -66,7 +74,18 @@ export function finishForecast(acc) {
     }
     return {year:acc.baseline.year+i,age:acc.baseline.age+i,...metrics};
   });
-  const reference=projectYears(acc.baseline,acc.years,acc.baseline.difficulty,{deterministic:true,compact:true});
+  // Select an actual trajectory, never a synthetic series assembled from annual percentiles.
+  // Funding failures remain candidates; ties use the earliest simulation index.
+  // Larger chart ensembles refine the bands without changing the initial Hallway preview.
+  const candidates=acc.terminalPaths.slice(0,HALLWAY_PATHS);
+  const terminalMedian=percentile(candidates.map(path=>path.netWorth).sort((a,b)=>a-b),.5);
+  const chosen=candidates.reduce((best,path)=>
+    Math.abs(path.netWorth-terminalMedian)<Math.abs(best.netWorth-terminalMedian) ? path : best);
+  const scenario=copy(acc.options.scenario || {version:1,seed:acc.seed,simulationIndex:chosen.simulationIndex,
+    originYear:acc.baseline.year,originAge:acc.baseline.age,selection:HALLWAY_SELECTION,
+    selectionPaths:candidates.length,selectionTerminalMedian:terminalMedian,engineVersion:ENGINE_VERSION,
+    assumptionVersion:ASSUMPTION_VERSION,taxRuleVersion:TAX_RULE_VERSION});
+  const reference=projectJourney(acc.baseline,scenario,{...acc.options,years:acc.years,compact:true});
   const warnings=[...new Set([...normalizePortfolio(acc.baseline, { legacy: false }).modelWarnings,...estimateAnnualTax(acc.baseline).meta.warnings])];
   const stress={};
   for (const mode of ['crash','inflation']) {
@@ -80,7 +99,8 @@ export function finishForecast(acc) {
     engineVersion:ENGINE_VERSION,assumptionVersion:ASSUMPTION_VERSION,taxRuleVersion:TAX_RULE_VERSION,
     assumptions:effectiveDifficulty(acc.baseline),warnings,scope:MODEL_SCOPE,stress,
     firstFailureMedian:acc.failures.length?percentile(acc.failures.sort((a,b)=>a-b),.5):null,
-    reference:reference.map(r=>({year:r.state.year,age:r.state.age,worth:r.worth,statement:r.statement,priceIndex:r.state.priceIndex})),
+    scenario,scenarioSeries:reference.map(r=>({year:r.state.year,age:r.state.age,...pathMetrics(r.state)})),
+    reference:reference.slice(1).map(r=>({year:r.state.year,age:r.state.age,worth:r.worth,statement:r.statement,priceIndex:r.state.priceIndex})),
     generatedAt:new Date().toISOString()};
 }
 export function projectMonteCarlo(baseline,opts={}) {
@@ -89,10 +109,11 @@ export function projectMonteCarlo(baseline,opts={}) {
   return finishForecast(acc);
 }
 /** Remove reporting/history data from the cache key, retain every model input. */
-export function forecastKey(portfolio,paths=1000) {
+export function forecastKey(portfolio,paths=1000,scenario=null) {
   const s=copy(portfolio);
   for (const key of ['transactions','lastStatement','lastTransaction','milestones','modelWarnings']) delete s[key];
   const sorted=v=>Array.isArray(v)?v.map(sorted):v && typeof v==='object'
     ?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;
-  return JSON.stringify({engine:ENGINE_VERSION,assumptions:ASSUMPTION_VERSION,tax:TAX_RULE_VERSION,paths,state:sorted(s)});
+  return JSON.stringify({engine:ENGINE_VERSION,assumptions:ASSUMPTION_VERSION,tax:TAX_RULE_VERSION,paths,
+    scenario:sorted(scenario),state:sorted(s)});
 }
