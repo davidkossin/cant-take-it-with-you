@@ -1,142 +1,30 @@
-/**
- * Curated static federal income-tax brackets by year.
- * Single filer tables stored; Married Filing Jointly ≈ 2× bracket tops + 2× std deduction.
- * Used offline. Hook for live IRS / Tax Foundation fetch is in Tax.js.
- *
- * Amounts are approximate historical / projected figures for gameplay.
- * Not tax advice. Documented for later API swap.
- */
-
-/** @type {Record<number, { brackets: Array<{upTo:number|null, rate:number}>, stdDeduction: number }>} */
-export const FEDERAL_BY_YEAR = {
-  2020: {
-    stdDeduction: 12400,
-    brackets: [
-      { upTo: 9875, rate: 0.10 },
-      { upTo: 40125, rate: 0.12 },
-      { upTo: 85525, rate: 0.22 },
-      { upTo: 163300, rate: 0.24 },
-      { upTo: 207350, rate: 0.32 },
-      { upTo: 518400, rate: 0.35 },
-      { upTo: null, rate: 0.37 },
-    ],
-  },
-  2021: {
-    stdDeduction: 12550,
-    brackets: [
-      { upTo: 9950, rate: 0.10 },
-      { upTo: 40525, rate: 0.12 },
-      { upTo: 86375, rate: 0.22 },
-      { upTo: 164925, rate: 0.24 },
-      { upTo: 209425, rate: 0.32 },
-      { upTo: 523600, rate: 0.35 },
-      { upTo: null, rate: 0.37 },
-    ],
-  },
-  2022: {
-    stdDeduction: 12950,
-    brackets: [
-      { upTo: 10275, rate: 0.10 },
-      { upTo: 41775, rate: 0.12 },
-      { upTo: 89075, rate: 0.22 },
-      { upTo: 170050, rate: 0.24 },
-      { upTo: 215950, rate: 0.32 },
-      { upTo: 539900, rate: 0.35 },
-      { upTo: null, rate: 0.37 },
-    ],
-  },
-  2023: {
-    stdDeduction: 13850,
-    brackets: [
-      { upTo: 11000, rate: 0.10 },
-      { upTo: 44725, rate: 0.12 },
-      { upTo: 95375, rate: 0.22 },
-      { upTo: 182100, rate: 0.24 },
-      { upTo: 231250, rate: 0.32 },
-      { upTo: 578125, rate: 0.35 },
-      { upTo: null, rate: 0.37 },
-    ],
-  },
-  2024: {
-    stdDeduction: 14600,
-    brackets: [
-      { upTo: 11600, rate: 0.10 },
-      { upTo: 47150, rate: 0.12 },
-      { upTo: 100525, rate: 0.22 },
-      { upTo: 191950, rate: 0.24 },
-      { upTo: 243725, rate: 0.32 },
-      { upTo: 609350, rate: 0.35 },
-      { upTo: null, rate: 0.37 },
-    ],
-  },
-  2025: {
-    stdDeduction: 15000,
-    brackets: [
-      { upTo: 11925, rate: 0.10 },
-      { upTo: 48475, rate: 0.12 },
-      { upTo: 103350, rate: 0.22 },
-      { upTo: 197300, rate: 0.24 },
-      { upTo: 250525, rate: 0.32 },
-      { upTo: 626350, rate: 0.35 },
-      { upTo: null, rate: 0.37 },
-    ],
-  },
-  2026: {
-    stdDeduction: 15750,
-    brackets: [
-      { upTo: 12400, rate: 0.10 },
-      { upTo: 50400, rate: 0.12 },
-      { upTo: 107550, rate: 0.22 },
-      { upTo: 205350, rate: 0.24 },
-      { upTo: 260800, rate: 0.32 },
-      { upTo: 652050, rate: 0.35 },
-      { upTo: null, rate: 0.37 },
-    ],
-  },
+/** Federal rules: IRS Rev. Proc. 2025-32; future years are indexed projections. */
+export const TAX_RULE_VERSION = 'irs-2026-1';
+export const TAX_SOURCES = {
+  federal: 'https://www.irs.gov/irb/2025-45_IRB',
+  retirement: 'https://www.irs.gov/newsroom/401k-limit-increases-to-24500-for-2026-ira-limit-increases-to-7500',
+  payroll: 'https://www.ssa.gov/oact/cola/cbb.html',
 };
-
-/** Fallback when year is outside curated table — inflate from nearest known year. */
+const RATES = [.10, .12, .22, .24, .32, .35, .37];
+export const FEDERAL_BY_YEAR = {
+  2025: { single: { std: 15750, caps: [11925,48475,103350,197300,250525,626350] },
+    married: { std: 31500, caps: [23850,96950,206700,394600,501050,751600] },
+    gains: { single: [48350,533400], married: [96700,600050] }, wageBase: 176100 },
+  2026: { single: { std: 16100, caps: [12400,50400,105700,201775,256225,640600] },
+    married: { std: 32200, caps: [24800,100800,211400,403550,512450,768700] },
+    gains: { single: [49450,545500], married: [98900,613700] }, wageBase: 184500 },
+};
 export const FALLBACK_YEAR = 2026;
-
-/**
- * Get federal table for a calendar year, inflating brackets if needed.
- * @param {number} year
- * @param {number} [inflation=0.025]
- * @param {'single'|'married'|boolean} [filing='single']
- *   true / 'married' → Married Filing Jointly (≈ double single tops + std deduction)
- */
-export function getFederalTable(year, inflation = 0.025, filing = 'single') {
-  const years = Object.keys(FEDERAL_BY_YEAR).map(Number).sort((a, b) => a - b);
-  let baseYear = FALLBACK_YEAR;
-  if (FEDERAL_BY_YEAR[year]) baseYear = year;
-  else if (year < years[0]) baseYear = years[0];
-  else if (year > years[years.length - 1]) baseYear = years[years.length - 1];
-  else {
-    baseYear = years.filter((y) => y <= year).pop() || FALLBACK_YEAR;
-  }
-
-  const base = FEDERAL_BY_YEAR[baseYear];
-  const yearsDiff = year - baseYear;
-  const factor = yearsDiff === 0 ? 1 : Math.pow(1 + inflation, yearsDiff);
-  let table = {
-    stdDeduction: Math.round(base.stdDeduction * factor),
-    brackets: base.brackets.map((b) => ({
-      upTo: b.upTo == null ? null : Math.round(b.upTo * factor),
-      rate: b.rate,
-    })),
-    filing: 'single',
-  };
-
+export function getFederalTable(year, inflation = .025, filing = 'single') {
   const married = filing === true || filing === 'married' || filing === 'mfj';
-  if (married) {
-    table = {
-      stdDeduction: Math.round(table.stdDeduction * 2),
-      brackets: table.brackets.map((b) => ({
-        upTo: b.upTo == null ? null : Math.round(b.upTo * 2),
-        rate: b.rate,
-      })),
-      filing: 'married',
-    };
-  }
-  return table;
+  const baseYear = year <= 2025 ? 2025 : 2026;
+  const source = FEDERAL_BY_YEAR[baseYear];
+  const f = (1 + inflation) ** (year - baseYear);
+  const t = source[married ? 'married' : 'single'];
+  return { stdDeduction: Math.round(t.std * f), brackets: [...t.caps, null].map((cap, i) =>
+    ({ upTo: cap == null ? null : Math.round(cap * f), rate: RATES[i] })),
+    gains: source.gains[married ? 'married' : 'single'].map(n => Math.round(n * f)),
+    wageBase: Math.round(source.wageBase * f / 300) * 300,
+    filing: married ? 'married' : 'single', baseYear, projected: !FEDERAL_BY_YEAR[year],
+    ruleVersion: TAX_RULE_VERSION, source: TAX_SOURCES.federal };
 }

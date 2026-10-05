@@ -243,3 +243,38 @@ function compact(n) {
   if (a >= 1e3) return (v / 1e3).toFixed(0) + 'k';
   return String(v);
 }
+
+/** Percentiles are computed across all paths, including paths with funding failures. */
+export function drawForecastChart(ctx, forecast, opts={}) {
+  const {x=36,y=100,w=1600,h=450,metric='netWorth',selected=0}=opts;
+  const series=forecast.series;
+  ctx.save();ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(x,y,w,h);
+  const min=Math.min(0,...series.map(r=>r[metric].p10)), rawMax=Math.max(1,...series.map(r=>r[metric].p90));
+  const span=Math.max(1,rawMax-min), max=rawMax+span*.05;
+  const left=x+100,right=x+w-12,top=y+28,bottom=y+h-28;
+  const px=i=>left+i/Math.max(1,series.length-1)*(right-left);
+  const py=v=>bottom-(v-min)/(max-min)*(bottom-top);
+  ctx.font='14px "Press Start 2P", monospace';ctx.textBaseline='middle';
+  for (let i=0;i<=4;i++) {
+    const value=min+(max-min)*i/4, yy=py(value);
+    ctx.strokeStyle='#333';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(left,yy);ctx.lineTo(right,yy);ctx.stroke();
+    ctx.fillStyle='#a5a5a5';ctx.fillText('$'+compact(value),x+4,yy);
+  }
+  const band=(low,high,color)=>{
+    ctx.fillStyle=color;ctx.beginPath();
+    series.forEach((r,i)=>i?ctx.lineTo(px(i),py(r[metric][high])):ctx.moveTo(px(i),py(r[metric][high])));
+    for (let i=series.length-1;i>=0;i--) ctx.lineTo(px(i),py(series[i][metric][low]));
+    ctx.closePath();ctx.fill();
+  };
+  band('p10','p90','rgba(85,145,205,.22)');band('p25','p75','rgba(85,145,205,.28)');
+  ctx.strokeStyle='#d4a84b';ctx.lineWidth=3;ctx.beginPath();
+  series.forEach((r,i)=>i?ctx.lineTo(px(i),py(r[metric].p50)):ctx.moveTo(px(i),py(r[metric].p50)));ctx.stroke();
+  ctx.strokeStyle='#ccc';ctx.setLineDash([4,5]);ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(px(selected),top);ctx.lineTo(px(selected),bottom);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle='#aaa';ctx.textBaseline='top';
+  ctx.fillText(String(series[0].year),left,bottom+8);
+  ctx.fillText(String(series.at(-1).year),right-70,bottom+8);
+  ctx.fillStyle='#d4a84b';ctx.fillText('Median',left+90,y+6);
+  ctx.fillStyle='#80c0e0';ctx.fillText('Shading: 25–75% and 10–90%',left+225,y+6);
+  ctx.restore();
+}

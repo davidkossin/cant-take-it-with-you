@@ -1,3 +1,4 @@
+import { migrateGame } from '../finance/Schema.js';
 /**
  * localStorage save / load.
  * Slots labeled "Begin of <year>" / "End of <year>".
@@ -55,7 +56,7 @@ export function listSaves() {
 export function loadSave(id) {
   const found = readAll().find((s) => s.id === id);
   if (!found) return null;
-  return cloneState(found.game);
+  return migrateGame(found.game);
 }
 
 export function deleteSave(id) {

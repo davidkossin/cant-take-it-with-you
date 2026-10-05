@@ -21,16 +21,21 @@ export const NATIONAL_AVERAGES = {
 
 const PREFIX_RANGES = [
   // [lo, hi, abbr, name, stateIncomeTaxApprox, propertyTaxApprox]
-  [0, 59, 'MA', 'Massachusetts', 0.05, 0.0108],
-  [60, 69, 'PR', 'Puerto Rico', 0.0, 0.006],
-  [70, 89, 'VI', 'Virgin Islands', 0.0, 0.006],
+  [6, 9, 'PR', 'Puerto Rico', 0.0, 0.006],
+  [10, 27, 'MA', 'Massachusetts', 0.05, 0.0108],
+  [28, 29, 'RI', 'Rhode Island', 0.0599, 0.012],
+  [30, 38, 'NH', 'New Hampshire', 0.0, 0.017],
+  [39, 49, 'ME', 'Maine', 0.0715, 0.0109],
+  [50, 59, 'VT', 'Vermont', 0.0875, 0.018],
+  [60, 69, 'CT', 'Connecticut', 0.0699, 0.019],
+  [70, 89, 'NJ', 'New Jersey', 0.0637, 0.022],
   [100, 149, 'NY', 'New York', 0.0685, 0.014],
   [150, 196, 'PA', 'Pennsylvania', 0.0307, 0.0135],
   [197, 199, 'DE', 'Delaware', 0.066, 0.0055],
   [200, 205, 'DC', 'District of Columbia', 0.085, 0.0056],
   [206, 219, 'MD', 'Maryland', 0.0575, 0.0098],
   [220, 246, 'VA', 'Virginia', 0.0575, 0.0078],
-  [247, 269, 'WV', 'West Virginia', 0.065, 0.0055],
+  [247, 268, 'WV', 'West Virginia', 0.065, 0.0055],
   [270, 289, 'NC', 'North Carolina', 0.0475, 0.0076],
   [290, 299, 'SC', 'South Carolina', 0.064, 0.0053],
   [300, 319, 'GA', 'Georgia', 0.055, 0.0083],
@@ -79,7 +84,9 @@ export function stateFromZip(zip) {
   if (!raw) {
     return { ...NATIONAL_AVERAGES };
   }
-  const digits = raw.replace(/\D/g, '').padStart(5, '0').slice(0, 5);
+  const clean = raw.replace(/\D/g, '');
+  if (clean.length !== 5) return { ...NATIONAL_AVERAGES, unknown: true };
+  const digits = clean;
   // Still blank after scrub
   if (!digits || digits === '00000' && !/\d/.test(raw)) {
     return { ...NATIONAL_AVERAGES };

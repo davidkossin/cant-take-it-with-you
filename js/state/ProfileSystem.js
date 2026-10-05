@@ -1,3 +1,4 @@
+import { normalizePortfolio } from '../finance/Schema.js';
 /**
  * localStorage player profiles (reusable setup answers).
  * Separate from game saves under SAVE_KEY.
@@ -71,7 +72,7 @@ export function listProfiles() {
 export function loadProfile(id) {
   const found = readAll().find((p) => p.id === id);
   if (!found || !found.setup) return null;
-  return clone(found.setup);
+  return normalizePortfolio(found.setup);
 }
 
 export function deleteProfile(id) {

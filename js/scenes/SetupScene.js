@@ -1,3 +1,4 @@
+import { editPlanningInputs } from './PlanningInputs.js';
 /**
  * Contextual LTTP-styled setup questionnaires with Back on every step.
  * v0.6.0 flow: Name → Year → Age → Difficulty → ZIP → Finances → Retirement →
@@ -442,7 +443,12 @@ export class SetupScene {
           continue;
         }
         s.stocksTotal = Math.max(0, result);
-        s.stocksCostBasis = s.stocksTotal;
+        const basis = await dialog.prompt('Verified total investment cost basis (tax records)', {title:'Investments',type:'money',prefix:'$',defaultValue:String(s.stocksCostBasis ?? 0)});
+        if (basis == null) { step = 15; continue; }
+        s.stocksCostBasis = Math.max(0, basis); s.basisKnown = true;
+        const acquired = await dialog.prompt('Acquired date YYYY-MM-DD (blank = unknown / provisional long-term)', {title:'Investments',defaultValue:s.acquiredDate || ''});
+        if (acquired == null) { step = 15; continue; }
+        s.acquiredDate = /^\d{4}-\d{2}-\d{2}$/.test(String(acquired)) ? acquired : null;
         s.stocksHoldings = [];
         step = 20;
       }
@@ -505,8 +511,7 @@ export class SetupScene {
           const look = await lookupOnline(ticker);
           if (look.ok && look.price > 0) {
             price = look.price;
-            if (look.growth != null) growthPct = +(look.growth * 100).toFixed(2);
-            if (look.volatility != null) volPct = +(look.volatility * 100).toFixed(2);
+            // Quotes set today's valuation. Past returns never overwrite planning assumptions.
             onlineNote = `Online (${look.source})`;
           } else {
             await dialog.show(
@@ -580,8 +585,8 @@ export class SetupScene {
 
         const purchase = await dialog.prompt('Purchase price', {
           title: 'Investments',
-          subtitle: 'Used to determine taxable gain on sale. Leave blank to assume 0% gain.',
-          defaultValue: '',
+          subtitle: 'Verified per-share tax basis; enter 0 only if basis is truly zero.',
+          defaultValue: String(price),
           type: 'money',
           prefix: '$',
         });
@@ -617,7 +622,11 @@ export class SetupScene {
           continue;
         }
 
+        const acquired = await dialog.prompt('Acquired date YYYY-MM-DD (blank = unknown)', {title:'Investments',defaultValue:''});
+        if (acquired == null) { step = 16; continue; }
         const holding = {
+          acquiredDate: /^\d{4}-\d{2}-\d{2}$/.test(String(acquired)) ? acquired : null,
+          basisKnown: true,
           ticker,
           price,
           shares,
@@ -827,12 +836,13 @@ export class SetupScene {
         const propTax = Math.max(0, result.propTax || 0);
         const rate = Math.max(0, (result.rate || 0) / 100);
         s.homes.push({
+          basisKnown: false,
           type: s._homeType,
           label: HOME_TYPES[s._homeType]?.label || 'Home',
           value,
           mortgageOwed: Math.max(0, result.owed || 0),
           rate,
-          remainingTerm: Math.max(0, Math.round(result.term || 30)),
+          remainingTerm: Math.max(0, Math.round(result.term ?? 30)),
           propertyTaxRate: value > 0 ? propTax / value : propRate,
           annualPropertyTax: propTax,
           monthlyRevenue: Math.max(0, result.revenue || 0),
@@ -931,99 +941,15 @@ export class SetupScene {
         else step = 30;
       }
 
-      // ── 30 Expenses (prefilled, overridable) ────────────────
+      // Annual consumption is separate from taxes, housing, children and saving.
       else if (step === 30) {
-        const d = getDifficulty(s.difficulty);
-        // Prefill housing
-        let housingAnnual = 0;
-        if (s.housing === 'rent') {
-          housingAnnual = Math.round((s.monthlyRent || 0) * 12);
-        } else {
-          for (const h of s.homes || []) {
-            housingAnnual += Math.round(annualMortgagePayment(h));
-          }
-        }
-        let propTaxAnnual = 0;
-        for (const h of s.homes || []) {
-          if (h.annualPropertyTax != null) propTaxAnnual += h.annualPropertyTax;
-          else propTaxAnnual += Math.round((h.value || 0) * (h.propertyTaxRate || 0.01));
-        }
-        // Temp portfolio for tax estimate
-        const temp = {
-          ...s,
-          employed: s.salary > 0,
-          retired: false,
-          socialSecurity: 0,
-          _extraOrdinaryIncome: 0,
-        };
-        const tax = estimateAnnualTax(temp, d);
-        const incomeTax = tax.federal + tax.state;
-        // Previous spending default as household total baseline
-        const householdTotal = s.annualSpending || 35000;
-        const otherDefault = Math.max(
-          0,
-          householdTotal - housingAnnual - propTaxAnnual - incomeTax
-        );
-
-        result = await dialog.form(
-          'Annual expenses (override any field)',
-          [
-            {
-              key: 'housing',
-              label:
-                s.housing === 'rent' ? 'Annual Rent' : 'Annual Mortgage',
-              type: 'money',
-              prefix: '$',
-              defaultValue: String(housingAnnual),
-            },
-            {
-              key: 'propTax',
-              label: 'Annual Property Tax',
-              type: 'money',
-              prefix: '$',
-              defaultValue: String(propTaxAnnual),
-            },
-            {
-              key: 'incomeTax',
-              label: 'Annual Federal And State Taxes',
-              type: 'money',
-              prefix: '$',
-              defaultValue: String(incomeTax),
-            },
-            {
-              key: 'other',
-              label: 'Other Expense',
-              type: 'money',
-              prefix: '$',
-              defaultValue: String(otherDefault),
-            },
-          ],
-          { title: 'Expenses' }
-        );
-        if (result == null) {
-          if (s._kidCount > 0) {
-            s._kidIdx = s._kidCount - 1;
-            s.kids.pop();
-            step = 28;
-          } else step = 27;
-          continue;
-        }
-        const housing = Math.max(0, result.housing || 0);
-        const propT = Math.max(0, result.propTax || 0);
-        const incT = Math.max(0, result.incomeTax || 0);
-        const other = Math.max(0, result.other || 0);
-        s.spendingBreakdown = {
-          mortgage: s.housing === 'own' ? housing : 0,
-          rent: s.housing === 'rent' ? housing : 0,
-          propertyTax: propT,
-          incomeTax: incT,
-          other,
-        };
-        s.annualSpending = housing + propT + incT + other;
-        // If user overrode property tax total and has one home, sync it
-        if ((s.homes || []).length === 1) {
-          s.homes[0].annualPropertyTax = propT;
-        }
+        const tax = estimateAnnualTax({ ...s, employed: s.salary > 0 });
+        result = await dialog.prompt('Annual living costs (exclude rent, loans, taxes, children and contributions)', {
+          title: 'Living costs', type: 'money', prefix: '$', defaultValue: String(s.annualSpending ?? 35000),
+        });
+        if (result == null) { step = 27; continue; }
+        s.annualSpending = Math.max(0, result); s.spendingBreakdown = { other: s.annualSpending };
+        await dialog.show('Estimated income + payroll tax: ' + formatMoneyDisplay(tax.total) + '/yr.\nHousing, property costs, children and college are added separately.', { title: 'Budget' });
         step = 31;
       }
 
@@ -1033,8 +959,10 @@ export class SetupScene {
         const overview = buildOverview(s);
         result = await dialog.menu(overview, [
           { label: 'Enter The World', value: 'go' },
+          { label: 'Planning inputs / benefits', value: 'planning' },
           { label: '← Back', value: BACK },
         ], { title: 'Portfolio' });
+        if (result === 'planning') { await editPlanningInputs(s, dialog); continue; }
         if (result === BACK) {
           step = 30;
           continue;
@@ -1119,6 +1047,6 @@ function buildOverview(s) {
   lines.push(
     `  Housing ${formatMoneyDisplay((b.mortgage || 0) + (b.rent || 0))} · Prop tax ${formatMoneyDisplay(b.propertyTax)} · Income tax ${formatMoneyDisplay(b.incomeTax)} · Other ${formatMoneyDisplay(b.other)}`
   );
-  lines.push(`  Total ${formatMoneyDisplay(s.annualSpending)}`);
+  lines.push(`  Living only ${formatMoneyDisplay(s.annualSpending)}`);
   return lines.join('\n');
 }

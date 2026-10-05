@@ -8,7 +8,7 @@ import {
   findFacingInteractable,
 } from '../render/World.js';
 import { projectYears, computeWorth, cloneState, findBankInsolvencyIndex } from '../finance/Engine.js';
-import { currentNode, enterYearRoom, commitHallwayNode, returnToLeftDecisionRoom } from '../state/GameState.js';
+import { currentNode, enterYearRoom, commitHallwayNode, returnToLeftDecisionRoom, completeJourney } from '../state/GameState.js';
 import { autoSave } from '../state/SaveSystem.js';
 import { log as debugLog, setHallwayStash } from '../debug/Logger.js';
 
@@ -83,7 +83,7 @@ export class HallwayScene {
         { deterministic: true }
       );
       for (const s of snaps) {
-        this.snapshots.push({ state: s.state, worth: s.worth, events: s.events || [] });
+        this.snapshots.push({ state: s.state, worth: s.worth, events: s.events || [], statement: s.statement });
       }
     }
     this.eventAuras = buildEventAuras(this.world, this.snapshots, this.leaveYear);
@@ -252,10 +252,10 @@ export class HallwayScene {
       age: this.glassWall.age,
     });
     await dialog.show(
-      `Beyond this point you will be out of Cash (by ${y}).\n` +
+      `The reference path cannot fund all required costs in ${y - 1}.\n` +
         `You cannot continue until you make a financial decision:\n` +
-        `enter an earlier year's door into the Decision Room and refill your Cash, then return.`,
-      { title: 'Out of Cash' }
+        `enter an earlier year’s Decision Room to change income, spending, assets or borrowing.`,
+      { title: 'Funding shortfall' }
     );
     this._glassDialogShowing = false;
     // Stay disarmed until player steps away from the wall (avoids instant re-fire)
@@ -283,7 +283,7 @@ export class HallwayScene {
       state.age = obj.age;
 
       const ok = await dialog.confirm(
-        `Enter Decision Room for ${obj.year} (age ${obj.age})?\nBranches a new timeline from projected finances.`,
+        `Enter Decision Room for ${obj.year} (age ${obj.age})?\nContinues the reference path; view uncertainty in Pause → Charts.`,
         { title: 'Year Door', yes: 'Enter', no: 'Stay' }
       );
       if (!ok) {
@@ -298,7 +298,7 @@ export class HallwayScene {
         salary: state.salary,
         spending: state.annualSpending,
       });
-      enterYearRoom(game, state);
+      enterYearRoom(game, state, this.snapshots.slice(1, obj.yearIndex + 1));
       autoSave(game, 'begin');
       this.leave();
       return { goto: 'room' };
@@ -343,6 +343,8 @@ export class HallwayScene {
         this.setInputBlocked(false);
         return null;
       }
+      completeJourney(game, this.snapshots.at(-1).state, this.snapshots.slice(1));
+      autoSave(game, 'end');
       this.leave();
       return { goto: 'ending' };
     }

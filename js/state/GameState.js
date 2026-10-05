@@ -4,9 +4,16 @@
 
 import { CURRENT_YEAR, MAX_AGE } from '../config.js';
 import { cloneState, computeWorth } from '../finance/Engine.js';
+import { normalizePortfolio } from '../finance/Schema.js';
 
 export function createDefaultSetup() {
   return {
+    financeVersion: 2,
+    socialSecurityMonthly: 0,
+    socialSecurityClaimAge: 67,
+    spouseSalary: 0,
+    investmentFee: 0.002,
+    annualCollegeCost: 28000,
     playerName: 'Traveler',
     year: CURRENT_YEAR,
     age: 30,
@@ -15,7 +22,7 @@ export function createDefaultSetup() {
     cash: 5000,
     salary: 65000,
     savings: 20000,
-    savingsRate: 0.002, // decimal; difficulty Standard default (researched)
+    savingsRate: 0.025, // APY; editable planning assumption
     homes: [],
     housing: 'own', // 'own' | 'rent'
     monthlyRent: 0,
@@ -77,9 +84,16 @@ export function createStandardPortfolioSetup() {
     rate: 0.065,
     remainingTerm: 27,
     propertyTaxRate: 0.012,
+    costBasis: 380000,
+    basisKnown: true,
   };
   const spend = 50000;
   return {
+    financeVersion: 2,
+    spouseSalary: 0,
+    socialSecurityMonthly: 0,
+    socialSecurityClaimAge: 67,
+    investmentFee: .002,
     playerName: 'Starman',
     year: CURRENT_YEAR,
     age: 30,
@@ -133,7 +147,8 @@ export function createStandardPortfolioSetup() {
 export function createGameFromSetup(setup) {
   const stocks = Number(setup.stocksTotal) || 0;
   const married = !!(setup.married || setup.filingStatus === 'married');
-  const portfolio = {
+  const portfolio = normalizePortfolio({
+    ...setup,
     playerName: setup.playerName || 'Traveler',
     year: setup.year || CURRENT_YEAR,
     age: setup.age || 30,
@@ -147,13 +162,14 @@ export function createGameFromSetup(setup) {
     housing: setup.housing === 'rent' ? 'rent' : 'own',
     monthlyRent: Math.max(0, Number(setup.monthlyRent) || 0),
     homes: (setup.homes || []).map((h, i) => ({
+      ...h,
       type: h.type || 'primary',
       label: h.label || `Home ${i + 1}`,
       value: Number(h.value) || 0,
       mortgageOwed: Number(h.mortgageOwed) || 0,
-      rate: Number(h.rate) || 0.065,
-      remainingTerm: Number(h.remainingTerm) || 30,
-      propertyTaxRate: Number(h.propertyTaxRate) || 0.012,
+      rate: Number(h.rate ?? 0.065),
+      remainingTerm: Number(h.remainingTerm ?? 30),
+      propertyTaxRate: Number(h.propertyTaxRate ?? 0.012),
       annualPropertyTax:
         h.annualPropertyTax != null ? Number(h.annualPropertyTax) : undefined,
       monthlyRevenue: Number(h.monthlyRevenue) || 0,
@@ -177,10 +193,11 @@ export function createGameFromSetup(setup) {
     filingStatus: married ? 'married' : 'single',
     kids: (setup.kids || []).map((k, i) => ({
       name: k.name || `Child ${i + 1}`,
-      age: Number(k.age) || 0,
+      ...k,
+      age: Number(k.age ?? 0),
     })),
-    annualSpending: Number(setup.annualSpending) || 30000,
-    spendingBreakdown: setup.spendingBreakdown || { other: Number(setup.annualSpending) || 30000 },
+    annualSpending: Number(setup.annualSpending ?? 30000),
+    spendingBreakdown: setup.spendingBreakdown || { other: Number(setup.annualSpending ?? 30000) },
     zip: setup.zip == null || setup.zip === '' ? '' : String(setup.zip).replace(/\D/g, '').slice(0, 5),
     difficulty: setup.difficulty || 'standard',
     rateOverrides: setup.rateOverrides && typeof setup.rateOverrides === 'object' ? { ...setup.rateOverrides } : {},
@@ -191,7 +208,7 @@ export function createGameFromSetup(setup) {
     milestones: Array.isArray(setup.milestones) ? setup.milestones : [],
     socialSecurity: 0,
     childCostInflator: 1,
-  };
+  }, { legacy: false });
 
   const nodeId = `room-${portfolio.year}-0`;
   const worth = computeWorth(portfolio);
@@ -264,6 +281,8 @@ function pushWorth(game, p) {
     last.bank = worth.bank;
     last.portfolio = worth.portfolio;
     last.salary = p.salary || 0;
+    last.priceIndex = p.priceIndex || 1;
+    last.statement = p.lastStatement || null;
   } else {
     game.worthHistory.push({
       year: p.year,
@@ -272,6 +291,8 @@ function pushWorth(game, p) {
       bank: worth.bank,
       portfolio: worth.portfolio,
       salary: p.salary || 0,
+      priceIndex: p.priceIndex || 1,
+      statement: p.lastStatement || null,
     });
   }
   game.lastWorth = worth;
@@ -329,7 +350,7 @@ export function commitHallwayNode(game) {
  * If the current node already has children, this Decision Room entry is a fork
  * (spawned timeline); otherwise it continues the current timeline.
  */
-export function enterYearRoom(game, projectedPortfolio) {
+export function enterYearRoom(game, projectedPortfolio, elapsed = []) {
   const p = cloneState(projectedPortfolio);
   game.portfolio = p;
   const parentId = game.timeline.currentNodeId;
@@ -349,10 +370,15 @@ export function enterYearRoom(game, projectedPortfolio) {
     parentId,
     snapshotId,
     label: `Decision Room ${p.year}`,
+    elapsedHistory: elapsed.map(result => {
+      const state = cloneState(result.state); delete state.transactions;
+      return { year: state.year, age: state.age, portfolio: state, worth: result.worth || computeWorth(state) };
+    }),
     /** True when this entry splits a new timeline off an already-explored parent */
     isFork,
   };
   game.timeline.currentNodeId = id;
+  for (const result of elapsed) pushWorth(game, result.state);
   pushWorth(game, p);
   game.scene = 'room';
   return id;
@@ -594,6 +620,11 @@ export function reconstructWorthAlongPath(game, tipNodeId) {
   const path = pathFromRoot(game, tipNodeId);
   const history = [];
   for (const n of path) {
+    for (const entry of n.elapsedHistory || []) {
+      const row = {year: entry.year, age: entry.age, ...entry.worth, priceIndex: entry.portfolio?.priceIndex || 1, nodeId:n.id};
+      const last = history.at(-1);
+      if (last?.year === row.year) Object.assign(last,row); else history.push(row);
+    }
     const snap = game.timeline.snapshots?.[n.snapshotId];
     if (!snap) continue;
     const worth = computeWorth(snap);
@@ -605,6 +636,8 @@ export function reconstructWorthAlongPath(game, tipNodeId) {
       portfolio: worth.portfolio,
       salary: snap.salary || 0,
       retired: !!snap.retired,
+      priceIndex: snap.priceIndex || 1,
+      legacy: !!n.legacy,
       nodeId: n.id,
       snapshotId: n.snapshotId,
     };
@@ -685,6 +718,9 @@ export function portfolioAtYearOnBranch(game, tipNodeId, year) {
 
   const withSnaps = [];
   for (const n of path) {
+    for (const entry of n.elapsedHistory || []) {
+      if (entry.year >= path[0].year) withSnaps.push({node:n,snap:entry.portfolio,year:entry.year,age:entry.age});
+    }
     const snap = game.timeline.snapshots?.[n.snapshotId];
     if (!snap) continue;
     withSnaps.push({ node: n, snap, year: snap.year ?? n.year, age: snap.age ?? n.age });
@@ -1139,4 +1175,14 @@ export function layoutTimelineMap(game, rect) {
     maxLane,
     xy,
   };
+}
+
+/** Commit the final financial state once so ending, chart and map agree. */
+export function completeJourney(game, projectedPortfolio, elapsed = []) {
+  if (game.flags?.journeyComplete) return game.timeline.currentNodeId;
+  const id = enterYearRoom(game, projectedPortfolio, elapsed);
+  game.timeline.nodes[id].kind = 'terminal';
+  game.timeline.nodes[id].label = 'End of the line ' + game.portfolio.year;
+  game.flags ||= {}; game.flags.journeyComplete = true; game.scene = 'ending';
+  return id;
 }

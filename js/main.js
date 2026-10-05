@@ -142,7 +142,7 @@ const dialog = new Dialog();
 installFullscreen({
   button: document.getElementById('fs-btn'),
   onChange: () => fitCanvas(),
-  allowKey: () => !(dialog.active && (dialog.mode === 'prompt' || dialog.mode === 'form')),
+  allowKey: () => !pause.open && !(dialog.active && (dialog.mode === 'prompt' || dialog.mode === 'form')),
 });
 const mobileText = new MobileTextInput(canvas, dialog);
 mobileText.mount();
@@ -185,9 +185,10 @@ async function startTitle() {
     // migrate old saves lightly
     if (!game.worthHistory) game.worthHistory = [];
     if (!game.timeline.snapshots) game.timeline.snapshots = {};
-    mode = game.scene === 'hallway' ? 'hallway' : 'room';
+    mode = game.scene === 'ending' ? 'ending' : game.scene === 'hallway' ? 'hallway' : 'room';
     if (mode === 'room') room.enter(game, false);
-    else hallway.enter(game);
+    else if (mode === 'hallway') hallway.enter(game);
+    else ending.enter(game);
   } else if (result.action === 'new' && result.game) {
     // Standard portfolio or Use Profile — game already built
     game = result.game;

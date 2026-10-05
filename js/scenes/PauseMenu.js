@@ -1,3 +1,5 @@
+import { ForecastClient } from '../finance/ForecastClient.js';
+import { MODEL_SCOPE, SUCCESS_DEFINITION } from '../finance/Forecast.js';
 /**
  * Esc pause — Portfolio overview, Map (timeline graph + jump/compare), and Charts.
  * Map Compare provides side-by-side portfolio snapshots for two timelines.
@@ -14,7 +16,7 @@ import {
   hallwayNodesForTimeline,
 } from '../state/GameState.js';
 import { computeWorth } from '../finance/Engine.js';
-import { drawWorthChart, BRANCH_COLORS } from '../render/Charts.js';
+import { drawWorthChart, drawForecastChart, BRANCH_COLORS } from '../render/Charts.js';
 import { makeDialogChrome } from '../render/Assets.js';
 import { formatMoneyDisplay } from '../render/Dialog.js';
 
@@ -25,6 +27,12 @@ const VIEW_TABS = ['portfolio', 'map', 'charts'];
 export class PauseMenu {
   constructor() {
     this.open = false;
+    this.forecast = new ForecastClient();
+    this.chartMode = 'forecast';
+    this.chartReal = false;
+    this.chartMetric = 'netWorth';
+    this.chartYear = 0;
+    this.forecastPaths = 1000;
     this.screen = 'menu'; // menu | portfolio | map | charts
     this.selected = 0;
     this.portfolioPage = 0; // 0 = summary, 1 = homes and loans
@@ -68,6 +76,7 @@ export class PauseMenu {
   }
 
   hide() {
+    this.forecast.cancel();
     this.open = false;
   }
 
@@ -186,6 +195,7 @@ export class PauseMenu {
         return undefined;
       }
       if (this.screen !== 'menu') {
+        this.forecast.cancel();
         this.screen = 'menu';
         this.selected = 0;
         return undefined;
@@ -370,8 +380,16 @@ export class PauseMenu {
     }
 
     if (this.screen === 'charts') {
-      // Timeline comparison is deliberately on Map; Charts stays single-path.
-      return undefined;
+      if (KEYS.confirm.includes(e.key) && e.key.toLowerCase() !== 'e') { e.preventDefault(); void this.showChartOptions(game); return undefined; }
+      if (e.key.toLowerCase() === 'f') this.chartMode = this.chartMode === 'forecast' ? 'history' : 'forecast';
+      if (e.key.toLowerCase() === 'r') this.chartReal = !this.chartReal;
+      if (e.key.toLowerCase() === 'l') this.chartMetric = this.chartMetric === 'netWorth' ? 'liquid' : 'netWorth';
+      if (e.key.toLowerCase() === 'p') this.forecastPaths = this.forecastPaths === 1000 ? 5000 : this.forecastPaths === 5000 ? 10000 : 1000;
+      if (KEYS.right.includes(e.key)) this.chartYear = Math.min(100 - game.portfolio.age, this.chartYear + 1);
+      if (KEYS.left.includes(e.key)) this.chartYear = Math.max(0, this.chartYear - 1);
+      if (e.key.toLowerCase() === 'c') void this.showModelCoverage(game);
+      if (e.key.toLowerCase() === 'e') this.exportForecast();
+      e.preventDefault(); return undefined;
     }
 
     return undefined;
@@ -482,20 +500,97 @@ export class PauseMenu {
   }
 
   chartTitle(game) {
-    return 'Charts · Net worth';
+    return this.chartMode === 'forecast' ? 'Charts · Financial forecast' : 'Charts · Recorded history';
+  }
+
+  async showChartOptions(game) {
+    if (!this.dialog || this.dialog.active) return;
+    const choice = await this.dialog.menu('Chart options', [
+      {label:this.chartMode === 'forecast' ? 'Show recorded history' : 'Show Monte Carlo forecast',value:'mode'},
+      {label:this.chartReal ? 'Show nominal dollars' : 'Show real dollars',value:'real'},
+      {label:this.chartMetric === 'netWorth' ? 'Show available liquid assets' : 'Show net worth',value:'metric'},
+      {label:'Simulation count (' + this.forecastPaths + ')',value:'paths'},
+      {label:'Model coverage / input warnings',value:'coverage'},
+      {label:'Export forecast CSV',value:'export'},
+      {label:'Back',value:null}], {title:'Charts'});
+    if (choice === 'mode') this.chartMode = this.chartMode === 'forecast' ? 'history' : 'forecast';
+    if (choice === 'real') this.chartReal = !this.chartReal;
+    if (choice === 'metric') this.chartMetric = this.chartMetric === 'netWorth' ? 'liquid' : 'netWorth';
+    if (choice === 'paths') {
+      const count = await this.dialog.menu('Monte Carlo paths', [{label:'1,000 (preview)',value:1000},
+        {label:'5,000 (full)',value:5000},{label:'10,000 (full)',value:10000},{label:'Back',value:null}],{title:'Simulation count'});
+      if (count) this.forecastPaths = count;
+    }
+    if (choice === 'coverage') await this.showModelCoverage(game);
+    if (choice === 'export') this.exportForecast();
+  }
+
+  async showModelCoverage(game) {
+    if (!this.dialog || this.dialog.active) return;
+    for (const text of [SUCCESS_DEFINITION, ...MODEL_SCOPE, ...(this.forecast.result?.warnings || game.portfolio.modelWarnings || [])]) {
+      await this.dialog.show(text, { title: 'Forecast coverage' });
+    }
+  }
+
+  exportForecast() {
+    const f = this.forecast.result;
+    if (!f) return;
+    const rows = [['year','age','net_worth_p10','net_worth_p50','net_worth_p90','real_net_worth_p50','liquid_p10','liquid_p50','liquid_p90','paths','success_rate','seed','engine','assumptions','tax_rules'],
+      ...f.series.map(r => [r.year,r.age,r.netWorth.p10,r.netWorth.p50,r.netWorth.p90,r.realNetWorth.p50,r.liquid.p10,r.liquid.p50,r.liquid.p90,f.count,f.successProbability,f.seed,f.engineVersion,f.assumptionVersion,f.taxRuleVersion])];
+    const blob = new Blob([rows.map(r => r.join(',')).join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob), anchor = document.createElement('a');
+    anchor.href = url; anchor.download = 'cant-take-it-forecast.csv'; anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   drawCharts(ctx, game, x, y, boxW, boxH) {
-    ctx.font = '16px "Press Start 2P", monospace';
-    ctx.fillStyle = '#888';
-    ctx.fillText('Current timeline · Map has Compare', x + 28, y + 56);
-    drawWorthChart(ctx, game.worthHistory || [], {
-      x: x + 36,
-      y: y + 100,
-      w: boxW - 80,
-      h: boxH - 180,
-      series: ['netWorth', 'bank'],
-    });
+    ctx.font = '14px "Press Start 2P", monospace'; ctx.fillStyle = '#aaa';
+    ctx.fillText('Enter/A options · ←/→ year · F history · R real · L liquid · P paths · C coverage · E export', x + 28, y + 58);
+    if (this.chartMode === 'history') {
+      drawWorthChart(ctx, (game.worthHistory || []).map(r => ({ ...r,
+        netWorth: this.chartReal && r.legacy ? null : r.netWorth / (this.chartReal ? r.priceIndex || 1 : 1), bank: this.chartReal && r.legacy ? null : r.bank / (this.chartReal ? r.priceIndex || 1 : 1) })),
+        { x: x + 36, y: y + 108, w: boxW - 80, h: boxH - 200, series: ['netWorth', 'bank'] });
+      ctx.fillText('Recorded reference-path outcomes; old saves may contain legacy-engine years.', x + 28, y + boxH - 38);
+      return;
+    }
+    this.forecast.request(game.portfolio, this.forecastPaths);
+    const f = this.forecast.result;
+    if (!f) {
+      ctx.fillStyle = '#d4a84b'; ctx.font = '20px "Press Start 2P", monospace';
+      ctx.fillText(this.forecast.error || 'Simulating ' + this.forecastPaths + ' paths · ' + Math.round(this.forecast.progress * 100) + '%', x + 36, y + 140);
+      ctx.font = '16px "Press Start 2P", monospace'; ctx.fillStyle = '#aaa';
+      ctx.fillText('Forecasts leave gameplay balances unchanged. Esc returns to the menu.', x + 36, y + 190); return;
+    }
+    this.chartYear = Math.min(this.chartYear, f.series.length - 1);
+    const dollars = this.chartReal ? 'real (original setup-year dollars)' : 'nominal dollars';
+    const metric = this.chartReal ? (this.chartMetric === 'liquid' ? 'realLiquid' : 'realNetWorth') : this.chartMetric;
+    ctx.fillStyle = '#d4a84b';ctx.font = '16px "Press Start 2P", monospace';
+    ctx.fillText('Funding success ' + (f.successProbability * 100).toFixed(1) + '% · 95% sampling interval ' +
+      f.successInterval95.map(p => (p * 100).toFixed(1) + '%').join('–') + ' · N=' + f.count, x + 28, y + 95);
+    ctx.font = '14px "Press Start 2P", monospace';ctx.fillStyle = '#aaa';
+    ctx.fillText((this.chartMetric === 'liquid' ? 'Available taxable liquid assets' : 'Net worth') + ' · ' + dollars + ' · includes failed paths', x + 28, y + 126);
+    drawForecastChart(ctx, f, { x: x + 28, y: y + 166, w: boxW - 64, h: boxH - 465, metric, selected: this.chartYear });
+    const row = f.series[this.chartYear], v = row[metric], money = formatMoneyDisplay;
+    let yy = y + boxH - 275;
+    ctx.fillStyle = '#eee';ctx.font = '16px "Press Start 2P", monospace';
+    ctx.fillText('← / → Year ' + row.year + ' · Age ' + row.age + ' · P10 ' + money(v.p10) + ' · Median ' + money(v.p50) + ' · P90 ' + money(v.p90), x + 28, yy);
+    yy += 34;ctx.font = '14px "Press Start 2P", monospace';ctx.fillStyle = '#aaa';
+    const reference = f.reference[Math.max(0,this.chartYear - 1)]?.statement;
+    if (this.chartYear && reference) {
+      ctx.fillText('Reference year ' + reference.year + ': required costs ' + money(reference.requiredSpending) +
+        ' · income/payroll tax ' + money(reference.tax.total) + ' · shortfall ' + money(reference.unfunded), x + 28, yy);
+    } else ctx.fillText('Reference path uses median annual log shocks; it is separate from simulated percentile paths.', x + 28, yy);
+    yy += 30;
+    ctx.fillText('Stress: early crash ' + (f.stress.crash.success ? 'funded' : 'shortfall') + ' · persistent 7% inflation ' +
+      (f.stress.inflation.success ? 'funded' : 'shortfall') + ' · seed ' + f.seed, x + 28, yy);
+    yy += 30;
+    ctx.fillText('Equity mean ' + (f.assumptions.equityReturn * 100).toFixed(1) + '% · volatility ' + (f.assumptions.equityVolatility * 100).toFixed(1) +
+      '% · CPI ' + (f.assumptions.inflation * 100).toFixed(1) + '% · illustrative inputs', x + 28, yy);
+    yy += 30;
+    ctx.fillText('Success = modeled obligations paid in every month through age 100; home equity needs an explicit sale.', x + 28, yy);
+    yy += 30;
+    ctx.fillStyle = '#d4a84b';
+    ctx.fillText('C: coverage / ' + f.warnings.length + ' input warnings · Future law is projected. Sampling interval excludes model uncertainty.', x + 28, yy);
   }
 
   drawSnapshotColumn(ctx, branch, snap, year, cx, cy, colW, colH, compact = false) {

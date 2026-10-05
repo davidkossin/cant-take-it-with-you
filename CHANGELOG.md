@@ -10,6 +10,27 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+### Added
+- Financial engine v2 with twelve monthly cash-flow periods, authoritative investment lots, tax-year records and annual reconciliation statements.
+- Seeded correlated lognormal equity/bond returns; shared account exposures; 1,000 / 5,000 / 10,000-path Monte Carlo in a worker.
+- Forecast percentile bands, funding success and sampling intervals, nominal/real dollars, liquid-asset view, stress cases, coverage warnings and CSV export. Enter / mobile A opens chart options.
+- Planning inputs for SSA statement benefits, spouse wages, allocations, fees, Roth basis/opening year, living/healthcare/college costs, investment/property basis and tax assumptions.
+- Node regression tests and documented model coverage in `docs/financial-model-v2.md`.
+
+### Fixed
+- Stock sales, automatic deficit funding and margin calls now reduce actual holdings, shares and tax basis.
+- Down payments and discretionary purchases reject insufficient funding; automatic spending cannot create unlimited unsecured credit.
+- Income and property taxes are separate from living costs; fixed mortgage payments use monthly amortization and retain unpaid balances.
+- Payroll taxes, savings interest, realized gains/loss carryovers, benefit taxation, legal contribution caps and RMDs enter the annual tax record.
+- Missing SSA and Roth data no longer produce invented benefits or assumed tax-free earnings.
+- Funding walls test unpaid obligations instead of an empty checking account; elapsed-year records and the age-100 terminal state are committed to the selected timeline.
+- Read-only, idempotent save/profile migration preserves zero inputs and reconciles legacy lot/aggregate conflicts; original stored entries remain untouched on load.
+
+### Changed
+- Illustrative long-horizon planning defaults replace automatic extrapolation of 2016–2025 stock-market averages. Quotes update valuation only.
+- Next build version `0.6.2`; the Godot `v2/` export is unchanged.
+- State tax approximations and unsupported advanced tax/benefit cases are explicitly described in game and documentation.
+
 ## [0.6.1] — 2026-10-04
 
 ### Fixed

@@ -1,0 +1,85 @@
+import { copy, nonnegative, ensureHoldings, stockBook, money } from './Books.js';
+import { monthlyPayment } from './Loans.js';
+import { resolveDifficultyId } from './marketAssumptions.js';
+
+export function normalizePortfolio(input, { legacy = input.financeVersion !== 2 } = {}) {
+  const s = copy(input);
+  const dynamic = ['No Social Security','Property tax basis','Roth basis/opening','Spouse wage ownership','Holding dates'];
+  s.modelWarnings = (s.modelWarnings || []).filter(w => !dynamic.some(prefix => w.startsWith(prefix)));
+  const warn = text => { if (!s.modelWarnings.includes(text)) s.modelWarnings.push(text); };
+  if (legacy) {
+    const b = s.spendingBreakdown;
+    if (b && (b.incomeTax || b.mortgage || b.propertyTax || b.rent)) {
+      s.annualSpending = b.other != null ? nonnegative(b.other)
+        : Math.max(0, nonnegative(s.annualSpending) - nonnegative(b.incomeTax)
+          - nonnegative(b.mortgage) - nonnegative(b.propertyTax) - nonnegative(b.rent));
+      warn('Legacy budget converted to living costs; verify the amount in Planning inputs.');
+    }
+    warn('Earlier recorded outcomes used the legacy engine. Future years use financial engine v2.');
+    if (s.socialSecurity && s.socialSecurityMonthly == null) warn('Legacy salary-based Social Security removed; enter the SSA statement benefit.');
+  }
+  s.financeVersion = 2; s.difficulty = resolveDifficultyId(s.difficulty);
+  s.simulationSeed ??= 20261004; s.birthYear ??= s.year - Math.floor(s.age);
+  s.priceIndex ??= 1; s.childCostInflator ??= 1;
+  s.annualSpending = nonnegative(s.annualSpending, 30000);
+  s.spendingBreakdown = { other: s.annualSpending };
+  s.socialSecurityMonthly ??= 0; s.socialSecurityClaimAge ??= 67;
+  s.socialSecurity = 0; s.investmentFee ??= .002;
+  s.taxInflation ??= .025; s.annualCollegeCost ??= 28000;
+  s.k401Allocation ??= { equity: 1 }; s.rothAllocation ??= { equity: 1 };
+  s.homes ||= []; s.otherLoans ||= []; s.kids ||= [];
+  for (const h of s.homes) {
+    h.rate = nonnegative(h.rate, .065);
+    h.remainingMonths ??= Math.round(nonnegative(h.remainingTerm, 30) * 12);
+    h.remainingTerm = h.remainingMonths / 12;
+    h.monthlyPayment ??= monthlyPayment(h.mortgageOwed, h.rate, h.remainingMonths);
+    h.basisKnown ??= h.costBasis != null;
+    if (!h.basisKnown) warn('Property tax basis is missing; enter it before a sale.');
+    if ((h.type === 'rental' || h.type === 'investment')) warn('Rental passive losses and depreciation recapture need external verification.');
+  }
+  for (const l of s.otherLoans) {
+    l.rate = nonnegative(l.rate);
+    l.remainingMonths ??= Math.round(nonnegative(l.remainingTerm, 5) * 12);
+    l.monthlyPayment ??= monthlyPayment(l.principal, l.rate, l.remainingMonths);
+  }
+  if (legacy && s.otherDebt > 0) warn('Legacy unsecured debt uses 10% APR over 60 months unless edited.');
+  if (s.stocksCostBasis == null) { s.stocksCostBasis = nonnegative(s.stocksTotal); s.basisKnown = false; }
+  if (legacy && s.stocksHoldings?.length && input.stocksTotal != null) {
+    const book = stockBook(s), savedValue = nonnegative(input.stocksTotal);
+    if (Math.abs(book.value - savedValue) > .01) {
+      let valueLeft = money(savedValue), basisLeft = money(nonnegative(input.stocksCostBasis, book.basis));
+      s.stocksHoldings.forEach((h,i) => {
+        const weight = book.value > 0 ? nonnegative(h.value, nonnegative(h.shares)*nonnegative(h.price))/book.value : 1/s.stocksHoldings.length;
+        const last = i === s.stocksHoldings.length - 1;
+        h.value = last ? valueLeft : money(savedValue*weight);
+        h.costBasis = last ? basisLeft : money(nonnegative(input.stocksCostBasis,book.basis)*weight);
+        valueLeft = money(valueLeft-h.value); basisLeft = money(basisLeft-h.costBasis);
+        h.shares = h.value/(h.price || 100);
+      });
+      warn('Legacy lot totals conflicted with saved aggregate balances. Lots were reconciled to those balances; verify brokerage records.');
+    }
+  }
+  ensureHoldings(s);
+  for (const h of s.stocksHoldings) {
+    if (h.value > 0 && h.acquiredDate == null) warn('Holding dates are unknown; existing lots provisionally use long-term treatment.');
+    if (!h.basisKnown) warn('Investment tax basis is missing; forecast tax uses provisional basis.');
+  }
+  if (s.rothBalance > 0 && (s.rothContributionBasis == null || s.rothOpenedYear == null))
+    warn('Roth basis/opening year are missing; unknown earnings are unavailable for spending.');
+  if (!s.socialSecurityMonthly && !s.socialSecurityMonthlyAtFRA && s.socialSecurityEligible !== false)
+    warn('No Social Security benefit entered; projections include $0 until supplied.');
+  if (s.married && s.spouseSalary == null) warn('Spouse wage ownership is unknown; enter spouse salary separately.');
+  return s;
+}
+/** Migration reads a clone; original localStorage entries remain available unchanged. */
+export function migrateGame(input) {
+  const game = copy(input), legacy = game.portfolio?.financeVersion !== 2;
+  game.portfolio = normalizePortfolio(game.portfolio);
+  for (const [id, p] of Object.entries(game.timeline?.snapshots || {})) game.timeline.snapshots[id] = normalizePortfolio(p);
+  if (legacy) {
+    for (const row of game.worthHistory || []) row.legacy = true;
+    for (const node of Object.values(game.timeline?.nodes || {})) node.legacy = true;
+    game.flags ||= {}; game.flags.financeMigrated = true;
+  }
+  return game;
+}

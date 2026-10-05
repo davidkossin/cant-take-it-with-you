@@ -1,3 +1,5 @@
+import { editPlanningInputs } from './PlanningInputs.js';
+import { ensureHoldings, syncBook, post } from '../finance/Books.js';
 import {
   FRAME_W,
   WORLD_SCALE,
@@ -257,7 +259,7 @@ export class RoomScene {
           term: term ?? 30,
           label: HOME_TYPES[type]?.label,
         });
-        await dialog.show('Keys are yours. Mortgage recorded.', { title: 'Buy Home' });
+        await dialog.show(game.portfolio.lastTransaction?.reason || 'Home purchased; 2% closing costs included.', { title: 'Buy Home' });
       } else if (mode === 'sell') {
         if (!p.homes?.length) {
           await dialog.show('No homes to sell.', { title: 'Sell Home' });
@@ -285,9 +287,10 @@ export class RoomScene {
           );
           if (!okSell) return;
         }
-        game.portfolio = sellHome(game.portfolio, idx);
+        const exclusion = p.homes[idx].type === 'primary' ? await dialog.confirm('Eligible for the primary-home gain exclusion? Confirm ownership/use tests from tax records.', {title:'Home sale tax'}) : false;
+        game.portfolio = sellHome(game.portfolio, idx, { exclusionEligible: exclusion === true });
         await dialog.show(
-          'Sold. Net proceeds (after mortgage / HELOC liens) moved to Cash.',
+          game.portfolio.lastTransaction?.reason || 'Sold after liens and 6% selling costs. Taxable gain enters this year’s tax record.',
           { title: 'Sell Home' }
         );
       }
@@ -309,7 +312,7 @@ export class RoomScene {
         });
         if (amt == null) return;
         game.portfolio = buyStock(game.portfolio, Math.max(0, amt));
-        await dialog.show('Shares purchased. Cost basis updated.', { title: 'Buy Stock' });
+        await dialog.show(game.portfolio.lastTransaction?.reason || 'Broad-market shares purchased; basis updated.', { title: 'Buy Stock' });
       } else if (mode === 'sell') {
         await this.handleSellStock(game, dialog, diff);
       }
@@ -334,6 +337,7 @@ export class RoomScene {
         if (sal == null) return;
         game.portfolio = setEmployment(game.portfolio, 'start');
         game.portfolio.salary = Math.max(0, sal);
+        game.portfolio.employed = sal > 0;
         game.portfolio.peakSalary = Math.max(game.portfolio.peakSalary || 0, sal);
       } else {
         game.portfolio = setEmployment(game.portfolio, mode);
@@ -380,7 +384,7 @@ export class RoomScene {
       if (!financed) {
         game.portfolio = largePurchase(game.portfolio, price, { label });
         await dialog.show(
-          `Purchased ${label} — paid in full from liquid assets.`,
+          game.portfolio.lastTransaction?.reason || `Purchased ${label} — paid in full from liquid assets.`,
           { title: 'Make Large Purchase' }
         );
         return;
@@ -417,7 +421,7 @@ export class RoomScene {
         label,
       });
       await dialog.show(
-        `Purchased ${label}.\n` +
+        game.portfolio.lastTransaction?.reason || `Purchased ${label}.\n` +
           `Down ${formatMoneyDisplay(downCap)}; financed ${formatMoneyDisplay(principal)} ` +
           `at ${ratePct}% for ${Math.max(1, Math.round(term ?? 5))} yr.`,
         { title: 'Make Large Purchase' }
@@ -612,12 +616,14 @@ export class RoomScene {
           { label: 'Difficulty rates', value: 'rates' },
           { label: 'Annual spending', value: 'spend' },
           { label: 'Housing / rent', value: 'housing' },
+          { label: 'Planning inputs / benefits', value: 'planning' },
           { label: 'Done', value: null },
         ],
         { title: 'Portfolio' }
       );
       if (!choice) return;
-      if (choice === 'cash') {
+      if (choice === 'planning') { await editPlanningInputs(p, dialog); }
+      else if (choice === 'cash') {
         const v = await dialog.prompt('Cash (checking)', {
           title: 'Portfolio',
           defaultValue: String(p.cash || 0),
@@ -648,18 +654,7 @@ export class RoomScene {
           p.peakSalary = Math.max(p.peakSalary || 0, p.salary);
         }
       } else if (choice === 'stocks') {
-        const v = await dialog.prompt('Stock portfolio total', {
-          title: 'Portfolio',
-          defaultValue: String(p.stocksTotal || 0),
-          type: 'money',
-          prefix: '$',
-        });
-        if (v != null) {
-          p.stocksTotal = Math.max(0, v);
-          if (!(p.stocksHoldings || []).length) {
-            p.stocksCostBasis = Math.min(p.stocksCostBasis || 0, p.stocksTotal) || p.stocksTotal;
-          }
-        }
+        await editPlanningInputs(p, dialog);
       } else if (choice === 'retire') {
         const form = await dialog.form('Retirement accounts', [
           { key: 'k401', label: '401(k) balance', type: 'money', prefix: '$', defaultValue: String(p.k401Balance || 0) },
@@ -720,7 +715,7 @@ export class RoomScene {
           };
         }
       } else if (choice === 'spend') {
-        const v = await dialog.prompt('Annual household spending', {
+        const v = await dialog.prompt('Annual living costs (exclude housing, taxes, children, contributions)', {
           title: 'Portfolio',
           defaultValue: String(p.annualSpending || 0),
           type: 'money',
@@ -728,7 +723,7 @@ export class RoomScene {
         });
         if (v != null) {
           p.annualSpending = Math.max(0, v);
-          p.spendingBreakdown = { ...(p.spendingBreakdown || {}), other: p.annualSpending };
+          p.spendingBreakdown = { other: p.annualSpending };
         }
       } else if (choice === 'housing') {
         const mode = await dialog.menu('Housing', [
@@ -788,53 +783,16 @@ export class RoomScene {
       proceeds = Math.round(held * (Math.max(0, Math.min(100, pct)) / 100));
     }
 
-    const saleLine = `Sale amount: ${formatMoneyDisplay(proceeds)}`;
-    const gains = await dialog.prompt(
-      `${saleLine}\nRealized gains on this sale ($)?`,
-      {
-        title: 'Capital Gains',
-        defaultValue: '0',
-        type: 'money',
-      }
-    );
-    if (gains == null) return;
-
-    // CGT only cares short vs long (≥1yr); map to yearsHeld for estimateCapitalGainsTax
-    const holding = await dialog.menu(
-      `${saleLine}\nHolding period for capital gains?`,
-      [
-        { label: 'Short-term (< 1 year)', value: 'short' },
-        { label: 'Long-term (≥ 1 year)', value: 'long' },
-        { label: 'Cancel', value: null },
-      ],
-      { title: 'Capital Gains' }
-    );
-    if (!holding) return;
-    const yearsHeld = holding === 'long' ? 1 : 0;
-
-    const result = sellStock(
-      game.portfolio,
-      { proceeds, gains: Math.max(0, gains), yearsHeld },
-      diff
-    );
-    game.portfolio = result.state;
-    debugLog('sell_stock', {
-      proceeds,
-      gains: Math.max(0, gains),
-      holding: holding,
-      yearsHeld,
-      cgt: result.tax?.total,
-      longTerm: !!result.tax?.longTerm,
-      netCash: result.netCash,
-      cashAfter: result.state?.cash,
-    });
-    await dialog.show(
-      `Sold ${formatMoneyDisplay(result.proceeds)}.\n` +
-        `CGT ${result.tax.longTerm ? 'LT' : 'ST'}: ${formatMoneyDisplay(result.tax.total)}\n` +
-        `(${result.tax.rateNote})\n` +
-        `Net to Cash: ${formatMoneyDisplay(result.netCash)}`,
-      { title: 'Sell Stock' }
-    );
+    const result = sellStock(game.portfolio, { proceeds }, diff);
+    if (result.state.lastTransaction?.accepted === false) {
+      await dialog.show(result.state.lastTransaction.reason, { title: 'Sell Stock' }); return;
+    }
+    const okay = await dialog.confirm(
+      'Sell ' + formatMoneyDisplay(result.proceeds) + '?\nBasis removed: ' + formatMoneyDisplay(result.basis) +
+      '\nRealized gain/loss: ' + formatMoneyDisplay(result.gains) +
+      '\nEstimated tax: ' + formatMoneyDisplay(result.tax.total) + '\nNet cash: ' + formatMoneyDisplay(result.netCash),
+      { title: 'Holdings sale', yes: 'Sell', no: 'Cancel' });
+    if (okay) { game.portfolio = result.state; await dialog.show('Sale posted; estimated tax is credited at year-end.', { title: 'Sell Stock' }); }
   }
 
   render(ctx, game) {
