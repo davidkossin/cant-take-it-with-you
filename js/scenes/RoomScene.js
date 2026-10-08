@@ -87,7 +87,8 @@ export class RoomScene {
   }
 
   enter(game, spawnNearDoor = false, arrival = null) {
-    // West door only after a year-door split, not a south-door return.
+    // West door for rooms entered through a Hallway year door (the first door
+    // included); a south-door return restores the original room as it was.
     this.priorHallway = westReturnHallway(game);
     this.world = buildDecisionRoom({
       hasWestReturn: !!this.priorHallway,

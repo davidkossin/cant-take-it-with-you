@@ -46,7 +46,7 @@ const activeChunks = () => chunks().filter(c => c.width > 0);
 const blits = canvas => canvas.calls.filter(c => c.op === 'drawImage');
 
 test('warm hallway renders reuse high resolution terrain and paint only visible years', () => {
-  const world = buildHallway(69, 2027, 31);
+  const world = buildHallway(70, 2026, 30);
   const frame = new CanvasMock(VIEW_W, VIEW_H, 'frame');
   try {
     drawWorld(frame.context, world, 0, 640, 0);
@@ -113,7 +113,7 @@ test('new terrain and explicit in-place edits invalidate cached layers', () => {
 });
 
 test('long hallways and many worlds retain at most 24 MiB of chunk pixels', () => {
-  const world = buildHallway(69, 2027, 31);
+  const world = buildHallway(70, 2026, 30);
   const room = buildDecisionRoom();
   const frame = new CanvasMock(VIEW_W, VIEW_H, 'frame');
   try {

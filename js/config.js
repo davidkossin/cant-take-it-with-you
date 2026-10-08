@@ -21,7 +21,7 @@ export const CANVAS_W = FRAME_W;
 export const CANVAS_H = FRAME_H;
 
 /** Bump on each published build so players can confirm cache. */
-export const GAME_VERSION = '0.7.2';
+export const GAME_VERSION = '0.7.3';
 
 export const PALETTE = {
   bg: '#1a1420',

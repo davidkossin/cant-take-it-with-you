@@ -10,6 +10,15 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-10-08
+
+### Added
+- The first east door in the Hallway of Time is now the current year: the year of the Decision Room you just left, at your current age, with no time passed. It opens a Decision Room for that same year with your finances exactly as you left them, so you can change a decision without a year going by. As with any year door, a new numbered timeline is made only when you leave that room through its north door; that room's west door leads back to the Hallway. Every later door moved up one place and still matches its year in the forecast. A glass wall in the current year sits just past this first door, so it can always be used to raise Cash.
+
+### Changed
+- The Hallway's south door now erases the timeline. It first asks **Are you sure?** (Yes / No, with No selected), warning that going back will erase this timeline and every timeline that branches from it. On Yes, the timeline's Hallway, the rooms and hallways reached from it, its forecast and its chosen path are deleted, along with all of its branch timelines, and you return to the Decision Room it was opened from, standing just below its north door, with your finances as they were when you left that room. That room works exactly as before you left it (its west door, if it had one, still leads to its own Hallway), and the parent timeline becomes the current one on the Pause Map. In Timeline 1's Hallway, Timeline 1 itself is kept but reset to how it was before you first entered the Hallway. Checkpoints saved earlier still contain the erased timelines. This replaces the old south door, which went back to the room without erasing anything; changing a decision in the current year is now done through the first east door.
+- The purple lanterns beside the Hallway's end door and the green lanterns beside its south door now flicker on the same beat as the Hallway's other lanterns and torches: a four-frame flame stepping at the same rate, and a glow that pulses with the same timing and strength.
+
 ## [0.7.2] — 2026-10-08
 
 ### Added

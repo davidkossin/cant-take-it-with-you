@@ -137,6 +137,121 @@ export function createHallwayTimeline(game, node) {
   return record;
 }
 
+/** Node id → child nodes, built once per structural edit. */
+function childIndex(tree) {
+  const children = new Map();
+  for (const node of Object.values(tree.nodes || {})) {
+    if (!node?.parentId) continue;
+    if (!children.has(node.parentId)) children.set(node.parentId, []);
+    children.get(node.parentId).push(node);
+  }
+  return children;
+}
+
+function addSubtree(children, rootId, into) {
+  const stack = rootId ? [rootId] : [];
+  while (stack.length) {
+    const id = stack.pop();
+    if (into.has(id)) continue;
+    into.add(id);
+    for (const kid of children.get(id) || []) stack.push(kid.id);
+  }
+}
+
+/**
+ * Erase a numbered timeline: its Hallway node and everything reached from it,
+ * their snapshots, its forecast and selected path, and every timeline that
+ * branches from it (recursively). The player returns to the Decision Room the
+ * timeline was opened from, which becomes the live node again.
+ *
+ * A timeline without a parent (Timeline 1) is never removed: it is reset to
+ * its state before its Hallway was first entered.
+ *
+ * @returns {null|{originRoomId:string, state:object, activeTimelineId:string,
+ *   erasedTimelineIds:string[], reset:boolean, timelineNumber:number}}
+ */
+export function eraseTimeline(game, timelineId) {
+  const tree = ensureTimelineSystem(game);
+  const record = tree?.records[timelineId];
+  const hall = tree?.nodes[record?.hallwayNodeId];
+  if (!record || !hall) return null;
+  const originEnd = tree.nodes[record.originNodeId] || tree.nodes[hall.parentId];
+  const originRoom = nearestRoom(tree, originEnd);
+  if (!originRoom) return null;
+  // Finances as they were when the player left that room (the Hallway's start).
+  const left = tree.snapshots[hall.snapshotId] || tree.snapshots[originEnd?.snapshotId] || record.baseline;
+  const state = cloneState(left);
+
+  const children = childIndex(tree);
+  const removedNodes = new Set();
+  addSubtree(children, hall.id, removedNodes);
+  const family = new Set([record.id]);
+  // Child timelines start in rooms inside the erased Hallway; follow the parent
+  // chain too, so legacy graphs cannot leave a record pointing at a removed node.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const other of Object.values(tree.records)) {
+      if (family.has(other.id)) continue;
+      if (family.has(other.parentTimelineId) || removedNodes.has(other.hallwayNodeId) ||
+          removedNodes.has(other.originNodeId)) {
+        family.add(other.id);
+        addSubtree(children, other.hallwayNodeId, removedNodes);
+        changed = true;
+      }
+    }
+  }
+  // The "Left room" node exists only to open this Hallway; drop it with it.
+  if (originEnd && originEnd !== originRoom && originEnd.type === 'room' && originEnd.kind === 'end' &&
+      (children.get(originEnd.id) || []).every(kid => removedNodes.has(kid.id))) {
+    removedNodes.add(originEnd.id);
+  }
+  removedNodes.delete(originRoom.id);
+
+  const reset = !record.parentTimelineId;
+  const erased = [...family].filter(id => !(reset && id === record.id));
+  for (const id of family) {
+    const r = tree.records[id];
+    if (r.forecastId) delete tree.forecasts[r.forecastId];
+    if (r.actualPathId) delete tree.actualPaths[r.actualPathId];
+  }
+  for (const id of erased) delete tree.records[id];
+  const orphanSnapshots = new Set();
+  for (const id of removedNodes) {
+    const node = tree.nodes[id];
+    if (node?.snapshotId) orphanSnapshots.add(node.snapshotId);
+    delete tree.nodes[id];
+  }
+  // A snapshot is removed only when no remaining node refers to it.
+  for (const node of Object.values(tree.nodes)) {
+    orphanSnapshots.delete(node.snapshotId);
+    if (node.elapsedPathId && !tree.actualPaths[node.elapsedPathId]) node.elapsedPathId = null;
+  }
+  for (const snapshotId of orphanSnapshots) delete tree.snapshots[snapshotId];
+  for (const other of Object.values(tree.records)) {
+    other.decisions = other.decisions.filter(point => tree.nodes[point.nodeId]);
+  }
+
+  if (reset) {
+    // As if this Hallway had never been entered: the projection starts again
+    // from the room, and leaving it north reuses this timeline.
+    const fresh = makeRecord(game, record.number, originRoom, null, null);
+    for (const key of ['forecastId', 'actualPathId', 'forecastInputs']) delete record[key];
+    Object.assign(record, { originNodeId: originRoom.id, hallwayNodeId: null, baseline: fresh.baseline,
+      startYear: fresh.startYear, startAge: fresh.startAge, terminalYear: fresh.terminalYear,
+      decisions: [], forecast: null, scenario: null, status: 'pending' });
+  }
+  const parentId = reset ? record.id
+    : tree.records[originRoom.timelineId] ? originRoom.timelineId : record.parentTimelineId;
+  tree.activeTimelineId = tree.records[parentId] ? parentId : Object.keys(tree.records)[0];
+  tree.currentNodeId = originRoom.id;
+  // An erased number is free again once no later timeline uses it.
+  tree.nextTimelineNumber = Math.max(0, ...Object.values(tree.records).map(r => r.number)) + 1;
+  delete tree.mapJumpYear;
+  game.hallwayScenario = null;
+  return { originRoomId: originRoom.id, state, activeTimelineId: tree.activeTimelineId,
+    erasedTimelineIds: erased, reset, timelineNumber: record.number };
+}
+
 /** Save the complete original ensemble summary, never raw simulation paths. */
 export function storeTimelineForecast(game, forecast) {
   const record = currentTimeline(game);

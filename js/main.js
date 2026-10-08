@@ -408,6 +408,8 @@ window.addEventListener('keydown', async (e) => {
       let nav = null;
       if (mode === 'room') nav = await room.tryInteract(game, dialog);
       else if (mode === 'hallway') nav = await hallway.tryInteract(game, dialog);
+      // An erased timeline must not stay selected on the Pause Map or in Compare.
+      if (nav?.timelineErased) pause.forgetTimelineSelection();
       if (nav?.goto) await transition(nav.goto, nav.arrival);
     } finally {
       interacting = false;

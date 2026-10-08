@@ -73,12 +73,11 @@ export class HallwayScene {
     this.leaveYear = this.baseline.year;
     this.leaveAge = this.baseline.age;
 
-    // Doors always start at last Decision Room year + 1
-    const firstDoorYear = this.leaveYear + 1;
-    const firstDoorAge = this.leaveAge + 1;
-    const doorCount = Math.max(0, MAX_AGE - this.leaveAge - 1); // ages firstDoorAge .. 99
+    // The first east door is the year of the Decision Room just left, with no
+    // time elapsed (door i = leave year + i ↔ snapshots[i]).
+    const doorCount = Math.max(0, MAX_AGE - this.leaveAge); // ages leaveAge .. 99
 
-    this.world = buildHallway(doorCount, firstDoorYear, firstDoorAge);
+    this.world = buildHallway(doorCount, this.leaveYear, this.leaveAge);
     // Faster movement in hallway
     this.player = new Player(this.world.spawn.x, this.world.spawn.y, { speed: 2.4 });
     this.player.bindInput();
@@ -220,7 +219,8 @@ export class HallwayScene {
     const lastSafe = this.glassWall ? Math.max(0, this.glassWall.yearIndex - 1) : this.snapshots.length - 1;
     const index = Math.min(requested, lastSafe);
     if (index > 0 && index < this.snapshots.length - 1) {
-      const door = this.world.doors[index - 1];
+      // Door i is snapshots[i]; index 0 (the leave year) keeps the south spawn.
+      const door = this.world.doors[index];
       if (door) this.player.y = door.y + (door.h - this.player.h) / 2;
     } else if (index === this.snapshots.length - 1) {
       const door = this.world.interactables.find(obj => obj.kind === 'end-door');
@@ -377,7 +377,8 @@ export class HallwayScene {
   }
 
   stateAtDoor(yearIndex) {
-    // yearIndex is 1-based years from leave (see World.buildHallway)
+    // yearIndex is years from the leave year (see World.buildHallway); 0 is the
+    // first door, which opens on the Hallway's start state.
     const idx = Math.max(0, Math.min(this.snapshots.length - 1, yearIndex));
     return this.snapshots[idx];
   }
@@ -397,13 +398,16 @@ export class HallwayScene {
     this.setInputBlocked(true);
 
     if (obj.kind === 'year-door') {
-      const snap = this.stateAtDoor(obj.yearIndex);
+      // The first door is this Hallway's own year: its full start state, with
+      // nothing simulated. Later doors use the selected path's year snapshot.
+      const sameYear = obj.yearIndex === 0;
+      const snap = sameYear ? { state: this.baseline } : this.stateAtDoor(obj.yearIndex);
       const state = cloneState(snap.state);
       state.year = obj.year;
       state.age = obj.age;
 
       const ok = await dialog.confirm(
-        `Enter Decision Room for ${obj.year} (age ${obj.age})?\nKeep this timeline for comparison. Leaving this room north generates a new projection.`,
+        `Enter Decision Room for ${obj.year} (age ${obj.age})?${sameYear ? ' No time passes.' : ''}\nKeep this timeline for comparison. Leaving this room north generates a new projection.`,
         { title: 'Year Door', yes: 'Enter', no: 'Stay' }
       );
       if (!ok) {
@@ -425,31 +429,38 @@ export class HallwayScene {
     }
 
     if (obj.kind === 'south-door') {
-      // Return to the Decision Room just left — leave baseline / current portfolio
+      // Going back erases this timeline (and the timelines branching from it)
+      // and returns to the Decision Room it was opened from.
       const year = obj.year ?? this.leaveYear;
       const age = obj.age ?? this.leaveAge;
-      const ok = await dialog.confirm(
-        `Return to Decision Room for ${year} (age ${age})?\nRestores your finances from when you left that room.`,
-        { title: 'Decision Room', yes: 'Return', no: 'Stay' }
+      const ok = await dialog.menu(
+        southDoorMessage(game, year, age),
+        [{ label: 'Yes', value: true }, { label: 'No', value: false }],
+        { title: 'Are you sure?', selected: 1 }
       );
       if (!ok) {
         this.setInputBlocked(false);
         return null;
       }
-      const state = cloneState(this.baseline || game.portfolio);
-      state.year = year;
-      state.age = age;
-      debugLog('south_door_return', {
+      const erased = returnToLeftDecisionRoom(game);
+      if (!erased) {
+        await dialog.show('This Hallway could not be erased.', { title: 'Hallway of Time' });
+        this.setInputBlocked(false);
+        return null;
+      }
+      debugLog('south_door_erase', {
         year,
         age,
-        cash: state.cash,
-        salary: state.salary,
+        timeline: erased.timelineNumber,
+        reset: erased.reset,
+        erased: erased.erasedTimelineIds,
+        active: erased.activeTimelineId,
+        cash: game.portfolio.cash,
+        salary: game.portfolio.salary,
       });
-      // A return is a new decision visit; the previous snapshot stays immutable.
-      returnToLeftDecisionRoom(game, state);
       autoSave(game, 'begin');
       this.leave();
-      return { goto: 'room', arrival: 'north-door' };
+      return { goto: 'room', arrival: 'north-door', timelineErased: true };
     }
 
     if (obj.kind === 'end-door') {
@@ -563,7 +574,8 @@ export function hallwaySnapshotIndex(world, player, snapshotCount) {
   const firstDoor = world.doors?.[0];
   if (!firstDoor) return center <= (world.endPad || 7) * TILE ? last : 0;
   const firstCenter = firstDoor.y + firstDoor.h / 2;
-  const index = Math.round((firstCenter - center) / ((world.segment || 5) * TILE)) + 1;
+  // Door i shows snapshots[i]; the south foyer below the first door is the leave year too.
+  const index = Math.round((firstCenter - center) / ((world.segment || 5) * TILE));
   return Math.max(0, Math.min(last, index));
 }
 
@@ -600,10 +612,11 @@ export function buildEventAuras(world, snapshots, leaveYear) {
     slot.eventDetails.push(...eventDetails);
   };
 
+  // Slot i sits at door i (the leave year + i), which shows snapshots[i].
   for (let k = 1; k < snapshots.length; k++) {
     const msgs = portalMessages(snapshots[k].events);
     const st = snapshots[k].state || {};
-    addMsgs(k - 1, st.year, st.age, msgs, snapshots[k].statement?.eventDetails || []);
+    addMsgs(k, st.year, st.age, msgs, snapshots[k].statement?.eventDetails || []);
   }
 
   // Named purchases recorded on the leave-year baseline
@@ -613,11 +626,11 @@ export function buildEventAuras(world, snapshots, leaveYear) {
     const y = m.year ?? leaveYear;
     if (typeof msg !== 'string') continue;
     if (y === leaveYear) {
-      // Just past the foyer — player sees it as they enter the corridor
+      // At the first (leave-year) door, just past the foyer
       addMsgs(0, leaveYear, baseline.age, portalMessages([msg]));
     } else if (y > leaveYear) {
-      const offset = y - leaveYear - 1;
-      if (offset >= 0) addMsgs(offset, y, (baseline.age || 0) + (y - leaveYear), portalMessages([msg]));
+      const offset = y - leaveYear;
+      addMsgs(offset, y, (baseline.age || 0) + (y - leaveYear), portalMessages([msg]));
     }
   }
 
@@ -675,6 +688,21 @@ function drawEventAuras(ctx, world, auras, camX, camY, animTime) {
 
 
 /**
+ * South-door confirmation. Timeline 1 is reset rather than removed, so say what
+ * actually disappears.
+ */
+export function southDoorMessage(game, year, age) {
+  const record = currentTimeline(game);
+  const tree = game.timeline || {};
+  const branches = Object.values(tree.records || {}).some(r => r.parentTimelineId === record?.id);
+  const what = record?.parentTimelineId
+    ? `Timeline ${record.number}${branches ? ' and every timeline that branches from it' : ''}`
+    : `this Hallway's future for Timeline ${record?.number ?? 1}${branches ? ' and every timeline that branches from it' : ''}`;
+  return `Going back will erase ${what}. This cannot be undone.\n` +
+    `You'll return to the Decision Room for ${year} (age ${age}) with your finances as you left it.`;
+}
+
+/**
  * Glass-wall dialog: only Cash pays bills, so the player must raise Cash by hand.
  * @param {number} shortfallYear calendar year whose bills Cash could not pay
  */
@@ -695,8 +723,9 @@ export function glassWallMessage(shortfallYear) {
  *    player; any bill Cash cannot cover marks the year unfunded (planFailed).
  * 2) findBankInsolvencyIndex returns the first snapshot k whose year left a bill unpaid.
  *    snapshots[k] is Jan 1 of year Y, so the shortfall happened in Y-1.
- * 3) Door i ↔ snapshots[i+1] (yearIndex = i+1). The last enterable door is yearIndex k-1,
- *    i.e. Jan 1 of the shortfall year, where the player can still raise Cash.
+ * 3) Door i ↔ snapshots[i] (yearIndex = i; door 0 is the leave year). The last enterable
+ *    door is yearIndex k-1, i.e. Jan 1 of the shortfall year, where the player can still
+ *    raise Cash. k >= 1, so the first (leave-year) door always stays usable.
  * The wall sits north of that door's collider (hallway gap), not overlapping it.
  */
 function buildGlassWall(world, snapshots) {
@@ -712,17 +741,10 @@ function buildGlassWall(world, snapshots) {
   const cashSafe =
     k >= 2 ? snapshots[k - 1]?.state?.cash ?? null : snapshots[0]?.state?.cash ?? null;
   // Door collider: y ∈ [yTile*TILE, yTile*TILE+22] (see World.buildHallway)
-  const iSafe = k - 2; // door index for Jan 1 of the shortfall year; -1 = the room just left
-  let y;
-  if (iSafe >= 0) {
-    const yTile = world.rows - 1 - foyer - iSafe * segment - 1;
-    // North of last safe door (smaller y); clear of its 22px-tall collider
-    y = yTile * TILE - 10;
-  } else {
-    // The leave year itself is short — block approach from the south
-    const yTile0 = world.rows - 1 - foyer - 1;
-    y = yTile0 * TILE + 24;
-  }
+  const iSafe = Math.max(0, k - 1); // door index for Jan 1 of the shortfall year
+  const yTile = world.rows - 1 - foyer - iSafe * segment - 1;
+  // North of last safe door (smaller y); clear of its 22px-tall collider
+  const y = yTile * TILE - 10;
   debugLog('glass_wall_place', {
     year: st.year,
     age: st.age,

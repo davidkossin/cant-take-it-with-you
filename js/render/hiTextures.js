@@ -488,8 +488,9 @@ function paintSlopedSouthDoor(style) {
  * and flame. Glow and flicker are added live by drawDoorLanterns.
  * @param {'purple'|'green'} [glassColor]
  */
-function paintWallLantern(glassColor = 'purple') {
-  const key = `hi-wall-lantern-${glassColor}`;
+function paintWallLantern(glassColor = 'purple', frame = 0) {
+  const fr = ((frame % 4) + 4) % 4;
+  const key = `hi-wall-lantern-${glassColor}-f${fr}`;
   if (cache.has(key)) return cache.get(key);
   const lw = 8;
   const lh = 12;
@@ -549,13 +550,23 @@ function paintWallLantern(glassColor = 'purple') {
   }
   ctx.fillStyle = glass;
   ctx.fillRect(1.5, 4.9, 5, 4.8);
-  // Flame.
+  // Flame: four frames on the same beat as the Hallway's other lanterns
+  // (makeLamp / makeBlueTorch): height and brightness step every frame,
+  // with a small tip spark on odd frames.
+  const tipY = 5.6 - (fr % 2) * 0.6;
+  const halfW = [1.1, 0.9, 1.2, 0.85][fr];
   ctx.beginPath();
-  ctx.moveTo(4, 5.6);
-  ctx.quadraticCurveTo(5.1, 7.4, 4, 8.5);
-  ctx.quadraticCurveTo(2.9, 7.4, 4, 5.6);
-  ctx.fillStyle = glassColor === 'green' ? '#f4fff4' : '#fff4ff';
+  ctx.moveTo(4, tipY);
+  ctx.quadraticCurveTo(4 + halfW, 7.4, 4, 8.5);
+  ctx.quadraticCurveTo(4 - halfW, 7.4, 4, tipY);
+  ctx.fillStyle = glassColor === 'green'
+    ? ['#f4fff4', '#d8ffe0', '#ffffff', '#c4f8d0'][fr]
+    : ['#fff4ff', '#f0d8ff', '#ffffff', '#e8c8ff'][fr];
   ctx.fill();
+  if (fr % 2 === 1) {
+    ctx.fillStyle = glassColor === 'green' ? '#e8ffec' : '#f8e8ff';
+    ctx.fillRect(3.75, tipY - 0.55, 0.5, 0.5);
+  }
   // Iron cage: frame and two bars.
   ctx.strokeStyle = '#141317';
   ctx.lineWidth = 0.45;
@@ -593,7 +604,19 @@ function paintWallLantern(glassColor = 'purple') {
 }
 
 function paintDeathsDoorLantern() {
-  return paintWallLantern('purple');
+  return paintWallLantern('purple', 0);
+}
+
+/**
+ * Flicker shared with the Hallway's other lanterns and torches (World.js
+ * 'lamp' objects): a 4-frame flame stepping every 8 ticks, and a glow that
+ * pulses with sin(animTime / 5 + world x). Returns the flame frame and a
+ * light multiplier normalized to 1 at the lamps' mean glow.
+ */
+function lanternFlicker(animTime, worldX) {
+  const frame = Math.floor(animTime / 8) % 4;
+  const pulse = 0.1 + 0.06 * Math.sin(animTime / 5 + worldX);
+  return { frame, f: pulse / 0.1, r: 1 + 0.07 * (frame % 2) };
 }
 
 /**
@@ -606,24 +629,23 @@ function paintDeathsDoorLantern() {
  * @param {'purple'|'green'} glassColor
  */
 function drawDoorLanterns(ctx, door, wallFloorY, camX, camY, animTime = 0, glassColor = 'purple') {
-  const spr = paintWallLantern(glassColor);
   const gap = 9;
   const top = door.y - 2;
   const glassY = top + 7.3;
   const xs = [door.x - gap, door.x + door.w + gap];
   const { washRgb, poolRgb, glowRgb } = LANTERN_LIGHT[glassColor] || LANTERN_LIGHT.purple;
   ctx.save();
-  xs.forEach((wx, i) => {
-    const phase = i * 2.1;
-    const f = 0.88 + 0.07 * Math.sin(animTime / 11 + phase) + 0.05 * Math.sin(animTime / 4.7 + phase * 1.7);
+  xs.forEach((wx) => {
+    const { frame, f, r } = lanternFlicker(animTime, wx);
+    const spr = paintWallLantern(glassColor, frame);
     const cx = wx - camX;
     const cy = glassY - camY;
-    const wash = ctx.createRadialGradient(cx, cy, 0.5, cx, cy, 11);
+    const wash = ctx.createRadialGradient(cx, cy, 0.5, cx, cy, 11 * r);
     wash.addColorStop(0, `rgba(${washRgb[0].join(',')},${0.34 * f})`);
     wash.addColorStop(0.5, `rgba(${washRgb[1].join(',')},${0.14 * f})`);
     wash.addColorStop(1, `rgba(${washRgb[2].join(',')},0)`);
     ctx.fillStyle = wash;
-    ctx.fillRect(cx - 11, cy - 11, 22, 22);
+    ctx.fillRect(cx - 11 * r, cy - 11 * r, 22 * r, 22 * r);
     if (wallFloorY != null) {
       ctx.save();
       ctx.translate(cx, wallFloorY - camY + 3.2);
@@ -670,7 +692,6 @@ export function drawDeathsDoorLanterns(ctx, door, wallBottom, camX, camY, animTi
  * @param {{x:number,y:number,w:number,h:number}} door door slab rect, world px
  */
 export function drawSouthDoorLanterns(ctx, door, camX, camY, animTime = 0) {
-  const spr = paintWallLantern('green');
   const { washRgb, glowRgb } = LANTERN_LIGHT.green;
   const F = southDoorFace(door);
   const gap = 9;
@@ -680,9 +701,9 @@ export function drawSouthDoorLanterns(ctx, door, camX, camY, animTime = 0) {
   const ay = F.yB + 2 * F.fy;
   const glassV = 7.3; // glass center, in lantern sprite px from the plate
   ctx.save();
-  [-off, off].forEach((o, i) => {
-    const phase = i * 2.1;
-    const f = 0.88 + 0.07 * Math.sin(animTime / 11 + phase) + 0.05 * Math.sin(animTime / 4.7 + phase * 1.7);
+  [-off, off].forEach((o) => {
+    const { frame, f, r } = lanternFlicker(animTime, F.cx + o);
+    const spr = paintWallLantern('green', frame);
     const ax = F.cx + F.spread(o, ay) - camX;
     const sy = ay - camY;
     // Perspective slant: toward the floor edge (up the screen) the lantern
@@ -690,12 +711,12 @@ export function drawSouthDoorLanterns(ctx, door, camX, camY, animTime = 0) {
     const k = (o / F.vp) * F.fy;
     const gx = ax - k * glassV;
     const gy = sy - F.fy * glassV;
-    const wash = ctx.createRadialGradient(gx, gy, 0.5, gx, gy, 11);
+    const wash = ctx.createRadialGradient(gx, gy, 0.5, gx, gy, 11 * r);
     wash.addColorStop(0, `rgba(${washRgb[0].join(',')},${0.34 * f})`);
     wash.addColorStop(0.5, `rgba(${washRgb[1].join(',')},${0.14 * f})`);
     wash.addColorStop(1, `rgba(${washRgb[2].join(',')},0)`);
     ctx.fillStyle = wash;
-    ctx.fillRect(gx - 11, gy - 11, 22, 22);
+    ctx.fillRect(gx - 11 * r, gy - 11 * r, 22 * r, 22 * r);
     // Shadow on the slope just past the lantern's free end, toward the floor
     // edge ("below" it on this face).
     const shV = spr.lh + 1.2;

@@ -205,11 +205,13 @@ export function buildDecisionRoom(opts = {}) {
 
 /**
  * Hallway of Time — narrow corridor, thick walls, dark purple stippled void.
- * Doors start at leaveYear+1 / leaveAge+1 (caller passes firstDoorYear/Age).
+ * The first east door is the year of the Decision Room just left (no time
+ * elapsed); door i is that year + i. The caller passes the leave year/age as
+ * firstDoorYear/firstDoorAge.
  *
  * @param {number} doorCount - ages firstDoorAge .. 99
- * @param {number} firstDoorYear
- * @param {number} firstDoorAge
+ * @param {number} firstDoorYear - the leave year (the Hallway's start year)
+ * @param {number} firstDoorAge - the leave age
  */
 export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
   // Narrow walkable: 4 tiles wide, thick 2-tile walls, void outside
@@ -281,7 +283,8 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
       kind: 'year-door',
       year,
       age,
-      yearIndex: i + 1,
+      // Years from the Hallway's start: snapshots[yearIndex]; 0 = the leave year.
+      yearIndex: i,
     };
     doors.push(door);
     interactables.push(door);
@@ -358,8 +361,8 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
   // threshold at the floor edge (spriteOy). Its interact rect reaches 8 px
   // out of the wall onto the floor, mirroring the end door, so the player
   // can still face and use it from the corridor.
-  const leaveYear = firstDoorYear - 1;
-  const leaveAge = firstDoorAge - 1;
+  const leaveYear = firstDoorYear;
+  const leaveAge = firstDoorAge;
   const southDoor = {
     id: 'south-return-door',
     x: midX - TILE,

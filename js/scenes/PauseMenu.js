@@ -226,6 +226,14 @@ export class PauseMenu {
     return undefined;
   }
 
+  /** After the south door erases a timeline: drop map focus and Compare picks that may name it. */
+  forgetTimelineSelection() {
+    this.mapMode = 'overview';
+    this.mapTimelineIndex = 0; this.mapPointIndex = 0; this.mapFocus = 'point';
+    this.mapJumpPoints = [];
+    this.compareSelectionIndex = 0; this.selectedComparison = [];
+  }
+
   /** Map C: toggle Compare selection. */
   toggleMapCompare(game) {
     if (listTimelines(game).length < 2) return undefined;

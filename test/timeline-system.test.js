@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameFromSetup, createDefaultSetup, commitRoomDecisions, commitHallwayNode,
-  enterYearRoom, jumpToHallwayNode, currentNode, returnToLeftDecisionRoom } from '../js/state/GameState.js';
+  enterYearRoom, jumpToHallwayNode, currentNode, westReturnHallway } from '../js/state/GameState.js';
 import { ensureTimelineSystem, listTimelines, timelineMapModel, currentTimeline, getTimelineForecast,
   storeTimelineForecast, storeTimelineActualPath, pointLetter } from '../js/state/TimelineSystem.js';
 import { projectMonteCarlo } from '../js/finance/Forecast.js';
@@ -29,6 +29,16 @@ function saveForecast(g, count = 25) {
 function browserStubs() {
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   globalThis.localStorage = { getItem() { return null; }, setItem() {} };
+}
+/** Stand next to a Hallway interactable, facing it; the dialog answers every question with `answer`. */
+function faceAndAnswer(scene, obj, answer, facing = 'right') {
+  const p = scene.player;
+  p.x = obj.x + obj.w / 2 - p.w / 2 - (facing === 'right' ? 10 : 0);
+  p.y = obj.y + obj.h / 2 - p.h / 2 - (facing === 'down' ? 10 : 0);
+  p.facing = facing;
+  const calls = [];
+  const ask = async (text, options, extra) => { calls.push({ text, options, extra }); return answer; };
+  return { calls, active: false, confirm: ask, menu: ask, async show(text) { calls.push({ text }); } };
 }
 function canvas() {
   const texts = [], noop = () => {};
@@ -76,19 +86,109 @@ test('timeline rewind reconstructs the selected branch history instead of trimmi
   assert.deepEqual(listTimelines(g).map(t => t.number), [1, 2, 3]);
 });
 
-test('south-door decision creates a child on north exit without mutating the earlier room', () => {
-  const g = game(); const initialNode = currentNode(g).id;
-  commitRoomDecisions(g); const hall = commitHallwayNode(g);
-  const baseline = structuredClone(currentTimeline(g).baseline);
-  returnToLeftDecisionRoom(g, baseline);
-  assert.notEqual(currentNode(g).id, initialNode);
-  assert.equal(currentNode(g).parentId, hall);
-  g.portfolio.cash += 1000; commitRoomDecisions(g); commitHallwayNode(g);
-  const timelines = listTimelines(g);
-  assert.equal(timelines.length, 2);
-  assert.equal(timelines[0].baseline.cash, baseline.cash);
-  assert.equal(timelines[1].baseline.cash, baseline.cash + 1000);
-  assert.equal(timelines[1].parentPointId, timelines[0].points[1].id);
+test('the first Hallway door is the current year: start state, nothing elapsed, a timeline only on north exit', async () => {
+  browserStubs(); const g = game();
+  commitRoomDecisions(g); const hall = commitHallwayNode(g); saveForecast(g);
+  const scene = new HallwayScene({ forecast: { cancel() {}, request() { throw Error('Saved path was rerolled'); } } });
+  scene.enter(g);
+  try {
+    assert.deepEqual(scene.world.doors.map(d => [d.year, d.age, d.yearIndex]), [[2026, 97, 0], [2027, 98, 1], [2028, 99, 2]]);
+    assert.equal(scene.stateAtDoor(0), scene.snapshots[0]);
+    const before = structuredClone(scene.baseline);
+    const dialog = faceAndAnswer(scene, scene.world.doors[0], true);
+    assert.deepEqual(await scene.tryInteract(g, dialog), { goto: 'room', arrival: 'west-door' });
+    assert.match(dialog.calls[0].text, /^Enter Decision Room for 2026 \(age 97\)\? No time passes\./);
+    const room = currentNode(g);
+    assert.equal(room.parentId, hall);
+    assert.deepEqual([room.year, room.age, g.portfolio.year, g.portfolio.age], [2026, 97, 2026, 97]);
+    assert.equal(g.portfolio.cash, before.cash);
+    assert.deepEqual([room.elapsedFromYear, room.elapsedToYear], [2026, 2026]);
+    assert.ok(g.worthHistory.every(row => row.year === 2026), 'no years elapsed');
+    assert.equal(listTimelines(g).length, 1, 'entering the room alone creates no timeline');
+    assert.equal(westReturnHallway(g)?.id, hall);
+    g.portfolio.cash += 1000; commitRoomDecisions(g); commitHallwayNode(g);
+    const timelines = listTimelines(g);
+    assert.equal(timelines.length, 2);
+    assert.equal(timelines[1].startYear, 2026);
+    assert.equal(timelines[0].baseline.cash, before.cash);
+    assert.equal(timelines[1].baseline.cash, before.cash + 1000);
+    assert.equal(timelines[1].parentPointId, timelines[0].points[1].id);
+    assert.equal(timelines[0].points[1].year, 2026);
+  } finally { scene.leave(); }
+});
+
+test('the south door asks first (No by default), then erases the timeline and its branches and returns to its Decision Room', async () => {
+  browserStubs(); const g = game();
+  commitRoomDecisions(g); const rootHall = commitHallwayNode(g); const { path } = saveForecast(g);
+  enterYearRoom(g, path[1].state, path.slice(1, 2)); const room = currentNode(g).id;
+  g.portfolio.cash = 900; commitRoomDecisions(g); const hall2 = commitHallwayNode(g); const second = saveForecast(g);
+  enterYearRoom(g, second.path[1].state, second.path.slice(1, 2)); commitRoomDecisions(g); commitHallwayNode(g); saveForecast(g);
+  assert.deepEqual(listTimelines(g).map(t => [t.number, t.parentTimelineId]), [[1, null], [2, 'timeline-1'], [3, 'timeline-2']]);
+  jumpToHallwayNode(g, hall2);
+  const pause = new PauseMenu(); pause.show(g); pause.screen = 'map';
+  pause.mapMode = 'result'; pause.selectedComparison = ['timeline-2', 'timeline-3']; pause.mapTimelineIndex = 2;
+  const scene = new HallwayScene({ forecast: { cancel() {}, request() { throw Error('Saved path was rerolled'); } } });
+  scene.enter(g);
+  try {
+    const south = scene.world.interactables.find(o => o.kind === 'south-door');
+    assert.equal(south.year, 2027);
+    const declined = faceAndAnswer(scene, south, false, 'down');
+    assert.equal(await scene.tryInteract(g, declined), null);
+    assert.equal(declined.calls[0].extra.title, 'Are you sure?');
+    assert.equal(declined.calls[0].extra.selected, 1, 'No is selected by default');
+    assert.match(declined.calls[0].text, /erase Timeline 2 and every timeline that branches from it/);
+    assert.equal(listTimelines(g).length, 3);
+    const nav = await scene.tryInteract(g, faceAndAnswer(scene, south, true, 'down'));
+    assert.deepEqual(nav, { goto: 'room', arrival: 'north-door', timelineErased: true });
+    assert.deepEqual(listTimelines(g).map(t => t.number), [1]);
+    assert.equal(g.timeline.activeTimelineId, 'timeline-1');
+    assert.equal(g.timeline.currentNodeId, room, 'back in the original room, not a new visit');
+    assert.equal(g.portfolio.cash, 900, 'finances as they were when the room was left');
+    assert.equal(g.hallwayScenario, null);
+    assert.deepEqual(Object.keys(g.timeline.forecasts), ['forecast-timeline-1']);
+    assert.deepEqual(Object.keys(g.timeline.actualPaths), ['actual-timeline-1']);
+    assert.equal(g.timeline.nodes[hall2], undefined);
+    const nodes = Object.values(g.timeline.nodes);
+    assert.deepEqual(Object.keys(g.timeline.snapshots).sort(), nodes.map(n => n.snapshotId).sort());
+    assert.ok(nodes.every(n => !n.parentId || g.timeline.nodes[n.parentId]));
+    assert.ok(currentTimeline(g).decisions.every(point => g.timeline.nodes[point.nodeId]));
+    assert.equal(westReturnHallway(g)?.id, rootHall);
+    assert.equal(g.worthHistory.at(-1).year, 2027);
+    assert.doesNotThrow(() => importPlan(JSON.stringify(exportPlan(g))));
+    pause.forgetTimelineSelection();
+    assert.deepEqual([pause.mapMode, pause.selectedComparison, pause.mapTimelineIndex], ['overview', [], 0]);
+    // Leaving the room north again starts a fresh timeline; the erased number is free.
+    commitRoomDecisions(g); commitHallwayNode(g);
+    assert.deepEqual(listTimelines(g).map(t => [t.number, t.status]), [[1, 'ready'], [2, 'pending']]);
+  } finally { scene.leave(); }
+});
+
+test('the south door of Timeline 1 resets it to before its Hallway', async () => {
+  browserStubs(); const g = game(); const start = currentNode(g).id;
+  g.portfolio.cash = 70000; commitRoomDecisions(g); const rootHall = commitHallwayNode(g); const { path } = saveForecast(g);
+  enterYearRoom(g, path[1].state, path.slice(1, 2)); commitRoomDecisions(g); commitHallwayNode(g); saveForecast(g);
+  jumpToHallwayNode(g, rootHall);
+  const scene = new HallwayScene({ forecast: { cancel() {}, request() { throw Error('Saved path was rerolled'); } } });
+  scene.enter(g);
+  try {
+    const south = scene.world.interactables.find(o => o.kind === 'south-door');
+    const dialog = faceAndAnswer(scene, south, true, 'down');
+    assert.equal((await scene.tryInteract(g, dialog)).timelineErased, true);
+    assert.match(dialog.calls[0].text, /Timeline 1 and every timeline that branches from it/);
+    const [first, ...rest] = listTimelines(g);
+    assert.equal(rest.length, 0);
+    assert.deepEqual([first.number, first.hallwayNodeId, first.forecastId, first.actualPathId, first.status, first.decisions.length, first.originNodeId],
+      [1, null, undefined, undefined, 'pending', 0, start]);
+    assert.equal(first.baseline.cash, 80000, 'as if the Hallway was never entered');
+    assert.deepEqual(Object.keys(g.timeline.nodes), [start]);
+    assert.deepEqual(g.timeline.forecasts, {}); assert.deepEqual(g.timeline.actualPaths, {});
+    assert.equal(g.timeline.currentNodeId, start);
+    assert.equal(g.portfolio.cash, 70000);
+    assert.equal(westReturnHallway(g), null);
+    assert.doesNotThrow(() => importPlan(JSON.stringify(exportPlan(g))));
+    commitRoomDecisions(g); commitHallwayNode(g);
+    assert.deepEqual(listTimelines(g).map(t => [t.number, t.baseline.cash]), [[1, 70000]]);
+  } finally { scene.leave(); }
 });
 
 test('Hallway new decisions rerun an ensemble; saved timeline revisit and portable load never reroll', () => {
@@ -196,6 +296,7 @@ test('map terminal inspection cannot teleport beyond the cash-funding barrier', 
     assert.equal(scene.visual.state.year, scene.glassWall.year - 1);
     assert.ok(scene.player.y > scene.glassWall.y + scene.glassWall.h);
     assert.match(scene.mapJumpNotice, /Raise Cash/);
+    assert.ok(scene.world.doors[0].y > scene.glassWall.y + scene.glassWall.h, 'the leave-year door stays usable');
     assert.equal(g.timeline.mapJumpYear, undefined);
     enterYearRoom(g, scene.visual.state);
     assert.equal(g.portfolio.year, scene.glassWall.year - 1);
@@ -203,7 +304,9 @@ test('map terminal inspection cannot teleport beyond the cash-funding barrier', 
 });
 
 test('hallway HUD years match door years, including the first and last doors', () => {
-  const world = buildHallway(69, 2027, 31);
+  const world = buildHallway(70, 2026, 30);
+  assert.deepEqual([world.doors[0].year, world.doors[0].age, world.doors[0].yearIndex], [2026, 30, 0]);
+  assert.deepEqual([world.doors.at(-1).year, world.doors.at(-1).age, world.doors.at(-1).yearIndex], [2095, 99, 69]);
   assert.equal(hallwaySnapshotIndex(world, { ...world.spawn, h: 12 }, 71), 0);
   for (const door of world.doors) {
     assert.equal(hallwaySnapshotIndex(world, { y: door.y + 5, h: 12 }, 71), door.yearIndex);

@@ -5,7 +5,7 @@
 import { CURRENT_YEAR, MAX_AGE } from '../config.js';
 import { cloneState, computeWorth } from '../finance/Engine.js';
 import { normalizePortfolio } from '../finance/Schema.js';
-import { ensureTimelineSystem, currentTimeline, recordTimelineDecision, createHallwayTimeline } from './TimelineSystem.js';
+import { ensureTimelineSystem, currentTimeline, recordTimelineDecision, createHallwayTimeline, eraseTimeline } from './TimelineSystem.js';
 
 export function createDefaultSetup() {
   return {
@@ -369,6 +369,8 @@ export function commitHallwayNode(game) {
 /**
  * Record a decision visit on the parent timeline. Leaving north creates a new
  * numbered timeline; entering the room alone does not replace a projection.
+ * The Hallway's first door is its own start year: that room is entered with
+ * the Hallway's start state and no elapsed years.
  */
 export function enterYearRoom(game, projectedPortfolio, elapsed = []) {
   ensureTimelineSystem(game);
@@ -402,6 +404,8 @@ export function enterYearRoom(game, projectedPortfolio, elapsed = []) {
     }),
     /** True when this entry splits a new timeline off an already-explored parent */
     isFork,
+    /** Entered through a Hallway year door (including the same-year first door). */
+    viaYearDoor: true,
   };
   recordTimelineDecision(game, game.timeline.nodes[id], parentId);
   game.timeline.currentNodeId = id;
@@ -496,9 +500,12 @@ function hallwaySplitFromRoom(game, roomNode) {
 
 /**
  * Hallway this Decision Room may return to through the west door, or null.
- * A year-door room (year/age differ from the hallway it came from) always
- * qualifies. The room that opened the hallway — including the starter after
- * a south-door return — qualifies only once a later year door has split it.
+ * A room entered through a Hallway year door always qualifies, including the
+ * first door, which shares the Hallway's own year. (Older saves mark rooms
+ * entered through a year door only by a differing year, and the retired
+ * south-door return by enteredViaSouth.) The room that opened a hallway
+ * qualifies only once a later year door has split it, which only older saves
+ * can contain: the south door now erases the hallway it leaves.
  * @param {object} game
  * @returns {object|null}
  */
@@ -507,9 +514,7 @@ export function westReturnHallway(game) {
   if (!cur || cur.type !== 'room') return null;
   const hall = findPriorHallwayNode(game);
   // This room was entered through a year door off a hallway.
-  if (hall && (cur.enteredViaSouth || cur.year !== hall.year || cur.age !== hall.age)) return hall;
-  // The room that opened the hallway (starter, or a south-door return to it)
-  // gets a west door only after a later year door has split that hallway.
+  if (hall && (cur.viaYearDoor || cur.enteredViaSouth || cur.year !== hall.year || cur.age !== hall.age)) return hall;
   if (cur.kind === 'begin') {
     const splitHall = hallwaySplitFromRoom(game, cur);
     if (splitHall) return splitHall;
@@ -518,17 +523,42 @@ export function westReturnHallway(game) {
 }
 
 /**
- * South door: restore the Decision Room that opened this hallway.
+ * The Hallway node whose south door the player is using, or null.
  * @param {object} game
- * @param {object} portfolioState finances from when that room was left
- * @returns {string} new decision visit node id
+ * @returns {object|null}
  */
-export function returnToLeftDecisionRoom(game, portfolioState) {
-  // A south-door return is a fresh decision opportunity on this saved timeline.
-  // Keep the previous room snapshot immutable instead of reassigning its branch.
-  const id = enterYearRoom(game, portfolioState);
-  game.timeline.nodes[id].enteredViaSouth = true;
-  return id;
+export function southDoorHallway(game) {
+  const cur = currentNode(game);
+  return cur?.type === 'hallway' ? cur : null;
+}
+
+/**
+ * South door: erase the current Hallway's timeline (its Hallway, the rooms and
+ * hallways reached from it, its forecast and every timeline branching from it)
+ * and return to the Decision Room that opened it, with the finances the player
+ * had when leaving that room. That room becomes the live node again, so it
+ * behaves exactly as before the player left it. Timeline 1 is reset rather
+ * than removed. Checkpoints saved earlier keep their copies.
+ * @param {object} game
+ * @returns {null|{originRoomId:string, activeTimelineId:string, erasedTimelineIds:string[], reset:boolean, timelineNumber:number}}
+ */
+export function returnToLeftDecisionRoom(game) {
+  const hall = southDoorHallway(game);
+  if (!hall) return null;
+  const inflationAdjusted = game.settings?.inflationAdjusted ?? game.portfolio.inflationAdjusted;
+  const erased = eraseTimeline(game, hall.timelineId);
+  if (!erased) return null;
+  const p = cloneState(erased.state);
+  p.inflationAdjusted = inflationAdjusted !== false;
+  p.dollarBaseYear = game.timeline.startYear;
+  game.portfolio = p;
+  game.timeline.currentNodeId = erased.originRoomId;
+  game.worthHistory = reconstructWorthAlongPath(game, erased.originRoomId);
+  pushWorth(game, p);
+  if (game.flags) game.flags.journeyComplete = false;
+  game.scene = 'room';
+  const { state, ...summary } = erased;
+  return summary;
 }
 
 export function yearsRemaining(game) {
@@ -536,9 +566,9 @@ export function yearsRemaining(game) {
 }
 
 export function hallwayDoorCount(game) {
-  // Doors from leaveAge+1 through age 99
+  // Doors from leaveAge (the current year, nothing elapsed) through age 99
   const leaveAge = game.portfolio.age;
-  return Math.max(0, MAX_AGE - leaveAge - 1);
+  return Math.max(0, MAX_AGE - leaveAge);
 }
 
 
