@@ -11,7 +11,8 @@ import { currentTimeline, getTimelineForecast, listTimelines, timelineMapModel, 
 import { drawTimelineMap, drawTimelineComparison } from '../render/TimelineMap.js';
 import { setMoneyContext } from '../finance/DollarBasis.js';
 import { getSaveStatus, flushSaves, autoSave } from '../state/SaveSystem.js';
-import { downloadPlan, downloadForecastBundle } from '../state/PlanExport.js';
+import { downloadForecastBundle } from '../state/PlanExport.js';
+import { loadFromFile, loadedFileMessage, saveGameToFile, savedFileMessage } from '../state/SaveFile.js';
 import { editInflationSettings, inflationToggleLabel, moneyUnitSubtitle } from './PlanningInputs.js';
 import { computeWorth } from '../finance/Engine.js';
 import { drawWorthChart, drawForecastChart } from '../render/Charts.js';
@@ -20,6 +21,13 @@ import { formatMoneyDisplay } from '../render/Dialog.js';
 import { fitPixelFont } from '../render/FutureSplash.js';
 
 const VIEW_TABS = ['portfolio', 'map', 'charts', 'settings'];
+/** Settings rows after the Inflation toggle (index 0); each row's index is i + 1. */
+const SETTINGS_ROWS = [
+  { label: 'Save to File', note: 'This game + all character profiles, as a .json file on your device' },
+  { label: 'Load from File', note: 'Replace this game with a saved file; its profiles are added' },
+  { label: 'Save now', note: 'Checkpoint in this browser’s storage' },
+];
+const SETTINGS_COUNT = SETTINGS_ROWS.length + 1;
 const MENU_ITEMS = [
   { label: 'Portfolio', value: 'portfolio' },
   { label: 'Map', value: 'map' },
@@ -417,7 +425,7 @@ export class PauseMenu {
 
     if (this.screen === 'settings') {
       if (KEYS.up.includes(e.key) || KEYS.down.includes(e.key)) {
-        this.selected = (this.selected + (KEYS.down.includes(e.key) ? 1 : 2)) % 3;
+        this.selected = (this.selected + (KEYS.down.includes(e.key) ? 1 : SETTINGS_COUNT - 1)) % SETTINGS_COUNT;
         e.preventDefault(); return undefined;
       }
       if (KEYS.confirm.includes(e.key)) { e.preventDefault(); void this.settingsAction(this.selected, game); }
@@ -952,8 +960,50 @@ export class PauseMenu {
       game.settings = { ...game.settings, inflationAdjusted: game.portfolio.inflationAdjusted !== false };
       autoSave(game, game.scene === 'room' ? 'begin' : 'end');
     }
-    if (index === 1) downloadPlan(game, { settings: { inflationAdjusted: game.portfolio.inflationAdjusted !== false } });
-    if (index === 2) { autoSave(game, game.scene === 'room' ? 'begin' : 'end'); await flushSaves(); }
+    if (index === 1) await this.saveToFile(game);
+    if (index === 2) await this.loadFromFile(game);
+    if (index === 3) { autoSave(game, game.scene === 'room' ? 'begin' : 'end'); await flushSaves(); }
+  }
+
+  /** Settings → Save to File: this game plus every character profile. */
+  async saveToFile(game) {
+    if (this._fileBusy || !this.dialog || this.dialog.active) return;
+    this._fileBusy = true;
+    try {
+      const result = await saveGameToFile(game, { settings: { inflationAdjusted: game.portfolio.inflationAdjusted !== false } });
+      if (result.status === 'saved') await this.dialog.show(`${savedFileMessage(result)}\n${result.detail}`, { title: 'Save to File' });
+    } catch (error) {
+      await this.dialog.show(error.message || 'The file could not be saved.', { title: 'Save to File' });
+    } finally { this._fileBusy = false; }
+  }
+
+  /**
+   * Settings → Load from File: confirm (No by default), pick a file, import it
+   * and switch to its game through onLoadGame (set by main.js). A profiles-only
+   * file just merges its profiles and keeps the current game.
+   */
+  async loadFromFile(game) {
+    if (this._fileBusy || !this.dialog || this.dialog.active) return;
+    this._fileBusy = true;
+    try {
+      const confirmed = await this.dialog.menu(
+        'Load a game from a save file?\nUnsaved progress since your last doorway save will be replaced.',
+        [{ label: 'Yes', value: true }, { label: 'No', value: false }],
+        { title: 'Load from File', selected: 1 }
+      );
+      if (!confirmed) return;
+      let loaded;
+      try { loaded = await loadFromFile(); } catch (error) {
+        await this.dialog.show(error.message || 'This save file could not be loaded.', { title: 'Load from File' });
+        return;
+      }
+      if (!loaded) return;
+      await this.dialog.show(loadedFileMessage(loaded), { title: 'Load from File' });
+      if (loaded.game && this.open && this.onLoadGame) {
+        this.hide();
+        this.onLoadGame(loaded.game);
+      }
+    } finally { this._fileBusy = false; }
   }
 
   drawSettings(ctx, game, x, y, boxW, boxH) {
@@ -969,13 +1019,17 @@ export class PauseMenu {
     const status = getSaveStatus();
     ctx.fillStyle = status.state === 'error' ? '#ff9999' : '#b3c8bb';
     ctx.fillText('Save status: ' + status.message, left, top + 180);
-    ['Export complete plan', 'Save now'].forEach((label, i) => {
-      const index = i + 1, yy = top + 280 + i * 86;
+    SETTINGS_ROWS.forEach(({ label, note }, i) => {
+      const index = i + 1, yy = top + 250 + i * 86;
+      ctx.font = '16px "Press Start 2P", monospace';
       ctx.fillStyle = this.selected === index ? PALETTE.gold : '#ddd';
       ctx.fillText((this.selected === index ? '▶ ' : '') + label, left, yy);
+      ctx.font = '12px "Press Start 2P", monospace'; ctx.fillStyle = '#999';
+      ctx.fillText(note, left + 400, yy + 2);
       this._addHit({ key: `settings:${index}`, x: left - 12, y: yy - 14, w: boxW - 70, h: 64,
         hover: () => { this.selected = index; }, activate: g => { void this.settingsAction(index, g); } });
     });
+    ctx.font = '16px "Press Start 2P", monospace';
     ctx.fillStyle = '#aaa';
     ctx.fillText('Enter/A to change · Tab next view · Esc back', left, y + boxH - 52);
   }

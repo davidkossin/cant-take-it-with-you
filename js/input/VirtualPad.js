@@ -78,6 +78,8 @@ export class VirtualPad {
     this._discrete = false;
     this._showRun = false;
     this._dirPointer = null;
+    this._textFocus = null;
+    this._textFocusPending = null;
     this._dirKey = null;
     this._dirBtn = null;
     this._dirDelay = 0;
@@ -199,6 +201,14 @@ export class VirtualPad {
       const press = (e) => {
         e.preventDefault();
         e.stopPropagation();
+        // A on a dialog text field opens the OS keyboard instead of confirming.
+        // Focus must happen in pointerup / touchend (user activation; iOS
+        // ignores focus() from pointerdown), so only mark it pending here.
+        if (action === 'confirm' && this._textFocus?.wants()) {
+          this._textFocusPending = { pointerType: e.pointerType };
+          btn.classList.add('is-down');
+          return;
+        }
         btn.classList.add('is-down');
         fireKey(key, 'keydown');
         window.setTimeout(() => {
@@ -208,6 +218,31 @@ export class VirtualPad {
       };
       btn.addEventListener('pointerdown', press);
       btn.addEventListener('contextmenu', (e) => e.preventDefault());
+
+      if (action === 'confirm') {
+        const release = (e, viaTouchEnd) => {
+          const pending = this._textFocusPending;
+          if (!pending) return;
+          // Touch browsers also send touchend; focus there (the iOS gesture path).
+          if (!viaTouchEnd && pending.pointerType === 'touch' && 'ontouchend' in window) return;
+          this._textFocusPending = null;
+          btn.classList.remove('is-down');
+          this._textFocus?.focus();
+        };
+        btn.addEventListener('pointerup', (e) => release(e, false));
+        btn.addEventListener('touchend', (e) => release(e, true));
+        btn.addEventListener('pointercancel', () => {
+          // touchend may still follow a cancelled pointer on some browsers
+          if (!('ontouchend' in window)) {
+            this._textFocusPending = null;
+            btn.classList.remove('is-down');
+          }
+        });
+        btn.addEventListener('touchcancel', () => {
+          this._textFocusPending = null;
+          btn.classList.remove('is-down');
+        });
+      }
     });
 
     this.root.addEventListener(
@@ -231,6 +266,16 @@ export class VirtualPad {
       },
       { once: true, passive: true }
     );
+  }
+
+  /**
+   * Let the A button open the OS keyboard for the active dialog text field.
+   * @param {{ wants: () => boolean, focus: () => void } | null} handler
+   *   wants — called on A pointerdown; true means A should focus, not confirm.
+   *   focus — called synchronously from A pointerup / touchend.
+   */
+  setTextFocusHandler(handler) {
+    this._textFocus = handler;
   }
 
   /**

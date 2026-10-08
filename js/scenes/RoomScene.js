@@ -86,7 +86,7 @@ export class RoomScene {
     this.priorHallway = null;
   }
 
-  enter(game, spawnNearDoor = false) {
+  enter(game, spawnNearDoor = false, arrival = null) {
     // West door only after a year-door split, not a south-door return.
     this.priorHallway = westReturnHallway(game);
     this.world = buildDecisionRoom({
@@ -95,6 +95,24 @@ export class RoomScene {
     });
     const sp = this.world.spawn;
     this.player = new Player(sp.x, spawnNearDoor ? 2 * 16 : sp.y, { speed: 1.5 });
+    // Through an east Hallway door: step in just east of the west doorway,
+    // facing east, as if the player had just walked through it.
+    const westDoor = arrival === 'west-door'
+      ? this.world.interactables?.find((o) => o.kind === 'west-door') : null;
+    if (westDoor) {
+      this.player.x = westDoor.x + westDoor.w + 6;
+      this.player.y = westDoor.y + Math.round(westDoor.h / 2) - Math.round(this.player.h / 2);
+      this.player.facing = 'right';
+    }
+    // Back through a timeline's south door: step in just below the north
+    // (Hallway of Time) door, facing south, as if coming down through it.
+    const northDoor = arrival === 'north-door'
+      ? this.world.interactables?.find((o) => o.id === 'door-hallway') : null;
+    if (northDoor) {
+      this.player.x = northDoor.x + Math.round(northDoor.w / 2) - Math.round(this.player.w / 2);
+      this.player.y = northDoor.y + northDoor.h + 6;
+      this.player.facing = 'down';
+    }
     this.player.bindInput();
     this.prompt = null;
     this.locked = false;
@@ -140,7 +158,7 @@ export class RoomScene {
     if (this.spouse && this.spouse.world === this.world) return;
     const pl = this.player;
     this.spouse = new SpouseNpc(this.world, {
-      speed: pl ? pl.speed : 1.5,
+      walkSpeed: pl ? pl.speed : 1.5,
       avoid: pl ? { x: pl.x - 2, y: pl.y - 12, w: 16, h: 24 } : null,
       onDecision: (d) => debugLog('spouse_npc', d),
     });

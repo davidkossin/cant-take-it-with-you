@@ -4,7 +4,7 @@
 
 import { TILE, VIEW_W, VIEW_H, WORLD_SCALE } from '../config.js';
 import { makeLamp, makeBlueTorch } from './Assets.js';
-import { paintSurface, paintWallShadow, paintRug, paintDoor, paintDecor, paintTeller, paintEndWall, drawDeathsDoorLanterns, wallFace } from './hiTextures.js';
+import { paintSurface, paintWallShadow, paintRug, paintDoor, paintDecor, paintTeller, paintEndWall, paintSouthWall, drawDeathsDoorLanterns, drawSouthDoorLanterns, wallFace } from './hiTextures.js';
 
 /**
  * Decision Room — north wall is doorway to a (new) Hallway of Time plus the Bank
@@ -244,10 +244,12 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
     map.push(row);
   }
 
-  // South entrance opening
+  // South end: a solid stone wall across the corridor, as thick as the end
+  // wall (2 tiles). It is painted as a band sloping down toward the screen
+  // edge, with the south-return door set into the slope.
   for (let x = walkLeft; x <= walkRight; x++) {
-    map[rows - 1][x] = 'stone';
-    if (rows > 1) map[rows - 2][x] = 'stone';
+    map[rows - 1][x] = 'wallPurple';
+    if (rows > 1) map[rows - 2][x] = 'wallPurple';
   }
   // North end: a solid end wall across the corridor, as thick as the side
   // walls. The End of the Line door is set flush into its south face.
@@ -345,28 +347,36 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
   interactables.push({
     id: 'south-entry',
     x: midX - TILE,
-    y: (rows - 2) * TILE,
+    y: (rows - 3) * TILE,
     w: 2 * TILE,
     h: TILE,
     kind: 'spawn',
   });
 
   // South-wall door → return to the Decision Room just left (leave baseline year)
+  // Slab is drawn in the south wall's sloped face, rotated 180° with its
+  // threshold at the floor edge (spriteOy). Its interact rect reaches 8 px
+  // out of the wall onto the floor, mirroring the end door, so the player
+  // can still face and use it from the corridor.
   const leaveYear = firstDoorYear - 1;
   const leaveAge = firstDoorAge - 1;
-  interactables.push({
+  const southDoor = {
     id: 'south-return-door',
     x: midX - TILE,
-    y: (rows - 1) * TILE - 8,
+    y: (rows - 2) * TILE - 8,
     w: 2 * TILE,
     h: TILE + 8,
     label: `Decision Room ${leaveYear}`,
     kind: 'south-door',
     facing: 'h',
-    spriteOy: 8,
+    spriteOy: 9,
+    // Same construction as the end door, warm ivory/beige with gold trim,
+    // rotated 180° and foreshortened for the sloped south wall.
+    doorStyle: 'beige-gold-sloped',
     year: leaveYear,
     age: leaveAge,
-  });
+  };
+  interactables.push(southDoor);
 
   return {
     cols,
@@ -393,6 +403,14 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
       w: (walkW + wallThick * 2) * TILE,
       h: 2 * TILE,
       door: doorSpriteRect(endDoor),
+    },
+    /** Painted south wall over the last 2 rows: a bevelled band sloping toward the screen edge, mitered into the side walls, door recess cut in. */
+    southWall: {
+      x: (walkLeft - wallThick) * TILE,
+      y: (rows - 2) * TILE,
+      w: (walkW + wallThick * 2) * TILE,
+      h: 2 * TILE,
+      door: doorSpriteRect(southDoor),
     },
     /** progress 0 at south (leave) → 1 at north (age 100) */
     progressAtY(y) {
@@ -441,7 +459,9 @@ function staticWorldState(world) {
   const shape = `${world.cols}:${world.rows}:${world.theme}:${world.renderRevision ?? 0}:` +
     `${world.rug?.x}:${world.rug?.y}:${world.rug?.w}:${world.rug?.h}:` +
     `${world.endWall?.x}:${world.endWall?.y}:${world.endWall?.w}:${world.endWall?.h}:` +
-    `${world.endWall?.door?.x}:${world.endWall?.door?.y}:${world.endWall?.door?.w}:${world.endWall?.door?.h}`;
+    `${world.endWall?.door?.x}:${world.endWall?.door?.y}:${world.endWall?.door?.w}:${world.endWall?.door?.h}:` +
+    `${world.southWall?.x}:${world.southWall?.y}:${world.southWall?.w}:${world.southWall?.h}:` +
+    `${world.southWall?.door?.x}:${world.southWall?.door?.y}:${world.southWall?.door?.w}:${world.southWall?.door?.h}`;
   let state = staticWorlds.get(world);
   if (!state || state.map !== world.map || state.shape !== shape) {
     invalidateWorldRenderCache(world);
@@ -508,6 +528,14 @@ function drawStaticTerrain(ctx, world, camX, camY, viewW, viewH) {
     const ew = world.endWall;
     const tex = paintEndWall(ew.w, ew.h, ew.door.x - ew.x, ew.door.y - ew.y, ew.door.w, ew.door.h);
     blitHi(ctx, tex, ew.x - camX, ew.y - camY, ew.w, ew.h);
+  }
+  // Hallway south wall: a bevelled band sloping toward the bottom of the
+  // screen, mitered into the side walls, with the door set into the slope.
+  if (world.theme === 'hallway' && world.southWall) {
+    const sw = world.southWall;
+    const sideT = (world.walkLeft * TILE) - sw.x;
+    const tex = paintSouthWall(sw.w, sw.h, sw.door.x - sw.x, sw.door.y - sw.y, sw.door.w, sw.door.h, sideT);
+    blitHi(ctx, tex, sw.x - camX, sw.y - camY, sw.w, sw.h);
   }
 
   if (world.theme === 'room' && world.rug) {
@@ -581,6 +609,14 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
     }
   }
 
+  // Green lanterns on the south wall, flanking the beige/gold south door.
+  if (world.theme === 'hallway' && world.southWall) {
+    const sw = world.southWall;
+    if (sw.y + sw.h - camY >= -32 && sw.y - camY <= VIEW_H + 32) {
+      drawSouthDoorLanterns(ctx, sw.door, camX, camY, animTime);
+    }
+  }
+
   if (world.theme === 'hallway') drawYearTimeline(ctx, world, camX, camY);
 
   ctx.restore();
@@ -608,8 +644,8 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
       const doorSpr = paintDoor(facing, obj.doorStyle);
       ctx.drawImage(
         doorSpr,
-        sx + (obj.spriteOx || 0),
-        sy + (obj.spriteOy || 0),
+        sx + (obj.spriteOx || 0) + (doorSpr.ox || 0),
+        sy + (obj.spriteOy || 0) + (doorSpr.oy || 0),
         doorSpr.lw,
         doorSpr.lh
       );

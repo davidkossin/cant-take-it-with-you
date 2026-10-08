@@ -97,7 +97,7 @@ export function actionPromptBox() {
  * Bottom of the chip is ACTION_PROMPT_BOTTOM px above the frame edge.
  */
 export function drawActionPrompt(ctx, label) {
-  const text = `[E] ${label}`;
+  const text = `[Enter] ${label}`;
   ctx.save();
   ctx.font = `${PROMPT_FONT}px "Press Start 2P", monospace`;
   ctx.textAlign = 'center';

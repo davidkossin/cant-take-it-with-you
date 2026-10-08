@@ -24,6 +24,10 @@ export const NPC_STEP = NPC_SPRITE_W;
 export const NPC_WALL_GAP = 2 * NPC_SPRITE_W;
 export const NPC_MIN_STEPS = 1;
 export const NPC_MAX_STEPS = 10;
+/** The spouse walks at 65% of the player's normal (not running) walk speed. */
+export const NPC_SPEED_FACTOR = 0.65;
+/** Player walk cycle: one of eight frames every PLAYER_FRAME_TICKS ticks at full walk speed. */
+const PLAYER_FRAME_TICKS = 3;
 export const NPC_MIN_PAUSE_S = 1;
 export const NPC_MAX_PAUSE_S = 10;
 const TICKS_PER_SECOND = 60;
@@ -71,14 +75,15 @@ export class SpouseNpc {
   /**
    * @param {object} world Decision Room from buildDecisionRoom
    * @param {object} [opts]
-   * @param {number} [opts.speed] world px per tick (the player's walk speed)
+   * @param {number} [opts.walkSpeed] the player's normal walk speed (world px per tick);
+   *   the spouse moves at NPC_SPEED_FACTOR of it
    * @param {{x:number,y:number,w:number,h:number}|null} [opts.avoid] sprite rect to spawn away from
    * @param {() => number} [opts.random] uniform [0, 1); Math.random by default
    * @param {(d:object) => void} [opts.onDecision] called with each wander decision
    */
-  constructor(world, { speed = 1.5, avoid = null, random = Math.random, onDecision = null } = {}) {
+  constructor(world, { walkSpeed = 1.5, avoid = null, random = Math.random, onDecision = null } = {}) {
     this.world = world;
-    this.speed = speed;
+    this.speed = walkSpeed * NPC_SPEED_FACTOR;
     this.random = random;
     this.onDecision = onDecision;
     this.bounds = npcBounds(world);
@@ -203,10 +208,11 @@ export class SpouseNpc {
     }
     this.x += Math.sign(ddx) * Math.min(this.speed, Math.abs(ddx));
     this.y += Math.sign(ddy) * Math.min(this.speed, Math.abs(ddy));
-    // Same eight-frame walk cycle and timing as the player's normal walk.
-    this.animTimer += 1;
-    if (this.animTimer >= 3) {
-      this.animTimer = 0;
+    // Same eight-frame walk cycle as the player, slowed by the same factor as
+    // the speed, so each frame covers the same distance (no foot sliding).
+    this.animTimer += NPC_SPEED_FACTOR;
+    if (this.animTimer >= PLAYER_FRAME_TICKS) {
+      this.animTimer -= PLAYER_FRAME_TICKS;
       this.frame = (this.frame + 1) % 8;
     }
   }

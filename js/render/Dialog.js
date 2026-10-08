@@ -83,6 +83,8 @@ export class Dialog {
     this.multiValues = new Set();
     this._optionHitRects = [];
     this._fieldHitRects = [];
+    /** form: the black input box of each field (frame pixels), from the last draw */
+    this._fieldBoxRects = [];
     this.loadingMessage = 'Loading…';
     /** palette: swatch groups, focus (group index, then Continue, then Back) */
     this.palGroups = [];
@@ -423,6 +425,12 @@ export class Dialog {
     };
   }
 
+  /** Input box of form field `index` from the last draw, or null. */
+  getFormFieldRect(index = this.fieldIndex) {
+    if (!this.active || this.mode !== 'form') return null;
+    return this._fieldBoxRects[index] || null;
+  }
+
   _layout() {
     const boxW = Math.min(1500, FRAME_W - 120);
     const lineH = 28;
@@ -451,6 +459,15 @@ export class Dialog {
     let promptY = ty;
     if (this.mode === 'prompt') promptY = ty + 8;
     return { boxW, boxH, pad, lineH, optH, titleH, textH, subH, x, y, promptY, formH };
+  }
+
+  /** True when (lx, ly) is on a text entry box (prompt field or a form field). */
+  textFieldAt(lx, ly) {
+    if (!this.active) return false;
+    const inside = (r) => r && lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h;
+    if (this.mode === 'prompt') return inside(this.getPromptFieldRect());
+    if (this.mode === 'form') return this._fieldHitRects.some(inside);
+    return false;
   }
 
   /**
@@ -736,6 +753,7 @@ export class Dialog {
     }
 
     this._fieldHitRects = [];
+    this._fieldBoxRects = [];
     this._optionHitRects = [];
 
     if (this.mode === 'loading') {
@@ -784,6 +802,7 @@ export class Dialog {
           w: boxW - pad * 2,
           h: 56,
         });
+        this._fieldBoxRects[i] = { x: x + pad, y: ty, w: boxW - pad * 2, h: 36 };
         ty += 40;
         if (f.subtitle) {
           ctx.font = '12px "Press Start 2P", monospace';

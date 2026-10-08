@@ -21,7 +21,7 @@ export const CANVAS_W = FRAME_W;
 export const CANVAS_H = FRAME_H;
 
 /** Bump on each published build so players can confirm cache. */
-export const GAME_VERSION = '0.7.1';
+export const GAME_VERSION = '0.7.2';
 
 export const PALETTE = {
   bg: '#1a1420',
@@ -232,7 +232,10 @@ export const KEYS = {
   down: ['ArrowDown', 's', 'S'],
   left: ['ArrowLeft', 'a', 'A'],
   right: ['ArrowRight', 'd', 'D'],
-  confirm: ['Enter', ' ', 'z', 'Z', 'e', 'E'],
+  // Space is run only; it never confirms or interacts.
+  confirm: ['Enter', 'z', 'Z', 'e', 'E'],
+  /** Interact with doors, windows and tellers while walking. */
+  interact: ['Enter'],
   cancel: ['Escape', 'x', 'X'],
 };
 /** Held Space while moving. Walk speed is unchanged when Space is up. */

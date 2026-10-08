@@ -10,6 +10,20 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-10-08
+
+### Added
+- **Save to File / Load from File:** keep your game and your character profiles on your own disk, so clearing browser data no longer loses them. Pause → Settings → **Save to File** (was "Export complete plan") writes one JSON file with the current game and all character profiles; desktop Chrome/Edge let you choose the folder and name (default `cant-take-it-<name>-<year>.json`), other browsers download it. **Load from File** (Pause → Settings, after a Yes/No check that defaults to No, and on the title menu) imports a file, adds its profiles and starts its game. Title → Manage Saves adds **Save Profiles to File** for a profiles-only backup. Imported profiles never replace existing ones: duplicates are skipped and an id clash keeps both. Older plan files without profiles still load.
+
+### Changed
+- Controls: Space is now run only and no longer interacts with doors, windows or tellers or confirms menus. Enter is the interact key (the on-screen A button sends Enter); the action prompt reads `[Enter]` and the desktop hint says "Interact with Enter".
+- Walking through an east (year) door in the Hallway of Time now places you in the new Decision Room just east of its west doorway, facing east, as if you'd just stepped through that door. Going back through a timeline's south door now places you just below the Decision Room's north (Hallway of Time) door, facing south. A new game still starts at the room's original center spawn, and loading a save is unchanged.
+- The spouse in the Decision Room walks at 65% of the player's walking speed (derived from the player's speed, so it follows future changes). Their walk animation advances at the same reduced rate, so each frame covers the same distance as the player's and their feet don't slide.
+- The Hallway of Time now ends in a solid stone south wall, drawn as a bevelled band seen from above: its inner edge meets the floor and its face slopes down and outward toward the bottom of the screen, in the corridor's stone with brick courses running along it, darkest at the floor edge and catching light at the outer rim. Diagonal miter seams join it to the side walls. The wall's face looks back toward the room, so what is mounted on it is drawn rotated 180° and foreshortened along the slope. The south door (back to the Decision Room) is the end door recolored, with the same panels, thin gold trim, gold bar hinges and ring handle, and a warm ivory body with darker beige panel shading instead of black. It is drawn rotated, as a trapezoid that widens toward the rim, in a recessed opening with angled jambs, a worn threshold at the floor edge and a stone lintel on the rim side. Two green wall lanterns hang on the sloped face either side of it, also rotated, with their plates toward the rim, and slanted to match the door's jambs. They keep the end wall's spacing, glow and flicker, and cast a soft shadow on the slope toward the floor edge. The wall is solid, so you can't walk into the corners beside the door; the door still opens from the corridor exactly as before.
+
+### Fixed
+- Mobile: dialog form fields (every Family teller form, including Spouse details' age, retirement ages and the Roth year) now open the on-screen keyboard. Previously only single-question prompts had the hidden keyboard input, so tapping a form field or pressing A never brought up the keyboard (A submitted the form instead). Tapping a field, or pressing A while a field or a prompt's text box is selected, now focuses the field on release of the tap, which iOS Safari and Android Chrome accept for opening the keyboard. Numeric fields get the number keyboard; Return moves to the next field and confirms on the last one; A or Return then confirms as before. The keyboard input uses a 16 px font so iOS no longer zooms the page when it opens.
+
 ## [0.7.1] — 2026-10-08
 
 ### Added

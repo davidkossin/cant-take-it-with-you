@@ -15,7 +15,7 @@ let status = { state: 'idle', message: 'Save storage has not been opened.', back
 
 export function getSaveStatus() { return { ...status, pending: pending.size }; }
 export function reportStorageError(message) {
-  status = { ...status, state: 'error', message: String(message || 'Save could not be written. Export your plan to keep a copy.') };
+  status = { ...status, state: 'error', message: String(message || 'Save could not be written. Use Save to File (Pause → Settings) to keep a copy.') };
 }
 
 function storage() { try { return globalThis.localStorage; } catch { return null; } }
@@ -76,11 +76,11 @@ function checkPendingCapacity(key, record) {
   let bytes = 0;
   for (const ref of refs) bytes += (chunks.get(ref)?.length || 0) * 2;
   if (proposed.size > MAX_PENDING_RECORDS || bytes > MAX_PENDING_BYTES)
-    throw new Error('The session checkpoint buffer is full. Existing checkpoints are retained. Export your active plan, then retry browser storage before creating more checkpoints.');
+    throw new Error('The session checkpoint buffer is full. Existing checkpoints are retained. Save your active plan to a file, then retry browser storage before creating more checkpoints.');
 }
 function savedStatus() {
   status = { state: rejectedWrite ? 'error' : 'saved',
-    message: rejectedWrite || 'Saved on this browser. Export JSON for a portable backup.', backend: 'indexedDB' };
+    message: rejectedWrite || 'Saved on this browser. Save to File keeps a copy on your device.', backend: 'indexedDB' };
 }
 function legacyList(key) {
   if (!storageSource) return [];
@@ -150,7 +150,7 @@ function openDatabase() {
 }
 function storageMessage(error) {
   const detail = error?.name === 'QuotaExceededError' ? 'Browser storage is full.' : (error?.message || 'Browser storage is unavailable.');
-  return `${detail} Your current plan remains in this session. Export a JSON backup; saving can be retried.`;
+  return `${detail} Your current plan remains in this session. Use Save to File to keep a copy; saving can be retried.`;
 }
 async function persistPending() {
   if (!db || !pending.size) return;

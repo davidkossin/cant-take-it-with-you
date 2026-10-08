@@ -1,9 +1,18 @@
 import { PALETTE, FRAME_W, FRAME_H, TILE, WORLD_SCALE } from '../config.js';
 import { autoSave, deleteSave, flushSaves, getSaveStatus, hasSaves, listSaves, loadSave, loadStoredRecord } from '../state/SaveSystem.js';
-import { downloadPlan, pickPlanFile } from '../state/PlanExport.js';
+import { exportPlan, pickSaveFile, saveFileName, saveTextToDisk } from '../state/PlanExport.js';
+import {
+  loadFromFile,
+  loadedFileMessage,
+  profileMergeMessage,
+  savedFileMessage,
+  saveProfilesToFile,
+} from '../state/SaveFile.js';
 import {
   deleteProfile,
+  exportProfileEntries,
   hasProfiles,
+  importProfiles,
   listProfiles,
   loadProfile,
   profileIdentification,
@@ -48,6 +57,7 @@ export class TitleScene {
       if (hasSaves()) {
         opts.push({ label: 'Load Game', value: 'load' });
       }
+      opts.push({ label: 'Load from File', value: 'loadFile' });
       opts.push({ label: 'Manage Saves / Import Plan', value: 'manage' });
       if (hasProfiles()) {
         opts.push({ label: 'Manage Profiles', value: 'manageProfiles' });
@@ -80,7 +90,7 @@ export class TitleScene {
       }
       if (choice === 'help') {
         await dialog.show(
-          'WASD / Arrows move. Enter / Z / E talk. Esc opens Map/Charts (jump timelines). Walk the Hallway of Time — doors start the year after you leave. Wall windows change your portfolio. Auto-saves use this browser’s storage. Export JSON backups to keep portable copies of your complete plan.',
+          'WASD / Arrows move. Hold Space to run. Enter interacts. Esc opens Map/Charts (jump timelines). Walk the Hallway of Time — doors start the year after you leave. Wall windows change your portfolio. Auto-saves use this browser’s storage. Pause → Settings → Save to File keeps a copy of your game and character profiles on your device; Load from File restores it.',
           { title: 'How to Play' }
         );
         continue;
@@ -88,6 +98,11 @@ export class TitleScene {
       if (choice === 'changelog') {
         await this.showChangelog(dialog);
         continue;
+      }
+      if (choice === 'loadFile') {
+        const start = await this.loadGameFromFile(dialog);
+        if (!start) continue;
+        return start;
       }
       if (choice === 'manage') {
         await this.manageSaves(dialog);
@@ -177,6 +192,24 @@ export class TitleScene {
     } finally {
       this._setupActive = false;
     }
+  }
+
+  /**
+   * Title Load from File: import a save file (profiles merge into this
+   * browser, the game is stored as a checkpoint) and start that game.
+   * @returns {Promise<{action:'load', game:object}|null>}
+   */
+  async loadGameFromFile(dialog) {
+    let loaded;
+    try {
+      loaded = await loadFromFile();
+    } catch (error) {
+      await dialog.show(error.message || 'This save file could not be loaded.', { title: 'Load from File' });
+      return null;
+    }
+    if (!loaded) return null;
+    await dialog.show(loadedFileMessage(loaded), { title: 'Load from File' });
+    return loaded.game ? { action: 'load', game: loaded.game } : null;
   }
 
   /**
@@ -328,23 +361,37 @@ export class TitleScene {
       const options = saves.slice(offset, offset + MAX_VISIBLE_SAVES).map(save => ({ label: saveIdentification(save), value: save.id }));
       if (offset) options.push({ label: 'Previous saves', value: '__previous' });
       if (offset + MAX_VISIBLE_SAVES < saves.length) options.push({ label: 'More saves', value: '__next' });
-      options.push({ label: 'Import plan JSON', value: '__import' }, { label: 'Back', value: null });
+      options.push(
+        { label: 'Save Profiles to File', value: '__saveProfiles' },
+        { label: 'Import plan JSON', value: '__import' },
+        { label: 'Back', value: null },
+      );
       const status = getSaveStatus();
       const pick = await dialog.menu(
-        `${saves.length ? 'Choose a checkpoint to export or delete.' : 'No saves yet. Import a complete plan backup.'}\n${status.message}`,
+        `${saves.length ? 'Choose a checkpoint to save to a file or delete.' : 'No saves yet. Import a save file.'}\n${status.message}`,
         options,
         { title: 'Manage Saves' }
       );
       if (!pick) return;
       if (pick === '__previous') { offset = Math.max(0, offset - MAX_VISIBLE_SAVES); continue; }
       if (pick === '__next') { offset += MAX_VISIBLE_SAVES; continue; }
+      if (pick === '__saveProfiles') {
+        try {
+          const result = await saveProfilesToFile();
+          if (result.status === 'saved') await dialog.show(`${savedFileMessage(result)}\n${result.detail}`, { title: 'Save Profiles to File' });
+        } catch (error) { await dialog.show(error.message || 'The file could not be saved.', { title: 'Save Profiles to File' }); }
+        continue;
+      }
       if (pick === '__import') {
         try {
-          const imported = await pickPlanFile();
+          // Accepts plan files (with or without profiles) and profiles-only files.
+          const imported = await pickSaveFile();
           if (!imported) continue;
-          const entry = autoSave(imported.game, 'import');
+          const merged = imported.profiles.length ? profileMergeMessage(importProfiles(imported.profiles)) : '';
+          const entry = imported.game ? autoSave(imported.game, 'import') : null;
           const saved = await flushSaves();
-          await dialog.show(`${entry ? 'Plan imported. Choose Load Game to continue.' : 'Import could not be saved.'}\n${saved.state === 'saved' ? 'Saved on this browser.' : saved.message}${imported.warnings.length ? '\n' + imported.warnings.join('\n') : ''}`, { title: 'Import Plan' });
+          const head = imported.game ? (entry ? 'Plan imported. Choose Load Game to continue.' : 'Import could not be saved.') : 'Character profiles imported.';
+          await dialog.show(`${head}${merged ? '\n' + merged : ''}\n${saved.state === 'saved' ? 'Saved on this browser.' : saved.message}${imported.warnings.length ? '\n' + imported.warnings.join('\n') : ''}`, { title: 'Import Plan' });
           offset = 0;
         } catch (error) { await dialog.show(error.message || 'This plan file could not be imported.', { title: 'Import Plan' }); }
         continue;
@@ -352,7 +399,7 @@ export class TitleScene {
       const save = saves.find((s) => s.id === pick);
       if (!save) continue;
       const action = await dialog.menu(saveIdentification(save), [
-        { label: 'Export complete plan JSON', value: 'export' },
+        { label: 'Save checkpoint to File', value: 'export' },
         { label: 'Delete checkpoint', value: 'delete' },
         { label: 'Back', value: null },
       ], { title: 'Manage Saves' });
@@ -360,9 +407,11 @@ export class TitleScene {
         try {
           const game = loadStoredRecord('save', save.id);
           if (!game) throw new Error('This checkpoint could not be read.');
-          downloadPlan(game);
-          await dialog.show('JSON backup exported. It contains financial inputs, all saved timelines, assumptions and settings.', { title: 'Export Plan' });
-        } catch (error) { await dialog.show(error.message || 'Export failed.', { title: 'Export Plan' }); }
+          // Same save-file format as Pause → Settings → Save to File.
+          const text = JSON.stringify(exportPlan(game, { profiles: exportProfileEntries() }), null, 2);
+          const result = await saveTextToDisk(text, saveFileName(game));
+          if (result.status === 'saved') await dialog.show(`${savedFileMessage(result)}\nIt holds this checkpoint (inputs, all saved timelines, assumptions and settings) and your character profiles.`, { title: 'Save to File' });
+        } catch (error) { await dialog.show(error.message || 'The file could not be saved.', { title: 'Save to File' }); }
         continue;
       }
       if (action !== 'delete') continue;

@@ -4,12 +4,22 @@ import { ASSUMPTION_VERSION } from '../finance/Market.js';
 import { TAX_RULE_VERSION } from '../data/tax-brackets.js';
 import { MODEL_SCOPE, SUCCESS_DEFINITION } from '../finance/Forecast.js';
 import { effectiveDifficulty } from '../finance/Difficulty.js';
-import { migrateGame } from '../finance/Schema.js';
+import { migrateGame, normalizePortfolio } from '../finance/Schema.js';
 import { isJourneyScenario } from '../finance/Journey.js';
+import { withUserGesture } from '../input/UserGesture.js';
 
 export const PLAN_FORMAT = 'cant-take-it-plan';
 export const PLAN_FORMAT_VERSION = 1;
 export const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
+/**
+ * Save files: a plan file (PLAN_FORMAT) may carry an optional `profiles` list
+ * of character profiles next to its unchanged `game`. With no active game, a
+ * profiles-only file (PROFILES_FORMAT) carries just the list. Each entry is
+ * { id, label, playerName, age, year, createdAt, setup }.
+ */
+export const PROFILES_FORMAT = 'cant-take-it-profiles';
+export const PROFILES_FORMAT_VERSION = 1;
+export const MAX_PROFILES = 1000;
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 const clone = value => JSON.parse(JSON.stringify(value));
 
@@ -31,10 +41,20 @@ export function exportPlan(game, options = {}) {
       scenario: game.hallwayScenario || null,
     },
     settings: options.settings ?? game.settings ?? game.preferences ?? {},
+    // Optional: character profiles travel with the game in a Save to File.
+    ...(Array.isArray(options.profiles) ? { profiles: options.profiles } : {}),
     // Includes all input snapshots, timeline forecasts, ledger and decisions.
     game,
   };
   return clone(document);
+}
+
+/** Profiles-only save file, for backing up profiles without an active game. */
+export function exportProfiles(profiles) {
+  return clone({
+    format: PROFILES_FORMAT, formatVersion: PROFILES_FORMAT_VERSION, exportedAt: new Date().toISOString(),
+    versions: versions(), profiles: Array.isArray(profiles) ? profiles : [],
+  });
 }
 
 export function serializePlan(game, options = {}) { return JSON.stringify(exportPlan(game, options), null, 2); }
@@ -228,16 +248,58 @@ function validateGame(game) {
   }
 }
 
-/** No script evaluation, no storage changes until validation has succeeded. */
-export function importPlan(text) {
+const PROFILE_ID = /^[A-Za-z0-9_.:-]{1,120}$/;
+/** Character profiles are setup answers; check them before anything is stored. */
+export function validateProfiles(list) {
+  if (list == null) return [];
+  if (!Array.isArray(list)) throw new Error('The character profiles in this file must be a list.');
+  if (list.length > MAX_PROFILES) throw new Error(`This file has more than ${MAX_PROFILES} character profiles.`);
+  return list.map((entry, index) => {
+    const n = index + 1;
+    if (!dictionary(entry) || !dictionary(entry.setup)) throw new Error(`Character profile ${n} is missing its setup answers.`);
+    if (entry.id != null && (typeof entry.id !== 'string' || !PROFILE_ID.test(entry.id)))
+      throw new Error(`Character profile ${n} has an invalid id.`);
+    for (const key of ['label', 'playerName', 'createdAt']) {
+      if (entry[key] != null && (typeof entry[key] !== 'string' || entry[key].length > 200))
+        throw new Error(`Character profile ${n} has an invalid ${key}.`);
+    }
+    const setup = entry.setup;
+    if (setup.playerName != null && (typeof setup.playerName !== 'string' || setup.playerName.length > 200))
+      throw new Error(`Character profile ${n} has an invalid player name.`);
+    if (setup.age != null && (!Number.isFinite(setup.age) || setup.age < 0 || setup.age > 130))
+      throw new Error(`Character profile ${n} needs an age between 0 and 130.`);
+    if (setup.year != null && (!Number.isFinite(setup.year) || setup.year < 1900 || setup.year > 2300))
+      throw new Error(`Character profile ${n} needs a valid start year.`);
+    try { normalizePortfolio(setup); } catch { throw new Error(`Character profile ${n} could not be read.`); }
+    return clone({
+      id: entry.id ?? null, label: entry.label ?? null, playerName: entry.playerName ?? setup.playerName ?? null,
+      age: Number.isFinite(entry.age) ? entry.age : setup.age ?? null,
+      year: Number.isFinite(entry.year) ? entry.year : setup.year ?? null,
+      createdAt: entry.createdAt ?? null, setup,
+    });
+  });
+}
+
+function parseDocument(text) {
   if (typeof text !== 'string' || new TextEncoder().encode(text).length > MAX_IMPORT_BYTES)
     throw new Error('Choose a JSON plan file smaller than 50 MiB.');
   let document;
   try { document = JSON.parse(text); } catch { throw new Error('This file is not valid JSON.'); }
   validateJSON(document);
+  return document;
+}
+
+/** No script evaluation, no storage changes until validation has succeeded. */
+export function importPlan(text) {
+  return importPlanDocument(parseDocument(text));
+}
+
+function importPlanDocument(document) {
   if (document?.format !== PLAN_FORMAT || document.formatVersion !== PLAN_FORMAT_VERSION)
     throw new Error('This is not a supported Can’t Take It plan backup.');
   validateGame(document.game);
+  // Older plan files have no profiles; that is still a complete plan.
+  const profiles = validateProfiles(document.profiles);
   const warnings = [];
   const current = versions();
   for (const [key, value] of Object.entries(current)) {
@@ -245,7 +307,71 @@ export function importPlan(text) {
   }
   const game = migrateGame(document.game);
   if (!game.settings && dictionary(document.settings)) game.settings = clone(document.settings);
-  return { game, warnings, metadata: { exportedAt: document.exportedAt, versions: document.versions, model: document.model } };
+  return { game, profiles, warnings, metadata: { exportedAt: document.exportedAt, versions: document.versions, model: document.model } };
+}
+
+/**
+ * Any save file: a plan (with or without profiles) or a profiles-only file.
+ * @returns {{game: object|null, profiles: object[], warnings: string[], metadata: object}}
+ */
+export function importSaveFile(text) {
+  const document = parseDocument(text);
+  if (document?.format === PROFILES_FORMAT) {
+    if (document.formatVersion !== PROFILES_FORMAT_VERSION)
+      throw new Error('This profiles file uses an unsupported format version.');
+    const profiles = validateProfiles(document.profiles);
+    if (!profiles.length) throw new Error('This save file has no game and no character profiles.');
+    return { game: null, profiles, warnings: [], metadata: { exportedAt: document.exportedAt, versions: document.versions } };
+  }
+  if (document?.format !== PLAN_FORMAT)
+    throw new Error('This is not a Can’t Take It save file.');
+  return importPlanDocument(document);
+}
+
+/** File-name piece: letters, digits and dashes only. */
+function slug(value, fallback) {
+  const text = String(value ?? '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^[-_]+|[-_]+$/g, '').slice(0, 40);
+  return text || fallback;
+}
+export function saveFileName(game) {
+  const year = Number.isFinite(game?.portfolio?.year) ? game.portfolio.year : new Date().getFullYear();
+  return `cant-take-it-${slug(game?.portfolio?.playerName, 'traveler')}-${year}.json`;
+}
+export function profilesFileName(date = new Date()) {
+  const pad = n => String(n).padStart(2, '0');
+  return `cant-take-it-profiles-${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}.json`;
+}
+
+/**
+ * Save text to the player's disk. Desktop Chrome/Edge show a Save dialog
+ * (choose folder and name); other browsers download the file (mobile browsers
+ * offer their download/share sheet). Cancelling the dialog is not an error.
+ * @returns {Promise<{status:'saved'|'cancelled', method?:'picker'|'download', filename?:string}>}
+ */
+export async function saveTextToDisk(text, filename, type = 'application/json') {
+  if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
+    let handle;
+    try {
+      handle = await withUserGesture(() => window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: 'Can’t Take It save file', accept: { 'application/json': ['.json'] } }],
+      }));
+    } catch (error) {
+      if (error?.name === 'AbortError') return { status: 'cancelled' };
+      // No gesture, a sandboxed frame or a blocked picker: download instead.
+      handle = null;
+    }
+    if (handle === undefined) return { status: 'cancelled' };
+    if (handle) {
+      const writable = await handle.createWritable();
+      try { await writable.write(new Blob([text], { type })); await writable.close(); }
+      catch (error) { await writable.abort?.().catch(() => {}); throw error; }
+      return { status: 'saved', method: 'picker', filename: handle.name || filename };
+    }
+  }
+  downloadText(text, filename, type);
+  return { status: 'saved', method: 'download', filename };
 }
 
 function csvCell(value) {
@@ -307,7 +433,11 @@ export function downloadForecastBundle(game, forecast, options = {}) {
 }
 
 /** Resolves null when the native picker is cancelled. */
-export function pickPlanFile() {
+export function pickPlanFile() { return pickJsonFile(importPlan); }
+/** Plan (with or without profiles) or profiles-only file; null on cancel. */
+export function pickSaveFile() { return pickJsonFile(importSaveFile); }
+
+function pickJsonFile(parse) {
   return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file'; input.accept = '.json,application/json';
@@ -324,11 +454,13 @@ export function pickPlanFile() {
       if (!file) { finish(null); return; }
       try {
         if (file.size > MAX_IMPORT_BYTES) throw new Error('Choose a JSON plan file smaller than 50 MiB.');
-        finish(importPlan(await file.text()));
+        finish(parse(await file.text()));
       } catch (error) {
         settled = true; window.removeEventListener('focus', onFocus); input.remove(); reject(error);
       }
     };
-    window.addEventListener('focus', onFocus); input.click();
+    // A touch tap opens the chooser from its release (see UserGesture.js).
+    withUserGesture(() => { window.addEventListener('focus', onFocus); input.click(); return true; })
+      .then(opened => { if (!opened) finish(null); }, error => { settled = true; input.remove(); reject(error); });
   });
 }

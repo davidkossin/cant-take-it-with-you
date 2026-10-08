@@ -421,7 +421,7 @@ export class HallwayScene {
       enterYearRoom(game, state, this.snapshots.slice(1, obj.yearIndex + 1));
       autoSave(game, 'begin');
       this.leave();
-      return { goto: 'room' };
+      return { goto: 'room', arrival: 'west-door' };
     }
 
     if (obj.kind === 'south-door') {
@@ -449,7 +449,7 @@ export class HallwayScene {
       returnToLeftDecisionRoom(game, state);
       autoSave(game, 'begin');
       this.leave();
-      return { goto: 'room' };
+      return { goto: 'room', arrival: 'north-door' };
     }
 
     if (obj.kind === 'end-door') {

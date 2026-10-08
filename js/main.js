@@ -149,6 +149,12 @@ installFullscreen({
 });
 const mobileText = new MobileTextInput(canvas, dialog);
 mobileText.mount();
+// Touch A on a prompt / form field opens the OS keyboard (focus runs in the
+// button's pointerup / touchend, which iOS accepts as a user gesture).
+virtualPad.setTextFocusHandler({
+  wants: () => !pause.open && mobileText.wantsFocus(),
+  focus: () => mobileText.focusActiveField(),
+});
 const title = new TitleScene({});
 const setup = new SetupScene();
 const room = new RoomScene();
@@ -203,14 +209,7 @@ async function startTitle() {
   await waitForConfirm();
   const result = await title.runMenu(dialog);
   if (result.action === 'load') {
-    game = result.game;
-    // migrate old saves lightly
-    if (!game.worthHistory) game.worthHistory = [];
-    if (!game.timeline.snapshots) game.timeline.snapshots = {};
-    mode = game.scene === 'ending' ? 'ending' : game.scene === 'hallway' ? 'hallway' : 'room';
-    if (mode === 'room') room.enter(game, false);
-    else if (mode === 'hallway') hallway.enter(game);
-    else ending.enter(game);
+    enterLoadedGame(result.game);
   } else if (result.action === 'new' && result.game) {
     // Standard portfolio or Use Profile — game already built
     game = result.game;
@@ -230,6 +229,26 @@ async function startTitle() {
   }
   booting = false;
 }
+
+/** Enter a loaded game (Title Load Game / Load from File, Pause → Load from File). */
+function enterLoadedGame(loaded) {
+  room.leave();
+  hallway.leave();
+  pause.hide();
+  canvas.style.cursor = '';
+  game = loaded;
+  // migrate old saves lightly
+  if (!game.worthHistory) game.worthHistory = [];
+  if (!game.timeline.snapshots) game.timeline.snapshots = {};
+  mode = game.scene === 'ending' ? 'ending' : game.scene === 'hallway' ? 'hallway' : 'room';
+  if (mode === 'room') room.enter(game, false);
+  else if (mode === 'hallway') hallway.enter(game);
+  else ending.enter(game);
+}
+pause.onLoadGame = (loaded) => {
+  enterLoadedGame(loaded);
+  booting = false;
+};
 
 function directionHeld() {
   const p = mode === 'room' ? room.player : mode === 'hallway' ? hallway.player : null;
@@ -283,9 +302,13 @@ canvas.addEventListener('pointerdown', (e) => {
   if (!pt) return;
   syncMoneyContext(true);
   if (dialog.active) {
+    // A touch tap on a text field selects it now and focuses the hidden input
+    // on pointerup / touchend (iOS ignores focus() from pointerdown).
+    const onField = e.pointerType !== 'mouse' && dialog.textFieldAt(pt.x, pt.y);
     if (dialog.handlePointer(pt.x, pt.y)) {
       e.preventDefault();
     }
+    pendingFieldFocus = onField ? { pointerType: e.pointerType } : null;
     return;
   }
   if (pause.open && game) {
@@ -296,6 +319,21 @@ canvas.addEventListener('pointerdown', (e) => {
       applyPauseResult(result);
     }
   }
+});
+
+/** Set by a touch tap on a dialog text field; consumed on release. */
+let pendingFieldFocus = null;
+function releaseFieldFocus(viaTouchEnd) {
+  if (!pendingFieldFocus) return;
+  // Browsers with touch events also send touchend; focus there (iOS path).
+  if (!viaTouchEnd && pendingFieldFocus.pointerType === 'touch' && 'ontouchend' in window) return;
+  pendingFieldFocus = null;
+  if (dialog.active) mobileText.focusActiveField();
+}
+canvas.addEventListener('pointerup', (e) => releaseFieldFocus(false));
+canvas.addEventListener('touchend', () => releaseFieldFocus(true));
+canvas.addEventListener('touchcancel', () => {
+  pendingFieldFocus = null;
 });
 
 canvas.addEventListener('pointermove', (e) => {
@@ -354,10 +392,13 @@ window.addEventListener('keydown', async (e) => {
     return;
   }
 
-  if (KEYS.confirm.includes(e.key)) {
-    // Space is also run. A tap (first keydown, not already moving) still
-    // confirms. Repeats and Space held with a direction do not open tellers.
-    if (e.key === ' ' && (e.repeat || directionHeld())) {
+  if (e.key === ' ') {
+    // Space is run only; keep it from scrolling the page.
+    e.preventDefault();
+    return;
+  }
+  if (KEYS.interact.includes(e.key)) {
+    if (e.repeat) {
       e.preventDefault();
       return;
     }
@@ -367,14 +408,14 @@ window.addEventListener('keydown', async (e) => {
       let nav = null;
       if (mode === 'room') nav = await room.tryInteract(game, dialog);
       else if (mode === 'hallway') nav = await hallway.tryInteract(game, dialog);
-      if (nav?.goto) await transition(nav.goto);
+      if (nav?.goto) await transition(nav.goto, nav.arrival);
     } finally {
       interacting = false;
     }
   }
 });
 
-async function transition(to) {
+async function transition(to, arrival = null) {
   debugLog('scene', { to, from: mode });
   if (to === 'hallway') {
     room.leave();
@@ -384,7 +425,7 @@ async function transition(to) {
   } else if (to === 'room') {
     hallway.leave();
     mode = 'room';
-    room.enter(game, true);
+    room.enter(game, true, arrival);
     game.scene = 'room';
   } else if (to === 'ending') {
     hallway.leave();
@@ -465,6 +506,8 @@ function loop(now) {
 
   if (pause.open && game) pause.draw(ctx, game);
   dialog.draw(ctx);
+  // Keep the hidden keyboard input over the active text field (rects come from draw).
+  mobileText.sync(!pause.open);
 
   const saveStatus = getSaveStatus();
   if (saveStatus.state === 'error') {
@@ -475,7 +518,7 @@ function loop(now) {
     ctx.fillStyle = '#381a20';
     ctx.fillRect(12, FRAME_H - 44, 1180, 32);
     ctx.fillStyle = '#ffd0b0';
-    ctx.fillText('Save unavailable — export a backup in Settings / Manage Saves', 24, FRAME_H - 36);
+    ctx.fillText('Save unavailable — use Save to File in Settings / Manage Saves', 24, FRAME_H - 36);
     ctx.restore();
   }
 
