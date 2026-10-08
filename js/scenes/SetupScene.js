@@ -2,11 +2,12 @@ import { editPlanningInputs, editInflationSettings, inflationToggleLabel, setMon
 import { editSpouseIdentity, editFamilyIncome, editRetirementAges, editRetirementAccounts, householdSalary, personName } from './FamilyInputs.js';
 /**
  * Contextual LTTP-styled setup questionnaires with Back on every step.
- * Name → Year → Age → Difficulty → Family → Settings → ZIP → Finances →
+ * Name → Year → Age → Appearance (hair + shirt color) → Hair length → Difficulty → Family → Settings → ZIP → Finances →
  * Retirement → Investments → Homes → Expenses → Portfolio overview.
  */
 
-import { CURRENT_YEAR, HOME_TYPES, FRAME_W, FRAME_H, TILE, WORLD_SCALE, PALETTE } from '../config.js';
+import { CURRENT_YEAR, HOME_TYPES, FRAME_W, FRAME_H, TILE, WORLD_SCALE, PALETTE,
+  HAIR_PALETTE, SHIRT_PALETTE, normalizeHairColor, normalizeShirtColor } from '../config.js';
 import { createDefaultSetup, createGameFromSetup } from '../state/GameState.js';
 import { saveProfile } from '../state/ProfileSystem.js';
 import { listDifficulties, getDifficulty } from '../finance/Difficulty.js';
@@ -140,7 +141,43 @@ export class SetupScene {
           continue;
         }
         s.age = Math.max(18, Math.min(99, Math.round(result)));
-        step++;
+        step = 2.1;
+      }
+
+      // ── 2.1 Hair + shirt color (player sprite), one page ───
+      else if (step === 2.1) {
+        result = await dialog.palette('Choose your look.', [
+          { key: 'hairColor', label: 'Hair color', kind: 'hair', colors: HAIR_PALETTE,
+            selected: normalizeHairColor(s.hairColor) },
+          { key: 'shirtColor', label: 'Shirt color', kind: 'shirt', colors: SHIRT_PALETTE,
+            selected: normalizeShirtColor(s.shirtColor) },
+        ], {
+          title: 'Appearance',
+          hairLength: s.hairLength === 'long' ? 'long' : 'short',
+          backLabel: '← Back',
+          backValue: BACK,
+        });
+        if (result === BACK || result == null) {
+          step = 2;
+          continue;
+        }
+        s.hairColor = normalizeHairColor(result.hairColor);
+        s.shirtColor = normalizeShirtColor(result.shirtColor);
+        step = 2.2;
+      }
+
+      // ── 2.2 Hair length (player sprite) ─────────────────────
+      else if (step === 2.2) {
+        result = await dialog.menu('Hair length?', withBack([
+          { label: 'Short', value: 'short' },
+          { label: 'Long', value: 'long' },
+        ]), { title: 'Appearance', selected: s.hairLength === 'long' ? 1 : 0 });
+        if (result === BACK || result == null) {
+          step = 2.1;
+          continue;
+        }
+        s.hairLength = result;
+        step = 3;
       }
 
       // ── 3 Difficulty ────────────────────────────────────────
@@ -162,7 +199,7 @@ export class SetupScene {
           { title: 'Difficulty', selected: stdIdx }
         );
         if (result === BACK) {
-          step--;
+          step = 2.2;
           continue;
         }
         s.difficulty = result || 'standard';

@@ -18,6 +18,7 @@ import {
   SB_LTV,
 } from '../config.js';
 import { Player } from '../render/Player.js';
+import { SpouseNpc, hasSpouseNpc } from '../render/SpouseNpc.js';
 import { Hud, drawActionPrompt } from '../render/Hud.js';
 import {
   buildDecisionRoom,
@@ -75,6 +76,8 @@ export class RoomScene {
   constructor() {
     this.world = null;
     this.player = null;
+    /** @type {SpouseNpc|null} wandering spouse (visual only, not saved) */
+    this.spouse = null;
     this.hud = new Hud();
     this.prompt = null;
     this.locked = false;
@@ -120,7 +123,27 @@ export class RoomScene {
     } else {
       this.priorHallway = resolved;
     }
+    this.spouse = null;
+    this.syncSpouse(game.portfolio);
     autoSave(game, 'begin');
+  }
+
+  /**
+   * Show the spouse NPC while the household has a spouse (marriage can
+   * happen mid-room at the Family teller). A rebuilt room gets a fresh NPC.
+   */
+  syncSpouse(p) {
+    if (!hasSpouseNpc(p)) {
+      this.spouse = null;
+      return;
+    }
+    if (this.spouse && this.spouse.world === this.world) return;
+    const pl = this.player;
+    this.spouse = new SpouseNpc(this.world, {
+      speed: pl ? pl.speed : 1.5,
+      avoid: pl ? { x: pl.x - 2, y: pl.y - 12, w: 16, h: 24 } : null,
+      onDecision: (d) => debugLog('spouse_npc', d),
+    });
   }
 
   leave() {
@@ -150,6 +173,9 @@ export class RoomScene {
       this.player.inputEnabled = true;
     }
     this.player.update((x, y, w, h) => isSolid(this.world, x, y, w, h));
+    // The spouse wanders on the same fixed tick; no collision with the player.
+    this.syncSpouse(game.portfolio);
+    this.spouse?.update();
     this.prompt = findFacingInteractable(this.player, this.world);
     return null;
   }
@@ -1051,11 +1077,14 @@ Cash received: ${money(preview.netCash)}`, {
     drawWorld(ctx, this.world, camX, camY, this.animTime);
     ctx.save();
     ctx.translate(-camX, -camY);
+    // Spouse first, so the player is always drawn over them.
+    if (this.spouse && hasSpouseNpc(game.portfolio)) this.spouse.draw(ctx, game.portfolio);
     this.player.draw(
       ctx,
       game.portfolio.hairColor,
       game.portfolio.hairLength,
-      game.portfolio.age
+      game.portfolio.age,
+      game.portfolio.shirtColor
     );
     ctx.restore();
     ctx.restore();

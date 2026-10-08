@@ -10,6 +10,16 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-10-08
+
+### Added
+- Appearance page for the player (Custom Setup, after Age) and the spouse (Family): hair color and shirt color are chosen on one page, each from a labeled 2×8 grid of 16 swatches with a gold frame on the choice and the color's name beside the grid. A live sprite preview shows both colors with the chosen hair length. Arrows/D-pad move within a grid and between the grids, Continue and Back; Enter/A moves to the next question, then confirms; Esc/B goes back; the mouse previews a hovered swatch and a click or tap picks it.
+- Hair colors: Black, Dark Brown, Brown, Chestnut, Auburn, Red, Copper, Strawberry Blonde, Blonde, Platinum, Gray, White, Blue, Green, Purple and Pink. Shirt colors: Blue, Sky Blue, Teal, Green, Forest, Olive, Mustard, Orange, Red, Maroon, Pink, Purple, Lavender, White, Gray and Black. The player sprite wears the chosen shirt in the Decision Room and Hallway. Existing saves keep their hair and the original blue shirt.
+- A married household's spouse now appears in the Decision Room as a wandering NPC, wearing their chosen hair, hair length and shirt; their hair whitens with age the same way the player's does. They stay at least two sprite widths from every wall and, every 1–10 seconds, walk 1–10 steps (one sprite width each) in a random direction that keeps them in bounds, at the player's walking pace. The player walks through them and is always drawn on top. They hold still while a dialog or the pause menu is open.
+
+### Fixed
+- Custom Setup asks the player's hair color and hair length (Short, Long) again, right after Age; the answers set the player sprite in the Decision Room and Hallway. Back from Difficulty returns to hair length.
+
 ## [0.7.0] — 2026-10-08
 
 ### Added

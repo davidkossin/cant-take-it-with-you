@@ -180,13 +180,14 @@ export class Player {
     }
   }
 
-  draw(ctx, hairColor, hairLength, age) {
+  draw(ctx, hairColor, hairLength, age, shirtColor) {
     const spr = makePlayerSprite(
       hairColor,
       hairLength,
       hairWhiteAmount(age),
       this.facing,
-      this.moving ? this.frame : -1
+      this.moving ? this.frame : -1,
+      shirtColor
     );
     drawCrispSprite(ctx, spr, this.x - 2, this.y - 12);
   }

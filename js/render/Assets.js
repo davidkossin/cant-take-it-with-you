@@ -3,7 +3,10 @@
  * No Nintendo assets — original tiny sprites in muted earthy palette.
  */
 
-import { PALETTE, HAIR_COLORS, TILE } from '../config.js';
+import {
+  PALETTE, HAIR_COLORS, HAIR_SHADES, SHIRT_COLORS, SHIRT_SHADES, TILE,
+  normalizeHairColor, normalizeShirtColor,
+} from '../config.js';
 
 const cache = new Map();
 
@@ -19,6 +22,12 @@ function px(ctx, x, y, color, w = 1, h = 1) {
   ctx.fillRect(x, y, w, h);
 }
 
+/** Sprite ramp inputs for a shirt id (unknown ids get the default blue). */
+function shirtBase(shirtColor) {
+  const id = normalizeShirtColor(shirtColor);
+  return { hex: SHIRT_COLORS[id], shade: SHIRT_SHADES[id] };
+}
+
 /**
  * 16×24 original player. Eight walk frames per direction.
  * Shaded hair, face, shirt, and legs. Body lifts on the passing poses;
@@ -31,14 +40,17 @@ export function makePlayerSprite(
   hairLength = 'short',
   gray = 0,
   facing = 'down',
-  frame = 0
+  frame = 0,
+  shirtColor = 'blue'
 ) {
-  const key = `player-${hairColor}-${hairLength}-${gray.toFixed(2)}-${facing}-${frame}`;
+  const shirtId = normalizeShirtColor(shirtColor);
+  const key = `player-${hairColor}-${hairLength}-${shirtId}-${gray.toFixed(2)}-${facing}-${frame}`;
   if (cache.has(key)) return cache.get(key);
 
   const c = canvas(16, 24);
   const ctx = c.getContext('2d');
-  const base = HAIR_COLORS[hairColor] || HAIR_COLORS.dark;
+  const hairId = normalizeHairColor(hairColor);
+  const base = { hex: HAIR_COLORS[hairId], shade: HAIR_SHADES[hairId], shirt: shirtBase(shirtId) };
   const standing = frame < 0;
   const f = standing ? 0 : ((frame % 8) + 8) % 8;
   const white = Math.max(0, Math.min(1, Number.isFinite(gray) ? gray : 0));
@@ -83,11 +95,14 @@ function walkPose(f) {
  * (H / h / d). The old sprite mixed the flat hair color toward gray, then
  * this ramp mixed the dark hair pixels back toward black, so the white never
  * showed. The black mix eases off as `white` rises.
+ * `hair` is `{ hex, shade?, shirt?: { hex, shade? } }`; the shirt defaults to
+ * the original blue (PALETTE.shirt).
  */
 function playerTones(hair, white = 0) {
   const t = Math.max(0, Math.min(1, white));
-  const aged = mixHex(hair, '#ffffff', t);
-  const shade = 0.55 * (1 - t) + 0.07 * t;
+  const aged = mixHex(hair.hex, '#ffffff', t);
+  const shade = (hair.shade ?? 0.55) * (1 - t) + 0.07 * t;
+  const shirt = hair.shirt || { hex: PALETTE.shirt, shade: 0.55 };
   const lift = 0.28 * (1 - t) + 0.02 * t;
   const mid = 0.1 * (1 - t);
   return {
@@ -99,10 +114,10 @@ function playerTones(hair, white = 0) {
     k: '#c09058',
     n: '#8d5c38',
     e: '#241810',
-    C: mixHex(PALETTE.shirt, '#ffffff', 0.5),
-    c: PALETTE.shirt,
-    u: mixHex(PALETTE.shirt, '#061018', 0.32),
-    U: mixHex(PALETTE.shirt, '#000000', 0.55),
+    C: mixHex(shirt.hex, '#ffffff', 0.5),
+    c: shirt.hex,
+    u: mixHex(shirt.hex, '#061018', 0.32),
+    U: mixHex(shirt.hex, '#000000', shirt.shade ?? 0.55),
     P: mixHex(PALETTE.pants, '#ffffff', 0.38),
     p: PALETTE.pants,
     q: mixHex(PALETTE.pants, '#000000', 0.45),
@@ -112,6 +127,27 @@ function playerTones(hair, white = 0) {
     f: '#4a382c',
     z: '#1c140e',
   };
+}
+
+/**
+ * Highlight / mid / shade of a hair color exactly as the sprite draws it
+ * (no aging), for the hair palette swatches.
+ * @returns {{light:string, mid:string, shade:string}}
+ */
+export function hairTones(hairColor) {
+  const id = normalizeHairColor(hairColor);
+  const pal = playerTones({ hex: HAIR_COLORS[id], shade: HAIR_SHADES[id] }, 0);
+  return { light: pal.H, mid: pal.h, shade: pal.d };
+}
+
+/**
+ * Lit / mid / deep-shade tones of a shirt color as the sprite draws it,
+ * for the shirt palette swatches.
+ * @returns {{light:string, mid:string, shade:string}}
+ */
+export function shirtTones(shirtColor) {
+  const pal = playerTones({ hex: HAIR_COLORS.dark, shirt: shirtBase(shirtColor) }, 0);
+  return { light: pal.C, mid: pal.c, shade: pal.U };
 }
 
 function blit(ctx, rows, ox, oy, pal) {

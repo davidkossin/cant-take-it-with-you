@@ -35,6 +35,9 @@ export function normalizePortfolio(input, { legacy = input.financeVersion !== 2 
   if (s.spouseAge!=null) s.spouseBirthYear ??= s.year-Math.floor(s.spouseAge);
   s.spouseRetirementAge ??= 65;
   s.spouseSocialSecurityMonthly ??= 0;s.spouseSocialSecurityClaimAge ??= 67;
+  // Presentation only (stripped from forecast state): saves from before the
+  // shirt palette keep the original blue shirt.
+  s.shirtColor ??= 'blue'; s.spouseShirtColor ??= 'blue';
   s.childcarePlans ||= [];
   for (const plan of s.childcarePlans) {
     plan.entryPriceIndex ??= plan.enteredPriceIndex ?? s.priceIndex;

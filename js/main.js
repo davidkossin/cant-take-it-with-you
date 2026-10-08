@@ -302,7 +302,10 @@ canvas.addEventListener('pointermove', (e) => {
   if (e.pointerType === 'touch') return; // touch has no hover; taps go through pointerdown
   const pt = canvasLogicalXY(e.clientX, e.clientY);
   let over = false;
-  if (pt && pause.open && game) {
+  if (pt && dialog.active && dialog.mode === 'palette') {
+    // The appearance page previews the hovered swatch, in setup and in tellers.
+    over = dialog.hoverPointer(pt.x, pt.y);
+  } else if (pt && pause.open && game) {
     over = dialog.active ? dialog.hoverPointer(pt.x, pt.y) : pause.handlePointerMove(pt.x, pt.y, game);
   }
   canvas.style.cursor = over ? 'pointer' : '';
@@ -401,6 +404,7 @@ function syncVirtualPad() {
       dialog.mode === 'prompt' ||
       dialog.mode === 'form' ||
       dialog.mode === 'multi' ||
+      dialog.mode === 'palette' ||
       (dialog.options && dialog.options.length > 1));
   const endingMenu = mode === 'ending' && ending.phase === 2;
   const discrete = !!(pause.open || choiceDialog || endingMenu);

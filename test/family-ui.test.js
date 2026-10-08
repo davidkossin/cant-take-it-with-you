@@ -26,6 +26,25 @@ function scriptedDialog(answers) {
       this._activateSelected();
       return result;
     }
+    palette(text, groups, opts) {
+      // Answer: the back value, a hair id (other grids keep their default),
+      // or { hairColor, shirtColor }.
+      const answer = this.answer('palette', text, { groups, ...opts });
+      const result = super.palette(text, groups, opts);
+      if (answer === (opts?.backValue ?? null)) {
+        this.close(this.paletteBack);
+        return result;
+      }
+      const picks = typeof answer === 'string' ? { hairColor: answer } : answer;
+      for (const [key, id] of Object.entries(picks)) {
+        const group = this.palGroups.find(g => g.key === key);
+        assert.ok(group, `Unknown palette group ${key}: ${text}`);
+        group.chosen = group.colors.findIndex(c => c.id === id);
+        assert.ok(group.chosen >= 0, `Unknown palette choice ${id}: ${text}`);
+      }
+      this.close(this._palValues());
+      return result;
+    }
     prompt(text, opts) {
       const answer = this.answer('prompt', text, { ...opts });
       const result = super.prompt(text, opts);
@@ -78,7 +97,7 @@ function scriptedDialog(answers) {
 
 test('Custom Setup asks Family after Difficulty and keeps salaries/accounts personal', async () => {
   const dialog = scriptedDialog([
-    'Ada', 2026, 40, 'standard', 'married', { name: 'Ben', age: 35 }, 'blonde', 'long',
+    'Ada', 2026, 40, 'dark', 'short', 'standard', 'married', { name: 'Ben', age: 35 }, 'blonde', 'long',
     1, 'Alex', 2, 'continue', '75001', 12000, { savings: 20000, rate: 2 },
     { salary: 150000, spouseSalary: 90000 }, { retirementAge: 70, spouseRetirementAge: 65 },
     ['k401', 'roth'], { balance: 100000, contrib: 8, match: 100, onFirst: 4, equity: 80 },
@@ -107,7 +126,7 @@ test('Custom Setup asks Family after Difficulty and keeps salaries/accounts pers
 
 test('Single-person setup omits spouse salary, retirement age and account forms', async () => {
   const dialog = scriptedDialog([
-    'Ada', 2026, 40, 'standard', 'single', 0, 'continue', '', 12000,
+    'Ada', 2026, 40, 'dark', 'short', 'standard', 'single', 0, 'continue', '', 12000,
     { savings: 20000, rate: 2 }, { salary: 90000 }, { retirementAge: 65 }, [],
     'total', 100000, 80000, '2020-01-01', 'rent', 2000, 40000, 'go',
   ]);

@@ -1,6 +1,6 @@
 {
   "name": "cant-take-it",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "type": "module",
   "scripts": { "test": "node --test test/*.test.js", "check": "node scripts/check-modules.mjs && node --experimental-vm-modules --no-warnings scripts/link-modules.mjs" }

@@ -21,7 +21,7 @@ export const CANVAS_W = FRAME_W;
 export const CANVAS_H = FRAME_H;
 
 /** Bump on each published build so players can confirm cache. */
-export const GAME_VERSION = '0.7.0';
+export const GAME_VERSION = '0.7.1';
 
 export const PALETTE = {
   bg: '#1a1420',
@@ -64,11 +64,87 @@ export const PALETTE = {
   wallPurpleLite: '#4a3a58',
 };
 
-export const HAIR_COLORS = {
-  dark: PALETTE.hairDark,
-  blonde: PALETTE.hairBlonde,
-  red: PALETTE.hairRed,
-};
+/**
+ * The 16 hair colors offered for the player and the spouse, in picker order
+ * (two rows of eight, dark to light, then the fantasy colors). This list is
+ * the only source of hair colors. `dark`, `red` and `blonde` are the original
+ * ids and keep their original hex, so older saves look the same.
+ * Hexes are the mid tone; makePlayerSprite derives the highlight and shade.
+ * `shade` (optional) is how far that shade tone mixes toward black
+ * (default 0.55). The very light colors use less so they do not read as gray.
+ * @type {{id:string,label:string,hex:string,shade?:number}[]}
+ */
+export const HAIR_PALETTE = [
+  { id: 'black', label: 'Black', hex: '#24242e' },
+  { id: 'dark', label: 'Dark Brown', hex: PALETTE.hairDark },
+  { id: 'brown', label: 'Brown', hex: '#5c3a22' },
+  { id: 'chestnut', label: 'Chestnut', hex: '#80482a' },
+  { id: 'auburn', label: 'Auburn', hex: '#7a2c22' },
+  { id: 'red', label: 'Red', hex: PALETTE.hairRed },
+  { id: 'copper', label: 'Copper', hex: '#c4642c' },
+  { id: 'strawberry', label: 'Strawberry Blonde', hex: '#dc8660' },
+  { id: 'blonde', label: 'Blonde', hex: PALETTE.hairBlonde },
+  { id: 'platinum', label: 'Platinum', hex: '#ece2bc', shade: 0.38 },
+  { id: 'gray', label: 'Gray', hex: '#9c9ca4', shade: 0.45 },
+  { id: 'white', label: 'White', hex: '#f4f4f0', shade: 0.3 },
+  { id: 'blue', label: 'Blue', hex: '#3c64c8' },
+  { id: 'green', label: 'Green', hex: '#3c9850' },
+  { id: 'purple', label: 'Purple', hex: '#7c48b4' },
+  { id: 'pink', label: 'Pink', hex: '#e874a8', shade: 0.48 },
+];
+
+/** Hair id → mid-tone hex. Unknown ids fall back to `dark` where used. */
+export const HAIR_COLORS = Object.fromEntries(HAIR_PALETTE.map((c) => [c.id, c.hex]));
+
+/** Hair id → shade mix toward black (see HAIR_PALETTE). */
+export const HAIR_SHADES = Object.fromEntries(HAIR_PALETTE.map((c) => [c.id, c.shade ?? 0.55]));
+
+/**
+ * The 16 shirt colors for the player and the spouse, in picker order (two
+ * rows of eight). `blue` is the original shirt (PALETTE.shirt) and the
+ * default, so older saves look the same. Hexes are the mid tone; the sprite
+ * derives a lit tone (toward white), a shade and a deep shade. `shade`
+ * (optional) is the deep shade's mix toward black (default 0.55).
+ * Navy is left out on purpose: it would vanish against the navy pants.
+ * @type {{id:string,label:string,hex:string,shade?:number}[]}
+ */
+export const SHIRT_PALETTE = [
+  { id: 'blue', label: 'Blue', hex: PALETTE.shirt },
+  { id: 'sky', label: 'Sky Blue', hex: '#5ea4dc' },
+  { id: 'teal', label: 'Teal', hex: '#2a8c88' },
+  { id: 'green', label: 'Green', hex: '#3e9046' },
+  { id: 'forest', label: 'Forest', hex: '#2e6038' },
+  { id: 'olive', label: 'Olive', hex: '#7c7a36' },
+  { id: 'mustard', label: 'Mustard', hex: '#c89c2c' },
+  { id: 'orange', label: 'Orange', hex: '#d46c28' },
+  { id: 'red', label: 'Red', hex: '#b43232' },
+  { id: 'maroon', label: 'Maroon', hex: '#702634' },
+  { id: 'pink', label: 'Pink', hex: '#dc74a0', shade: 0.5 },
+  { id: 'purple', label: 'Purple', hex: '#6c469c' },
+  { id: 'lavender', label: 'Lavender', hex: '#a892d4', shade: 0.48 },
+  { id: 'white', label: 'White', hex: '#ece8de', shade: 0.4 },
+  { id: 'gray', label: 'Gray', hex: '#808088' },
+  { id: 'black', label: 'Black', hex: '#2a2a32' },
+];
+
+/** Default shirt id (the original blue shirt). */
+export const DEFAULT_SHIRT = 'blue';
+
+/** Shirt id → mid-tone hex. */
+export const SHIRT_COLORS = Object.fromEntries(SHIRT_PALETTE.map((c) => [c.id, c.hex]));
+
+/** Shirt id → deep-shade mix toward black (see SHIRT_PALETTE). */
+export const SHIRT_SHADES = Object.fromEntries(SHIRT_PALETTE.map((c) => [c.id, c.shade ?? 0.55]));
+
+/** Valid shirt id, or `fallback` (the blue shirt) when the id is unknown. */
+export function normalizeShirtColor(id, fallback = DEFAULT_SHIRT) {
+  return Object.prototype.hasOwnProperty.call(SHIRT_COLORS, id) ? id : fallback;
+}
+
+/** Valid hair id, or `fallback` when the id is not in HAIR_PALETTE. */
+export function normalizeHairColor(id, fallback = 'dark') {
+  return Object.prototype.hasOwnProperty.call(HAIR_COLORS, id) ? id : fallback;
+}
 
 /**
  * Difficulty packs from researched 2016–2025 averages (see marketAssumptions.js).

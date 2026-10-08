@@ -1,11 +1,6 @@
 /** Shared household questions for Custom Setup and the Family/Portfolio tellers. */
 import { ownerAge, ownerWorking } from '../finance/Household.js';
-
-export const HAIR_COLORS = [
-  { label: 'Dark', value: 'dark' },
-  { label: 'Blonde', value: 'blonde' },
-  { label: 'Red', value: 'red' },
-];
+import { HAIR_PALETTE, SHIRT_PALETTE, normalizeHairColor, normalizeShirtColor } from '../config.js';
 
 export function personName(p, owner = 'primary') {
   return owner === 'spouse' ? p.spouseName || 'Spouse' : p.playerName || 'You';
@@ -30,10 +25,14 @@ export async function editSpouseIdentity(p, dialog) {
     if (Number.isFinite(Number(details.age)) && Number(details.age) >= 18 && Number(details.age) <= 110) break;
     await dialog.show('Enter the spouse’s actual age (18–110).', { title: 'Family' });
   }
-  const color = await dialog.menu('Spouse hair color', [...HAIR_COLORS, { label: 'Back', value: null }], {
-    title: 'Family', selected: Math.max(0, HAIR_COLORS.findIndex(c => c.value === p.spouseHairColor)),
-  });
-  if (color == null) return false;
+  // Length is asked next, so the preview uses the spouse's current length.
+  const look = await dialog.palette('Spouse appearance', [
+    { key: 'hairColor', label: 'Hair color', kind: 'hair', colors: HAIR_PALETTE,
+      selected: normalizeHairColor(p.spouseHairColor) },
+    { key: 'shirtColor', label: 'Shirt color', kind: 'shirt', colors: SHIRT_PALETTE,
+      selected: normalizeShirtColor(p.spouseShirtColor) },
+  ], { title: 'Family', hairLength: p.spouseHairLength === 'long' ? 'long' : 'short', backValue: null });
+  if (look == null) return false;
   const length = await dialog.menu('Spouse hair length', [
     { label: 'Short', value: 'short' }, { label: 'Long', value: 'long' }, { label: 'Back', value: null },
   ], { title: 'Family', selected: p.spouseHairLength === 'long' ? 1 : 0 });
@@ -41,7 +40,8 @@ export async function editSpouseIdentity(p, dialog) {
   p.spouseName = String(details.name || 'Spouse').trim().slice(0, 28) || 'Spouse';
   p.spouseAge = Math.max(18, Math.min(110, Math.round(Number(details.age) || 18)));
   p.spouseBirthYear = p.year - p.spouseAge;
-  p.spouseHairColor = color;
+  p.spouseHairColor = normalizeHairColor(look.hairColor);
+  p.spouseShirtColor = normalizeShirtColor(look.shirtColor);
   p.spouseHairLength = length;
   return true;
 }

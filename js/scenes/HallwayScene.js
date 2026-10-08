@@ -518,7 +518,7 @@ export class HallwayScene {
     ctx.save();
     ctx.translate(-camX, -camY);
     const vis = this.visual?.state || game.portfolio;
-    this.player.draw(ctx, vis.hairColor, vis.hairLength, vis.age);
+    this.player.draw(ctx, vis.hairColor, vis.hairLength, vis.age, vis.shirtColor);
     ctx.restore();
     ctx.restore();
 

@@ -4,7 +4,7 @@
  */
 
 import { PALETTE, FRAME_W, FRAME_H, KEYS } from '../config.js';
-import { makeDialogChrome } from './Assets.js';
+import { makeDialogChrome, makePlayerSprite, hairTones, shirtTones } from './Assets.js';
 import { captureMoneyContext, toDisplayMoney, fromDisplayMoney, moneyUnitSubtitle } from '../finance/DollarBasis.js';
 export { formatMoneyDisplay } from '../finance/DollarBasis.js';
 
@@ -34,6 +34,29 @@ export function sanitizeNumberInput(raw) {
   return (neg ? '-' : '') + s;
 }
 
+/**
+ * Appearance page geometry (frame pixels): one or more labeled 2×8 swatch
+ * grids stacked on the left (name of the chosen color beside each grid), and
+ * on the right a sprite preview with Continue and Back under it. Swatches are
+ * half the linear size of the first single-grid picker so hair and shirt fit
+ * on one page. The block stays inside the 80% title-safe area, and the left
+ * column ends above the phone D-pad, which overlaps the frame's bottom-left.
+ */
+export const PALETTE_COLS = 8;
+const PAL = {
+  swatchW: 64,
+  swatchH: 48,
+  gap: 9,
+  labelH: 34,
+  sectionGap: 28,
+  nameGap: 32,
+  colW: 300,
+  previewH: 216,
+  spriteScale: 7,
+  rowGap: 12,
+  topGap: 14,
+};
+
 export function sanitizeTextInput(raw) {
   return String(raw ?? '').slice(0, 28);
 }
@@ -46,7 +69,7 @@ export class Dialog {
     this.lines = [];
     this.options = [];
     this.selected = 0;
-    this.mode = 'text'; // text | menu | prompt | confirm | form | multi | loading
+    this.mode = 'text'; // text | menu | prompt | confirm | form | multi | palette | loading
     this.promptValue = '';
     this.promptType = 'text';
     this.promptPrefix = ''; // e.g. '$' shown beside money field
@@ -61,6 +84,13 @@ export class Dialog {
     this._optionHitRects = [];
     this._fieldHitRects = [];
     this.loadingMessage = 'Loading…';
+    /** palette: swatch groups, focus (group index, then Continue, then Back) */
+    this.palGroups = [];
+    this.palFocus = 0;
+    /** palette: swatch under the mouse ({g, i}); previews without choosing */
+    this.palHover = null;
+    this.paletteBack = null;
+    this.paletteHairLength = 'short';
   }
 
   show(text, { title = '', subtitle = '' } = {}) {
@@ -208,6 +238,129 @@ export class Dialog {
     });
   }
 
+  /**
+   * Appearance page: labeled PALETTE_COLS-wide swatch grids (e.g. hair, then
+   * shirt) on one page, a live sprite preview, then Continue and Back.
+   * Resolves with `{ [group.key]: colorId, ... }` on Continue, or `backValue`
+   * for Back / Esc / B.
+   * @param {string} text
+   * @param {{key:string,label:string,kind:'hair'|'shirt',
+   *   colors:{id:string,label:string,hex:string}[], selected?:string}[]} groups
+   * @param {object} [opts]
+   * @param {'short'|'long'} [opts.hairLength] hair length for the preview sprite
+   * @param {*} [opts.backValue] value returned for Back (default null)
+   */
+  palette(text, groups, { title = '', subtitle = '', hairLength = 'short',
+    doneLabel = 'Continue', backLabel = 'Back', backValue = null } = {}) {
+    return new Promise((resolve) => {
+      this.active = true;
+      this.mode = 'palette';
+      this.title = title;
+      this.subtitle = subtitle;
+      this.lines = wrapText(text, 40);
+      this.palGroups = (groups || []).map((g) => ({
+        key: g.key,
+        label: g.label,
+        kind: g.kind === 'shirt' ? 'shirt' : 'hair',
+        colors: g.colors || [],
+        chosen: Math.max(0, (g.colors || []).findIndex((c) => c.id === g.selected)),
+      }));
+      this.palFocus = 0;
+      this.palHover = null;
+      // Continue / Back: generic option rows (also keeps the phone D-pad up).
+      this.options = [
+        { label: doneLabel, value: '__done' },
+        { label: backLabel, value: backValue, back: true },
+      ];
+      this.selected = 0;
+      this.paletteBack = backValue;
+      this.paletteHairLength = hairLength === 'long' ? 'long' : 'short';
+      this.resolve = resolve;
+      this.chrome = null;
+      this.fields = [];
+    });
+  }
+
+  /** Focus index of the Continue row; Back is the one after it. */
+  _palDone() {
+    return this.palGroups.length;
+  }
+
+  _palValues() {
+    const out = {};
+    for (const g of this.palGroups) out[g.key] = g.colors[g.chosen]?.id ?? null;
+    return out;
+  }
+
+  /**
+   * Arrow / D-pad step. Inside a grid the arrows move that grid's choice
+   * (left/right wrap through all of its colors). Up from a grid's top row or
+   * down from its bottom row moves to the neighbouring grid, which keeps its
+   * own choice, then Continue, then Back, wrapping to the first grid.
+   */
+  _paletteMove(dir) {
+    const done = this._palDone();
+    const back = done + 1;
+    const f = this.palFocus;
+    this.palHover = null;
+    if (f < done) {
+      const g = this.palGroups[f];
+      const n = g.colors.length;
+      const cols = PALETTE_COLS;
+      const c = g.chosen;
+      if (dir === 'left') g.chosen = (c - 1 + n) % n;
+      else if (dir === 'right') g.chosen = (c + 1) % n;
+      else if (dir === 'up') {
+        if (c < cols) this.palFocus = f === 0 ? back : f - 1;
+        else g.chosen = c - cols;
+      } else if (dir === 'down') {
+        if (c + cols >= n) this.palFocus = f + 1;
+        else g.chosen = c + cols;
+      }
+    } else if (f === done) {
+      if (dir === 'up' || dir === 'left') this.palFocus = done - 1;
+      else if (dir === 'down') this.palFocus = back;
+    } else {
+      if (dir === 'up') this.palFocus = done;
+      else if (dir === 'down') this.palFocus = 0;
+      else if (dir === 'left') this.palFocus = done - 1;
+    }
+    this.selected = this.palFocus === back ? 1 : 0;
+  }
+
+  /** Enter / A: a grid moves on to the next question; Continue / Back close. */
+  _paletteActivate() {
+    const done = this._palDone();
+    if (this.palFocus < done) this.palFocus += 1;
+    else if (this.palFocus === done) this.close(this._palValues());
+    else this.close(this.paletteBack);
+    this.selected = this.palFocus === done + 1 ? 1 : 0;
+  }
+
+  /** Pointer over (or tapping) a palette hit area. */
+  _palPointer(lx, ly, click) {
+    for (const hit of this._optionHitRects) {
+      if (lx < hit.x || lx > hit.x + hit.w || ly < hit.y || ly > hit.y + hit.h) continue;
+      if (hit.kind === 'swatch') {
+        this.palFocus = hit.g;
+        if (click) {
+          this.palGroups[hit.g].chosen = hit.i;
+          this.palHover = null;
+        } else {
+          this.palHover = { g: hit.g, i: hit.i };
+        }
+      } else {
+        this.palHover = null;
+        this.palFocus = hit.focus;
+        this.selected = hit.focus === this._palDone() + 1 ? 1 : 0;
+        if (click) this._paletteActivate();
+      }
+      return true;
+    }
+    if (!click) this.palHover = null;
+    return false;
+  }
+
   /** Non-blocking loading overlay (does not steal resolve of another dialog). */
   showLoading(message = 'Loading…') {
     this._prev = {
@@ -283,7 +436,7 @@ export class Dialog {
       this.mode === 'form'
         ? this.fields.reduce((s, f) => s + (f.subtitle ? 78 : 58), 0) + 8
         : 0;
-    const optsH = this.options.length * optH + 8;
+    const optsH = this.mode === 'palette' ? this._palBlockH(optH) + 8 : this.options.length * optH + 8;
     const titleH = this.title ? 44 : 0;
     const boxH = Math.min(
       FRAME_H - 40,
@@ -306,6 +459,7 @@ export class Dialog {
    */
   handlePointer(lx, ly) {
     if (!this.active || this.mode === 'loading') return false;
+    if (this.mode === 'palette') return this._palPointer(lx, ly, true);
 
     if (this.mode === 'form') {
       for (const hit of this._fieldHitRects) {
@@ -333,6 +487,7 @@ export class Dialog {
    */
   hoverPointer(lx, ly) {
     if (!this.active || this.mode === 'loading') return false;
+    if (this.mode === 'palette') return this._palPointer(lx, ly, false);
     for (const hit of this._optionHitRects) {
       if (lx >= hit.x && lx <= hit.x + hit.w && ly >= hit.y && ly <= hit.y + hit.h) {
         this.selected = hit.index;
@@ -486,6 +641,21 @@ export class Dialog {
       }
     }
 
+    if (this.mode === 'palette') {
+      const dir = KEYS.up.includes(e.key) ? 'up'
+        : KEYS.down.includes(e.key) ? 'down'
+          : KEYS.left.includes(e.key) ? 'left'
+            : KEYS.right.includes(e.key) ? 'right' : null;
+      if (dir) this._paletteMove(dir);
+      else if (KEYS.confirm.includes(e.key)) {
+        this.palHover = null;
+        this._paletteActivate();
+      } else if (KEYS.cancel.includes(e.key)) this.close(this.paletteBack);
+      else return true;
+      e.preventDefault();
+      return true;
+    }
+
     if (KEYS.up.includes(e.key)) {
       this.selected = (this.selected - 1 + this.options.length) % this.options.length;
       e.preventDefault();
@@ -623,6 +793,9 @@ export class Dialog {
         }
       });
       ty += 6;
+    } else if (this.mode === 'palette') {
+      this._drawPalette(ctx, layout, ty + 6);
+      return;
     } else {
       ty += 6;
     }
@@ -661,6 +834,140 @@ export class Dialog {
         h: optH,
       });
       ty += optH;
+    });
+  }
+
+  /** Height of the palette block below the text: left grids vs right column. */
+  _palBlockH(optH) {
+    const rows = (g) => Math.ceil(g.colors.length / PALETTE_COLS);
+    const gridH = (g) => rows(g) * PAL.swatchH + (rows(g) - 1) * PAL.gap;
+    const left = this.palGroups.reduce((h, g, k) => h + (k ? PAL.sectionGap : 0) + PAL.labelH + gridH(g), 0);
+    const right = PAL.previewH + PAL.rowGap + optH * 2;
+    return PAL.topGap + Math.max(left, right);
+  }
+
+  /** Swatch grids with labels and names, sprite preview, Continue and Back. */
+  _drawPalette(ctx, layout, blockTop) {
+    const { boxW, pad, optH, x } = layout;
+    const top = blockTop + PAL.topGap;
+    const { swatchW: sw, swatchH: sh, gap } = PAL;
+    const cols = PALETTE_COLS;
+    const done = this._palDone();
+    const gx = x + pad;
+    const shownId = { hair: null, shirt: null };
+    let gy = top;
+
+    this.palGroups.forEach((g, gi) => {
+      const focused = this.palFocus === gi;
+      const hover = this.palHover && this.palHover.g === gi ? this.palHover.i : -1;
+      const shown = g.colors[hover >= 0 ? hover : g.chosen];
+      shownId[g.kind] = shown?.id ?? null;
+
+      // Label: gold with the cursor while this grid has focus.
+      ctx.font = '18px "Press Start 2P", monospace';
+      ctx.fillStyle = focused ? PALETTE.gold : PALETTE.uiText;
+      if (focused) ctx.fillText('▶', gx, gy);
+      ctx.fillText(g.label, gx + 30, gy);
+      const sy0 = gy + PAL.labelH;
+      const rows = Math.ceil(g.colors.length / cols);
+      const gridH = rows * sh + (rows - 1) * gap;
+
+      g.colors.forEach((c, i) => {
+        const sx = gx + (i % cols) * (sw + gap);
+        const sy = sy0 + Math.floor(i / cols) * (sh + gap);
+        const t = g.kind === 'shirt' ? shirtTones(c.id) : hairTones(c.id);
+        // Bevelled chip in the sprite's own ramp: lit top-left, shaded bottom-right.
+        ctx.fillStyle = '#000';
+        ctx.fillRect(sx, sy, sw, sh);
+        ctx.fillStyle = t.shade;
+        ctx.fillRect(sx + 2, sy + 2, sw - 4, sh - 4);
+        ctx.fillStyle = t.light;
+        ctx.fillRect(sx + 2, sy + 2, sw - 7, sh - 7);
+        ctx.fillStyle = c.hex;
+        ctx.fillRect(sx + 5, sy + 5, sw - 10, sh - 10);
+        ctx.fillStyle = t.light;
+        ctx.fillRect(sx + 7, sy + 7, 6, 3);
+        this._optionHitRects.push({
+          kind: 'swatch', g: gi, i,
+          x: sx - gap / 2, y: sy - gap / 2, w: sw + gap, h: sh + gap,
+        });
+      });
+
+      // Chosen swatch: gold frame (bright on the focused grid, dim otherwise).
+      const cx = gx + (g.chosen % cols) * (sw + gap);
+      const cy = sy0 + Math.floor(g.chosen / cols) * (sh + gap);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(cx - 7, cy - 7, sw + 14, 2);
+      ctx.fillRect(cx - 7, cy + sh + 5, sw + 14, 2);
+      ctx.fillRect(cx - 7, cy - 7, 2, sh + 14);
+      ctx.fillRect(cx + sw + 5, cy - 7, 2, sh + 14);
+      ctx.strokeStyle = focused ? PALETTE.gold : PALETTE.goldDark;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(cx - 3.5, cy - 3.5, sw + 7, sh + 7);
+      if (focused) {
+        ctx.strokeStyle = '#fff4c8';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx - 1.5, cy - 1.5, sw + 3, sh + 3);
+      }
+      // Mouse hover: thin light outline, previewed but not chosen yet.
+      if (hover >= 0 && hover !== g.chosen) {
+        const hx = gx + (hover % cols) * (sw + gap);
+        const hy = sy0 + Math.floor(hover / cols) * (sh + gap);
+        ctx.strokeStyle = PALETTE.uiText;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(hx - 3, hy - 3, sw + 6, sh + 6);
+      }
+      ctx.lineWidth = 1;
+
+      // Name of the chosen (or hovered) color beside the grid.
+      const gridW = cols * sw + (cols - 1) * gap;
+      ctx.font = '20px "Press Start 2P", monospace';
+      ctx.fillStyle = focused ? PALETTE.gold : '#c8b878';
+      ctx.fillText(shown ? shown.label : '', gx + gridW + PAL.nameGap, sy0 + Math.round((gridH - 20) / 2));
+
+      gy = sy0 + gridH + PAL.sectionGap;
+    });
+
+    // Right column: live preview of the hair and shirt being shown.
+    const cw = PAL.colW;
+    const ph = PAL.previewH;
+    const px0 = x + boxW - pad - cw;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(px0, top, cw, ph);
+    ctx.fillStyle = '#1e1628';
+    ctx.fillRect(px0 + 3, top + 3, cw - 6, ph - 6);
+    ctx.strokeStyle = PALETTE.uiBorderDark;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px0 + 1, top + 1, cw - 2, ph - 2);
+    ctx.lineWidth = 1;
+    const k = PAL.spriteScale;
+    const spr = makePlayerSprite(shownId.hair || 'dark', this.paletteHairLength, 0, 'down', -1, shownId.shirt || 'blue');
+    const prev = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(spr, Math.round(px0 + (cw - 16 * k) / 2), top + 6, 16 * k, 24 * k);
+    ctx.imageSmoothingEnabled = prev;
+    ctx.font = '12px "Press Start 2P", monospace';
+    ctx.fillStyle = '#a89878';
+    const cap = this.paletteHairLength === 'long' ? 'Long hair' : 'Short hair';
+    ctx.fillText(cap, Math.round(px0 + (cw - ctx.measureText(cap).width) / 2), top + ph - 24);
+
+    // Continue and Back rows, styled like menu options.
+    let ry = top + ph + PAL.rowGap;
+    [done, done + 1].forEach((focus, n) => {
+      const opt = this.options[n];
+      const on = this.palFocus === focus;
+      ctx.font = '18px "Press Start 2P", monospace';
+      if (on) {
+        ctx.fillStyle = 'rgba(200,160,80,0.25)';
+        ctx.fillRect(px0, ry - 1, cw, optH);
+        ctx.fillStyle = PALETTE.gold;
+        ctx.fillText('▶', px0 + 10, ry + 10);
+      } else {
+        ctx.fillStyle = PALETTE.uiText;
+      }
+      ctx.fillText(opt ? opt.label : '', px0 + 44, ry + 10);
+      this._optionHitRects.push({ kind: 'row', focus, x: px0, y: ry - 1, w: cw, h: optH });
+      ry += optH;
     });
   }
 }

@@ -32,7 +32,7 @@ export function wilson(successes, count) {
 }
 const METRICS=['netWorth','liquid','cash','investments','realNetWorth','realLiquid'];
 const REPORTING_KEYS = new Set(['transactions','lastStatement','lastTransaction','milestones','modelWarnings',
-  'worthHistory','spendingBreakdown','avatar','hairColor','hairLength','name']);
+  'worthHistory','spendingBreakdown','avatar','hairColor','hairLength','shirtColor','spouseShirtColor','name']);
 /** Keep unknown model fields; only presentation/report fields are removed from simulation clones. */
 export function compactForecastState(value) {
   if (Array.isArray(value)) return value.map(compactForecastState);
