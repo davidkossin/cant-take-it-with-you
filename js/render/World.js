@@ -4,11 +4,11 @@
 
 import { TILE, VIEW_W, VIEW_H, PALETTE } from '../config.js';
 import { makeLamp, makeBlueTorch } from './Assets.js';
-import { paintSurface, paintWallShadow, paintRug, paintDoor, paintDecor, paintTeller, wallFace } from './hiTextures.js';
+import { paintSurface, paintWallShadow, paintRug, paintDoor, paintDecor, paintTeller, paintEndWall, drawDeathsDoorLanterns, wallFace } from './hiTextures.js';
 
 /**
- * Decision Room — north wall is doorway to a (new) Hallway of Time; tellers on
- * E / S / W walls (2 each). After the first room, west-wall center also has a
+ * Decision Room — north wall is doorway to a (new) Hallway of Time plus the Bank
+ * teller; other tellers on E / S / W walls. After the first room, west-wall center also has a
  * return door to the prior Hallway of Time timeline node.
  *
  * @param {{ hasWestReturn?: boolean }} [opts]
@@ -164,6 +164,20 @@ export function buildDecisionRoom(opts = {}) {
       wall: true,
       sideways: true,
       wallSide: 'east',
+    },
+    // North wall, left of the Hallway door — Bank: Savings ↔ Cash and retirement withdrawals.
+    // Only Cash pays bills, so this is where the player raises Cash by hand.
+    {
+      id: 'teller-bank',
+      x: 4 * TILE,
+      y: -2,
+      w: 32,
+      h: 22,
+      label: 'Bank: Move Money',
+      kind: 'teller',
+      action: 'bank',
+      wall: true,
+      wallSide: 'north',
     }
   );
 
@@ -172,7 +186,7 @@ export function buildDecisionRoom(opts = {}) {
     { id: 'decor-pillar', kind: 'decor', decor: 'pillar', x: 1 * TILE, y: 1 * TILE, w: 18, h: 18 },
     { id: 'decor-plant', kind: 'decor', decor: 'plant', x: (cols - 2) * TILE - 2, y: 1 * TILE, w: 18, h: 18 },
     { id: 'decor-sconce', kind: 'decor', decor: 'sconce', x: 1 * TILE, y: (rows - 2) * TILE - 2, w: 18, h: 18 },
-    { id: 'decor-bracket', kind: 'decor', decor: 'bracket', x: (cols - 2) * TILE - 2, y: (rows - 2) * TILE - 2, w: 18, h: 18 }
+    { id: 'decor-armchair', kind: 'decor', decor: 'armchair', x: (cols - 2) * TILE - 2, y: (rows - 2) * TILE - 2, w: 18, h: 18 }
   );
 
   return {
@@ -235,10 +249,11 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
     map[rows - 1][x] = 'stone';
     if (rows > 1) map[rows - 2][x] = 'stone';
   }
-  // North end opening toward End of the Line
+  // North end: a solid end wall across the corridor, as thick as the side
+  // walls. The End of the Line door is set flush into its south face.
   for (let x = walkLeft; x <= walkRight; x++) {
-    map[0][x] = 'stone';
-    if (rows > 1) map[1][x] = 'stone';
+    map[0][x] = 'wallPurple';
+    if (rows > 1) map[1][x] = 'wallPurple';
   }
 
   const interactables = [];
@@ -309,17 +324,22 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
     }
   }
 
-  // End of the Line
-  interactables.push({
+  // End of the Line — centered in the end wall, bottom flush with the wall
+  // face (y = 2 tiles), so its solid rect sits on the same plane as the wall.
+  const corridorMidX = ((walkLeft + walkRight + 1) / 2) * TILE;
+  const endDoor = {
     id: 'end-door',
-    x: midX - TILE,
+    x: corridorMidX - TILE,
     y: TILE,
     w: 2 * TILE,
     h: TILE + 8,
     label: 'End of the Line',
     kind: 'end-door',
     facing: 'h',
-  });
+    // Death's Door (internal name; player-facing label unchanged).
+    doorStyle: 'deaths-door',
+  };
+  interactables.push(endDoor);
 
   // South spawn marker (not interactable — findFacing skips kind:'spawn')
   interactables.push({
@@ -366,6 +386,14 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
     width: cols * TILE,
     height: rows * TILE,
     theme: 'hallway',
+    /** Painted end wall over rows 0–1, side walls included, door recess cut in. */
+    endWall: {
+      x: (walkLeft - wallThick) * TILE,
+      y: 0,
+      w: (walkW + wallThick * 2) * TILE,
+      h: 2 * TILE,
+      door: doorSpriteRect(endDoor),
+    },
     /** progress 0 at south (leave) → 1 at north (age 100) */
     progressAtY(y) {
       const south = (rows - foyer) * TILE;
@@ -432,6 +460,15 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
     }
   }
 
+  // Hallway end wall: one continuous painted face (cap on top, darker toward
+  // the floor) over the wall tiles, so the End of the Line door is set in a wall.
+  if (world.theme === 'hallway' && world.endWall) {
+    const ew = world.endWall;
+    const tex = paintEndWall(ew.w, ew.h, ew.door.x - ew.x, ew.door.y - ew.y, ew.door.w, ew.door.h);
+    blitHi(ctx, tex, ew.x - camX, ew.y - camY, ew.w, ew.h);
+    drawDeathsDoorLanterns(ctx, ew.door, ew.y + ew.h, camX, camY, animTime);
+  }
+
   if (world.theme === 'room' && world.rug) {
     const rug = paintRug(world.rug.w, world.rug.h);
     blitHi(ctx, rug, world.rug.x - camX - 2, world.rug.y - camY - 1, rug.lw, rug.lh);
@@ -461,7 +498,7 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       const facing = obj.facing || (obj.wallSide === 'west' || obj.wallSide === 'east' || obj.kind === 'year-door' ? 'v' : 'h');
-      const doorSpr = paintDoor(facing);
+      const doorSpr = paintDoor(facing, obj.doorStyle);
       ctx.drawImage(
         doorSpr,
         sx + (obj.spriteOx || 0),
@@ -491,6 +528,9 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
       // Years are drawn in the side margin by drawYearTimeline.
     }
   }
+  // Doors / decor switch smoothing on for their painted art. Do not leak it
+  // to whatever the scene draws next (the player sprite is pixel art).
+  ctx.imageSmoothingEnabled = false;
 }
 
 /**

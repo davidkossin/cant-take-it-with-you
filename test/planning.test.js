@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { household } from './fixtures.js';
 import { projectOneYear, projectYears, sellStock, buyHome, largePurchase, takeSecuritiesLoan,
-  computeWorth, applySecuritiesMarginCall, findBankInsolvencyIndex } from '../js/finance/Engine.js';
+  computeWorth, applySecuritiesMarginCall, findBankInsolvencyIndex, raiseCash, transferSavings,
+  withdrawRetirement, retirementAccess, setRetirementWithdrawalPlan, NOT_ENOUGH_CASH, FUNDING_RULE } from '../js/finance/Engine.js';
 import { estimateAnnualTax, capitalNet, taxableSocialSecurity, payrollTax } from '../js/finance/Tax.js';
 import { monthlyPayment, loanDue, payLoan } from '../js/finance/Loans.js';
 import { contributionLimits, rothLimit, claimFactor, requiredDistribution, benefitEarningsReduction } from '../js/finance/Retirement.js';
@@ -60,18 +61,64 @@ test('zero cash with funded costs is solvent; inaccessible retirement wealth is 
   const blocked=projectOneYear(household({cash:0,k401Balance:100000,annualSpending:10000}),'standard',{deterministic:true});
   assert.equal(blocked.state.k401Balance,100000);assert.equal(blocked.statement.fundingSuccess,false);
 });
-test('retirement withdrawals are age-based and gross up tax without hidden balances',()=>{
-  const p=household({age:60,cash:0,k401Balance:100000,annualSpending:30000,employed:false});
+test('cash-only funding: only Cash pays bills; savings, stocks and retirement money are never used automatically',()=>{
+  assert.equal(FUNDING_RULE,'cash-only');
+  const s=household({cash:100,savings:50000});assert.equal(raiseCash(s,1000),100);
+  assert.equal(s.cash,100);assert.equal(s.savings,50000);
+  const p=household({age:62,cash:0,savings:50000,savingsRate:0,stocksTotal:50000,stocksCostBasis:50000,
+    k401Balance:50000,rothBalance:10000,rothContributionBasis:10000,rothOpenedYear:2010,annualSpending:12000});
   const r=projectOneYear(p,'standard',{deterministic:true});
-  assert.equal(r.statement.fundingSuccess,true);assert.ok(r.statement.income.traditionalWithdrawals>30000);
-  assert.ok(r.state.k401Balance<70000);assert.ok(r.state.taxPayable<=.01);
+  assert.equal(r.statement.fundingSuccess,false);assert.equal(r.state.planFailed,true);assert.equal(r.state.firstFailureYear,2026);
+  assert.equal(r.state.savings,50000);assert.equal(r.state.stocksTotal,50000);
+  assert.equal(r.state.k401Balance,50000);assert.equal(r.state.rothBalance,10000);
+  assert.equal(r.statement.unfunded,12000);assert.equal(findBankInsolvencyIndex([{state:p},r]),1);
   close(r.statement.reconciliation.difference,0);
 });
-test('Roth basis can fund early spending; unknown earnings cannot',()=>{
+test('player transfers move Savings and Cash both ways and reject overdrafts',()=>{
+  const p=household({cash:1000,savings:5000});
+  const a=transferSavings(p,4000,'toCash');assert.equal(a.lastTransaction.accepted,true);
+  assert.equal(a.cash,5000);assert.equal(a.savings,1000);close(computeWorth(a).netWorth,computeWorth(p).netWorth);
+  const b=transferSavings(a,2500,'toSavings');assert.equal(b.cash,2500);assert.equal(b.savings,3500);
+  assert.equal(transferSavings(p,6000,'toCash').lastTransaction.accepted,false);
+  assert.equal(transferSavings(p,0,'toCash').lastTransaction.accepted,false);
+  assert.equal(p.cash,1000);assert.equal(p.savings,5000);
+});
+test('one-time 401(k) withdrawals respect age 59½, the early penalty and year-end tax',()=>{
+  const young=household({age:40,cash:0,k401Balance:100000});
+  assert.equal(retirementAccess(young,'traditional').gated,true);
+  const blocked=withdrawRetirement(young,{amount:10000});assert.equal(blocked.lastTransaction.accepted,false);
+  assert.equal(blocked.k401Balance,100000);
+  const early=withdrawRetirement(young,{amount:10000,early:true});assert.equal(early.lastTransaction.accepted,true);
+  assert.equal(early.cash,10000);assert.equal(early.k401Balance,90000);
+  assert.equal(early.taxRecord.penalties,1000);assert.equal(early.taxRecord.traditionalWithdrawals,10000);
+  const older=withdrawRetirement(household({age:60,cash:0,k401Balance:100000}),{amount:20000});
+  assert.equal(older.lastTransaction.accepted,true);assert.equal(older.cash,20000);assert.ok(!older.taxRecord.penalties);
+  assert.equal(withdrawRetirement(older,{amount:200000}).lastTransaction.accepted,false);
+});
+test('a standing yearly withdrawal is the player\'s instruction: paid monthly into Cash, taxed, never automatic',()=>{
+  const p=household({age:60,cash:0,k401Balance:100000,annualSpending:30000,employed:false});
+  const none=projectOneYear(p,'standard',{deterministic:true});
+  assert.equal(none.statement.fundingSuccess,false);assert.equal(none.state.k401Balance,100000);
+  const planned=setRetirementWithdrawalPlan(p,{amount:40000,account:'traditional'});
+  assert.deepEqual(planned.retirementWithdrawalPlan,{amount:40000,account:'traditional',early:false,inflationAdjusted:true});
+  const r=projectOneYear(planned,'standard',{deterministic:true});
+  assert.equal(r.statement.fundingSuccess,true);assert.equal(r.statement.income.traditionalWithdrawals,40000);
+  assert.equal(r.statement.plannedWithdrawals,40000);assert.equal(r.state.k401Balance,60000);
+  assert.ok(r.state.taxPayable<=.01);assert.equal(r.state.retirementWithdrawalPlan.amount,40000);
+  close(r.statement.reconciliation.difference,0);
+  // Before 59½ a traditional standing withdrawal waits unless the player accepted the penalty.
+  const waiting=projectOneYear(setRetirementWithdrawalPlan({...p,age:50},{amount:40000}),'standard',{deterministic:true});
+  assert.equal(waiting.state.k401Balance,100000);assert.equal(waiting.statement.fundingSuccess,false);
+  assert.equal(setRetirementWithdrawalPlan(planned,{amount:0}).retirementWithdrawalPlan,undefined);
+});
+test('Roth basis can fund early spending only when the player withdraws it; unknown earnings cannot',()=>{
   const p=household({age:45,cash:0,rothBalance:20000,rothContributionBasis:12000,rothOpenedYear:2020,annualSpending:12000});
-  const r=projectOneYear(p,'standard',{deterministic:true});
+  assert.equal(projectOneYear(p,'standard',{deterministic:true}).statement.fundingSuccess,false);
+  const w=withdrawRetirement(p,{amount:12000,account:'roth'});assert.equal(w.lastTransaction.accepted,true);
+  const r=projectOneYear(w,'standard',{deterministic:true});
   assert.equal(r.statement.fundingSuccess,true);assert.equal(r.state.rothBalance,8000);assert.equal(r.tax.total,0);
-  const u=projectOneYear({...p,rothContributionBasis:0},'standard',{deterministic:true});assert.equal(u.statement.fundingSuccess,false);
+  const u=withdrawRetirement({...p,rothContributionBasis:0},{amount:1000,account:'roth'});
+  assert.equal(u.lastTransaction.accepted,false);assert.equal(u.rothBalance,20000);
 });
 test('SSA claim timing, COLA, earnings test and cohort RMD',()=>{
   close(claimFactor(62,1965),.70);close(claimFactor(70,1965),1.24);
@@ -89,10 +136,10 @@ test('rental cashflow is received when the owner rents a residence; operations p
   assert.equal(r.statement.expenses.propertyOperating,1200);assert.equal(r.statement.expenses.propertyTax,1200);
   close(r.statement.reconciliation.difference,0);
 });
-test('all automatic sales consume lots and settle gain tax exactly once',()=>{
+test('nothing is sold automatically; a player sale consumes lots and settles gain tax exactly once',()=>{
   const p=household({cash:0,stocksTotal:100000,stocksCostBasis:0,annualSpending:80000});
   const r=projectOneYear(p,'standard',{deterministic:true});
-  assert.ok(r.state.stocksTotal<20000);assert.ok(r.tax.federal>0);assert.equal(r.statement.fundingSuccess,true);
+  assert.equal(r.state.stocksTotal,100000);assert.equal(r.tax.total,0);assert.equal(r.statement.fundingSuccess,false);
   assert.equal(computeWorth(r.state).stocks,r.state.stocksTotal);close(r.statement.reconciliation.difference,0);
   const sale=sellStock(household({salary:100000,stocksTotal:50000,stocksCostBasis:0}),{proceeds:20000});
   const annual=projectOneYear(sale.state,'standard',{deterministic:true});
@@ -106,12 +153,33 @@ test('home purchase closing costs and borrowing obey balance sheet conservation'
   const borrowed=takeSecuritiesLoan(p,{amount:40000,rate:0,term:10});
   assert.equal(borrowed.lastTransaction.accepted,true);close(computeWorth(borrowed).netWorth,computeWorth(p).netWorth);
   const unfunded=largePurchase(household({cash:1000}),10000);assert.equal(unfunded.lastTransaction.accepted,false);
+  assert.ok(unfunded.lastTransaction.reason.startsWith(NOT_ENOUGH_CASH));
+  // Purchases use Cash only: stocks and savings are not sold or moved to cover them.
+  const rich=household({cash:10000,savings:100000,stocksTotal:100000,stocksCostBasis:100000});
+  const home2=buyHome(rich,{value:300000,downPayment:60000,rate:0,term:30});
+  assert.equal(home2.lastTransaction.accepted,false);assert.ok(home2.lastTransaction.reason.startsWith(NOT_ENOUGH_CASH));
+  assert.equal(home2.stocksTotal,100000);assert.equal(home2.savings,100000);assert.equal(home2.homes.length,0);
 });
-test('margin liquidation restores LTV while reducing actual collateral',()=>{
-  const p=household({cash:0,stocksTotal:100000,stocksCostBasis:100000,
-    otherLoans:[{type:'securities',principal:60000,rate:0,remainingTerm:10}]});
-  applySecuritiesMarginCall(p);assert.equal(p.stocksTotal,80000);assert.equal(p.otherLoans[0].principal,40000);
-  close(computeWorth(p).netWorth,40000);
+test('a margin call is repaid from Cash only; no forced sale, and an unpaid excess is a glass wall',()=>{
+  const loan=()=>[{type:'securities',principal:60000,rate:0,remainingTerm:10}];
+  const p=household({cash:0,savings:50000,stocksTotal:100000,stocksCostBasis:100000,otherLoans:loan()});
+  const statement={unfunded:0};
+  applySecuritiesMarginCall(p,[],statement);
+  assert.equal(p.stocksTotal,100000);assert.equal(p.savings,50000);assert.equal(p.otherLoans[0].principal,60000);
+  assert.equal(p.planFailed,true);assert.equal(statement.unfunded,10000);
+  applySecuritiesMarginCall(p,[],statement);assert.equal(statement.unfunded,10000); // monthly re-check is not double-counted
+  const paid=household({cash:25000,stocksTotal:100000,stocksCostBasis:100000,otherLoans:loan()});
+  applySecuritiesMarginCall(paid);
+  assert.equal(paid.cash,15000);assert.equal(paid.otherLoans[0].principal,50000);assert.equal(paid.stocksTotal,100000);
+  assert.ok(!paid.planFailed);
+});
+test('year-end income tax is paid from Cash only; an unpaid balance is a glass wall',()=>{
+  // A $100k 401(k) withdrawal is taxable at year-end; with Cash spent, savings and stocks are not tapped.
+  const p=household({age:60,cash:0,savings:100000,savingsRate:0,stocksTotal:50000,stocksCostBasis:0,k401Balance:200000});
+  const withdrawn=withdrawRetirement(p,{amount:100000});assert.equal(withdrawn.lastTransaction.accepted,true);
+  const r=projectOneYear({...withdrawn,cash:0},'standard',{deterministic:true});
+  assert.ok(r.state.taxPayable>1000);assert.equal(r.statement.fundingSuccess,false);assert.equal(r.state.planFailed,true);
+  assert.equal(r.state.savings,100000);assert.equal(r.state.stocksTotal,50000);assert.equal(r.state.k401Balance,100000);
 });
 test('legacy migration is idempotent, does not edit source saves, and preserves explicit zero values',()=>{
   const g=createGameFromSetup(createDefaultSetup());delete g.portfolio.financeVersion;
@@ -156,4 +224,11 @@ test('paid W-2 withholding is credited when reserving cash for a Roth contributi
   const p=household({cash:0,salary:40000,annualSpending:26000,hasRoth:true,rothAnnualContribution:7500});
   const r=projectOneYear(p,'standard',{deterministic:true});
   assert.ok(r.statement.rothContribution>6000);assert.equal(r.state.taxPayable,0);close(r.statement.reconciliation.difference,0);
+});
+test('Roth contributions come from Cash only and are skipped quietly when Cash is short',()=>{
+  // $20k wages leave well under $1k of Cash after withholding and $18k of living costs; savings stay put.
+  const p=household({cash:0,salary:20000,annualSpending:18000,savings:20000,savingsRate:0,hasRoth:true,rothAnnualContribution:5000});
+  const r=projectOneYear(p,'standard',{deterministic:true});
+  assert.ok(r.statement.rothContribution<1000);assert.equal(r.state.savings,20000);
+  assert.equal(r.statement.fundingSuccess,true);assert.ok(r.state.cash>=0);
 });

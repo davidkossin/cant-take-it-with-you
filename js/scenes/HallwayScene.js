@@ -8,12 +8,15 @@ import {
   findFacingInteractable,
 } from '../render/World.js';
 import { computeWorth, cloneState, findBankInsolvencyIndex } from '../finance/Engine.js';
-import { projectJourney, isJourneyScenario, HALLWAY_PATHS } from '../finance/Journey.js';
+import { projectJourney, isCurrentJourneyScenario, HALLWAY_PATHS } from '../finance/Journey.js';
 import { ForecastClient } from '../finance/ForecastClient.js';
 import { currentNode, enterYearRoom, commitHallwayNode, returnToLeftDecisionRoom, completeJourney } from '../state/GameState.js';
 import { autoSave } from '../state/SaveSystem.js';
 import { log as debugLog, setHallwayStash } from '../debug/Logger.js';
 import { virtualStick } from '../input/VirtualPad.js';
+import { drawFutureSplash, SPLASH_FADE_MS } from '../render/FutureSplash.js';
+
+const nowMs = () => globalThis.performance?.now?.() ?? Date.now();
 
 export class HallwayScene {
   constructor({ forecast = new ForecastClient() } = {}) {
@@ -39,6 +42,10 @@ export class HallwayScene {
     this._glassDialogShowing = false;
     /** After a bump dialog (or while still touching), require stepping away before re-show. */
     this._glassCanShow = true;
+    /** True while the full-screen "Generating Your Future" splash replaces the Hallway. */
+    this.splashing = false;
+    /** performance.now() when the splash began fading into the Hallway, else null. */
+    this.splashFadeStart = null;
   }
 
   enter(game) {
@@ -86,13 +93,17 @@ export class HallwayScene {
     this._glassDialogShowing = false;
     this._glassCanShow = true;
     this.setInputBlocked(true);
-    if (isJourneyScenario(game.hallwayScenario)) {
+    this.splashing = false;
+    this.splashFadeStart = null;
+    if (isCurrentJourneyScenario(game.hallwayScenario)) {
       this._installProjection(game, game.hallwayScenario);
     } else {
       this.forecast.request(this.baseline, HALLWAY_PATHS);
       if (this.forecast.result) this._installProjection(game, this.forecast.result.scenario);
       else autoSave(game, 'end');
     }
+    // Saved path or cached forecast: straight into the Hallway, no splash.
+    this.splashing = !this.ready;
   }
 
   _installProjection(game, scenario) {
@@ -162,6 +173,10 @@ export class HallwayScene {
       })),
     });
     this.ready = true;
+    if (this.splashing) {
+      this.splashing = false;
+      this.splashFadeStart = nowMs();
+    }
     this.setInputBlocked(false);
     autoSave(game, 'end');
   }
@@ -304,12 +319,7 @@ export class HallwayScene {
       yearIndex: this.glassWall.yearIndex,
       age: this.glassWall.age,
     });
-    await dialog.show(
-      `This simulated path cannot fund all required costs in ${y - 1}.\n` +
-        `You cannot continue until you make a financial decision:\n` +
-        `enter an earlier year’s Decision Room to change income, spending, assets or borrowing.`,
-      { title: 'Funding shortfall' }
-    );
+    await dialog.show(glassWallMessage(y - 1), { title: 'Funding shortfall' });
     this._glassDialogShowing = false;
     // Stay disarmed until player steps away from the wall (avoids instant re-fire)
     this._glassCanShow = false;
@@ -414,7 +424,31 @@ export class HallwayScene {
     return null;
   }
 
+  /** Splash opacity for the cross-fade into the Hallway; 0 once it is done. */
+  splashAlpha(now = nowMs()) {
+    if (this.splashing) return 1;
+    if (this.splashFadeStart == null) return 0;
+    const a = 1 - (now - this.splashFadeStart) / SPLASH_FADE_MS;
+    if (a <= 0) { this.splashFadeStart = null; return 0; }
+    return a;
+  }
+
+  _drawSplash(ctx, alpha) {
+    drawFutureSplash(ctx, {
+      progress: this.ready ? 1 : this.forecast.progress,
+      paths: HALLWAY_PATHS,
+      error: this.ready ? null : this.forecast.error,
+      alpha,
+      time: this.animTime / 60,
+    });
+  }
+
   render(ctx, game) {
+    // Full-frame loading screen while the Monte Carlo journey is generated.
+    if (!this.ready) {
+      this._drawSplash(ctx, 1);
+      return;
+    }
     const camX = Math.max(
       0,
       Math.min(this.world.width - VIEW_W, this.player.x + 6 - VIEW_W / 2)
@@ -441,32 +475,6 @@ export class HallwayScene {
     const worth = this.visual?.worth || computeWorth(portfolio);
     this.hud.draw(ctx, portfolio, worth);
 
-    ctx.save();
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    if (!this.ready) {
-      const top = HUD_H + 180, width = 1600, left = (FRAME_W - width) / 2;
-      ctx.fillStyle = 'rgba(10,8,24,0.94)';
-      ctx.fillRect(left, top, width, 230);
-      ctx.font = '24px "Press Start 2P", monospace';
-      ctx.fillStyle = '#d4a84b';
-      ctx.fillText('Preparing your Monte Carlo journey', FRAME_W / 2, top + 28);
-      ctx.font = '18px "Press Start 2P", monospace';
-      ctx.fillStyle = '#ddd';
-      ctx.fillText(this.forecast.error ? 'Projection unavailable. Press A / Enter to retry.' :
-        HALLWAY_PATHS + ' paths · ' + Math.round(this.forecast.progress * 100) + '%', FRAME_W / 2, top + 78);
-      ctx.fillStyle = '#aaa';
-      ctx.fillText('One complete path near the median final outcome.', FRAME_W / 2, top + 130);
-      ctx.fillText('Menu remains available while the projection runs.', FRAME_W / 2, top + 170);
-    } else {
-      ctx.font = '14px "Press Start 2P", monospace';
-      ctx.fillStyle = 'rgba(10,8,24,0.8)';
-      ctx.fillRect(280, HUD_H + 8, FRAME_W - 560, 30);
-      ctx.fillStyle = '#80e0ef';
-      ctx.fillText('Monte Carlo journey · gains and losses · Pause → Charts for the range', FRAME_W / 2, HUD_H + 16);
-    }
-    ctx.restore();
-
     // Life-event banner (playfield bottom); prompt sits just below if both active
     if (this.eventBanner) {
       ctx.font = '18px "Press Start 2P", monospace';
@@ -487,6 +495,9 @@ export class HallwayScene {
     if (this.prompt) {
       drawActionPrompt(ctx, this.prompt.label);
     }
+
+    const fade = this.splashAlpha();
+    if (fade > 0) this._drawSplash(ctx, fade);
   }
 }
 
@@ -595,20 +606,32 @@ function drawEventAuras(ctx, world, auras, camX, camY, animTime) {
 
 
 /**
+ * Glass-wall dialog: only Cash pays bills, so the player must raise Cash by hand.
+ * @param {number} shortfallYear calendar year whose bills Cash could not pay
+ */
+export function glassWallMessage(shortfallYear) {
+  // Paragraphs only — Dialog wraps each paragraph at 40 chars, so no mid-sentence breaks here.
+  return `Not enough Cash to pay ${shortfallYear}'s bills — enter a Decision Room to raise cash.\n` +
+    `Use the ${shortfallYear} door or an earlier one: move Savings to Cash, withdraw from your ` +
+    `401(k)/Roth, sell stock or a home, borrow, or cut spending.\n` +
+    `Nothing is sold for you.`;
+}
+
+/**
  * Corridor-wide glass barrier past the last enterable year-door.
  *
- * SALARY-INCLUSIVE ORDER (do not regress):
- * 1) projectOneYear ages the year, then applies salary (+ SS) in cashflow, then
- *    writes Cash on the snapshot — salary is already in Cash before insolvency.
- * 2) findBankInsolvencyIndex tests those post-salary snapshots (Cash ≤ 0).
- * 3) This wall is placed from that index only — never on pre-salary cash.
- * Door = Jan 1; salary for that year is in the step that produces the door snapshot.
- *
- * Door i ↔ snapshots[i+1] (yearIndex = i+1). Last enterable door = yearIndex k-1;
- * wall sits north of that door's collider (hallway gap), not overlapping it.
+ * CASH-ONLY FUNDING (do not regress):
+ * 1) Every month, Cash alone pays the bills (after that month's pay, benefits and the
+ *    player's standing withdrawal arrive). Nothing is sold, transferred or withdrawn for the
+ *    player; any bill Cash cannot cover marks the year unfunded (planFailed).
+ * 2) findBankInsolvencyIndex returns the first snapshot k whose year left a bill unpaid.
+ *    snapshots[k] is Jan 1 of year Y, so the shortfall happened in Y-1.
+ * 3) Door i ↔ snapshots[i+1] (yearIndex = i+1). The last enterable door is yearIndex k-1,
+ *    i.e. Jan 1 of the shortfall year, where the player can still raise Cash.
+ * The wall sits north of that door's collider (hallway gap), not overlapping it.
  */
 function buildGlassWall(world, snapshots) {
-  // Insolvency index is salary-inclusive (see comment above + projectOneYear).
+  // First year with an unpaid bill (see comment above + projectOneYear).
   const k = findBankInsolvencyIndex(snapshots);
   if (k < 1) return null;
   const foyer = world.foyer || 5;
@@ -620,14 +643,14 @@ function buildGlassWall(world, snapshots) {
   const cashSafe =
     k >= 2 ? snapshots[k - 1]?.state?.cash ?? null : snapshots[0]?.state?.cash ?? null;
   // Door collider: y ∈ [yTile*TILE, yTile*TILE+22] (see World.buildHallway)
-  const iSafe = k - 2; // door index for last year with Cash > 0; -1 if none
+  const iSafe = k - 2; // door index for Jan 1 of the shortfall year; -1 = the room just left
   let y;
   if (iSafe >= 0) {
     const yTile = world.rows - 1 - foyer - iSafe * segment - 1;
     // North of last safe door (smaller y); clear of its 22px-tall collider
     y = yTile * TILE - 10;
   } else {
-    // Even the first door is insolvent — block approach from the south
+    // The leave year itself is short — block approach from the south
     const yTile0 = world.rows - 1 - foyer - 1;
     y = yTile0 * TILE + 24;
   }

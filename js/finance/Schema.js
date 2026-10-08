@@ -1,6 +1,7 @@
 import { copy, nonnegative, ensureHoldings, stockBook, money } from './Books.js';
 import { monthlyPayment } from './Loans.js';
 import { resolveDifficultyId } from './marketAssumptions.js';
+import { isCurrentJourneyScenario } from './Journey.js';
 
 export function normalizePortfolio(input, { legacy = input.financeVersion !== 2 } = {}) {
   const s = copy(input);
@@ -81,5 +82,7 @@ export function migrateGame(input) {
     for (const node of Object.values(game.timeline?.nodes || {})) node.legacy = true;
     game.flags ||= {}; game.flags.financeMigrated = true;
   }
+  // A Hallway path chosen under an older selection or funding rule is dropped; the next Hallway reselects it.
+  if (game.hallwayScenario != null && !isCurrentJourneyScenario(game.hallwayScenario)) game.hallwayScenario = null;
   return game;
 }

@@ -2,7 +2,7 @@
 import { raiseCash, liquidTotal } from './Engine.js';
 import { money, nonnegative } from './Books.js';
 export function applyAutoEvents() { return []; }
-/** Existing callers get a paid/unfunded result; no direct stock-cache edits or invented credit. */
+/** Existing callers get a paid/unfunded result from Cash only (cash-only funding); nothing is sold or invented. */
 export function drainLiquid(state,amount) {
   const required=money(nonnegative(amount));
   raiseCash(state,required,{retirement:false});

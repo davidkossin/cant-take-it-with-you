@@ -6,7 +6,8 @@ const dollars=(key,label,value)=>({key,label,type:'money',prefix:'$',defaultValu
 const number=(key,label,value)=>({key,label,type:'number',defaultValue:String(value ?? 0)});
 const percent=(key,label,value)=>({key,label,type:'percent',defaultValue:String((value ?? 0)*100)});
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,Number(v)||0));
-export async function editPlanningInputs(p,dialog) {
+/** lockBalances (Decision Room play): lot market values are read-only; Setup leaves them editable. */
+export async function editPlanningInputs(p,dialog,{lockBalances=false}={}) {
   while (true) {
     const choice=await dialog.menu('Benefits, budget and forecast inputs',[
       {label:'Income / Social Security',value:'income'},
@@ -59,15 +60,17 @@ export async function editPlanningInputs(p,dialog) {
         {label:'Cancel',value:null}],{title:'Investment basis'});
       if (index==null) continue;
       const h=p.stocksHoldings[index];
-      const r=await dialog.form('Data correction; obtain basis/date from brokerage records',[
-        dollars('value','Current market value',h.value),dollars('basis','Verified total cost basis',h.costBasis),
+      const r=await dialog.form(lockBalances?'Basis/date correction; market value '+Math.round(h.value)+' is locked during play'
+        :'Data correction; obtain basis/date from brokerage records',[
+        ...(lockBalances?[]:[dollars('value','Current market value',h.value)]),dollars('basis','Verified total cost basis',h.costBasis),
         {key:'date',label:'Acquired YYYY-MM-DD (blank = unknown)',type:'text',defaultValue:h.acquiredDate || ''}],{title:h.ticker || 'Holding'});
       if (r) {
         const date=String(r.date || '').trim();
         if (date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)))) {
           await dialog.show('Use a valid YYYY-MM-DD acquisition date.',{title:'Investment basis'});continue;
         }
-        h.value=Math.max(0,r.value);h.costBasis=Math.max(0,r.basis);h.basisKnown=true;h.acquiredDate=date || null;
+        if (!lockBalances) h.value=Math.max(0,r.value);
+        h.costBasis=Math.max(0,r.basis);h.basisKnown=true;h.acquiredDate=date || null;
         h.shares=h.value/(h.price || 100);syncBook(p);post(p,'data-correction',{holdingId:h.id});
       }
     } else if (choice==='homes') {

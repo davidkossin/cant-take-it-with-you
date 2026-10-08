@@ -149,8 +149,7 @@ body.is-max-fill .topbar {
   pointer-events: none;
 }
 
-body.is-max-fill .topbar .back,
-body.is-max-fill .topbar .title {
+body.is-max-fill .topbar .back {
   display: none;
 }
 

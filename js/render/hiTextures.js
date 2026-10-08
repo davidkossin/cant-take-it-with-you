@@ -175,7 +175,13 @@ export function paintRug(w, h) {
   return c;
 }
 
-export function paintDoor(facing) {
+/**
+ * @param {'h'|'v'} facing
+ * @param {'wood'|'deaths-door'|'black-gold'} [style] 'deaths-door' (alias
+ *   'black-gold') is the black/gold End of the Line door.
+ */
+export function paintDoor(facing, style = 'wood') {
+  if (style === 'deaths-door' || style === 'black-gold') return paintDeathsDoor(facing);
   const key = `hidoor-${facing}`;
   if (cache.has(key)) return cache.get(key);
   const lw = facing === 'h' ? 32 : 16;
@@ -230,6 +236,357 @@ export function paintDoor(facing) {
   return c;
 }
 
+/**
+ * Death's Door (internal name; player-facing label unchanged — the game
+ * still calls it "End of the Line"). Same slab layout as the wood door (planks, two
+ * hinges, ring handle), but the slab is near-black and gold is only a thin
+ * trim edge, the hinges and the handle. Dark-gray plank seams and a soft
+ * upper-left sheen keep it reading as a door, not a hole.
+ */
+function paintDeathsDoor(facing) {
+  const key = `hidoor-${facing}-deaths-door`;
+  if (cache.has(key)) return cache.get(key);
+  const lw = facing === 'h' ? 32 : 16;
+  const lh = facing === 'h' ? 16 : 26;
+  const c = canvas(lw * S, lh * S);
+  c.lw = lw;
+  c.lh = lh;
+  const ctx = c.getContext('2d');
+  ctx.scale(S, S);
+  const ink = '#2a1a06';
+  // Black slab, lit from the upper left.
+  const body = ctx.createLinearGradient(0, 0, lw * 0.6, lh);
+  body.addColorStop(0, '#3a3840');
+  body.addColorStop(0.35, '#211f25');
+  body.addColorStop(1, '#0b0a0d');
+  ctx.fillStyle = body;
+  ctx.fillRect(0, 0, lw, lh);
+  // Planks: every other board a hair lighter, dark-gray seams with a lit edge.
+  const t = 1.1; // trim width
+  const boards = facing === 'h' ? 4 : 3;
+  const bw = (lw - t * 2) / boards;
+  for (let i = 0; i < boards; i++) {
+    const x = t + i * bw;
+    if (i % 2 === 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.035)';
+      ctx.fillRect(x, t, bw, lh - t * 2);
+    }
+    if (i > 0) {
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillRect(x - 0.25, t, 0.4, lh - t * 2);
+      ctx.fillStyle = 'rgba(120,118,128,0.35)';
+      ctx.fillRect(x + 0.15, t, 0.25, lh - t * 2);
+    }
+  }
+  // Sheen along the top of the slab and a darker foot.
+  const sheen = ctx.createLinearGradient(0, t, 0, lh - t);
+  sheen.addColorStop(0, 'rgba(200,196,210,0.14)');
+  sheen.addColorStop(0.35, 'rgba(200,196,210,0)');
+  sheen.addColorStop(0.8, 'rgba(0,0,0,0)');
+  sheen.addColorStop(1, 'rgba(0,0,0,0.35)');
+  ctx.fillStyle = sheen;
+  ctx.fillRect(t, t, lw - t * 2, lh - t * 2);
+  // Thin gold trim around the edge.
+  const gold = ctx.createLinearGradient(0, 0, lw * 0.4, lh);
+  gold.addColorStop(0, '#fff0b8');
+  gold.addColorStop(0.4, '#e6c86a');
+  gold.addColorStop(1, '#8a6020');
+  ctx.strokeStyle = gold;
+  ctx.lineWidth = t;
+  ctx.strokeRect(t / 2, t / 2, lw - t, lh - t);
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 0.3;
+  ctx.strokeRect(0.15, 0.15, lw - 0.3, lh - 0.3);
+  ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+  ctx.strokeRect(t + 0.15, t + 0.15, lw - t * 2 - 0.3, lh - t * 2 - 0.3);
+  // Small gold strap hinges on the left stile.
+  const hingeW = facing === 'h' ? 5 : 4;
+  const hingeH = 1.4;
+  for (const fy of [0.26, 0.66]) {
+    const hy = t + (lh - t * 2) * fy;
+    const hg = ctx.createLinearGradient(0, hy, 0, hy + hingeH);
+    hg.addColorStop(0, '#f6e2a0');
+    hg.addColorStop(1, '#a8761e');
+    ctx.fillStyle = hg;
+    ctx.fillRect(t + 0.4, hy, hingeW, hingeH);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 0.25;
+    ctx.strokeRect(t + 0.4, hy, hingeW, hingeH);
+  }
+  // Gold ring handle on the right.
+  const hx = lw - t - 2.6;
+  const hy = lh / 2;
+  const ring = ctx.createRadialGradient(hx - 0.4, hy - 0.4, 0.1, hx, hy, 1.4);
+  ring.addColorStop(0, '#fff6cc');
+  ring.addColorStop(0.55, '#e6c86a');
+  ring.addColorStop(1, '#8a6020');
+  ctx.fillStyle = ring;
+  ctx.beginPath();
+  ctx.arc(hx, hy, 1.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 0.25;
+  ctx.stroke();
+  ctx.fillStyle = '#0c0805';
+  ctx.beginPath();
+  ctx.arc(hx, hy, 0.5, 0, Math.PI * 2);
+  ctx.fill();
+  cache.set(key, c);
+  return c;
+}
+
+/**
+ * Wall lantern for Death's Door, logical 8×12, anchor at top-center (the
+ * wall plate). Dark iron cap, cage and base with thin gold rims; violet glass
+ * and flame. Glow and flicker are added live by drawDeathsDoorLanterns.
+ */
+function paintDeathsDoorLantern() {
+  const key = 'hi-deaths-door-lantern';
+  if (cache.has(key)) return cache.get(key);
+  const lw = 8;
+  const lh = 12;
+  const c = canvas(lw * S, lh * S);
+  c.lw = lw;
+  c.lh = lh;
+  const ctx = c.getContext('2d');
+  ctx.scale(S, S);
+  ctx.lineJoin = 'round';
+  const ink = '#08070a';
+  const iron = (x0, x1) => {
+    const g = ctx.createLinearGradient(x0, 0, x1, 0);
+    g.addColorStop(0, '#4a4852');
+    g.addColorStop(0.4, '#26242b');
+    g.addColorStop(1, '#0e0d11');
+    return g;
+  };
+  const gold = '#d4a84b';
+  // Wall plate with a gold rivet, and the short arm the lantern hangs from.
+  ctx.fillStyle = iron(2.6, 5.4);
+  ctx.fillRect(2.6, 0.2, 2.8, 2);
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 0.3;
+  ctx.strokeRect(2.6, 0.2, 2.8, 2);
+  ctx.fillStyle = gold;
+  ctx.beginPath();
+  ctx.arc(4, 1.2, 0.45, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#1a191e';
+  ctx.fillRect(3.65, 2.2, 0.7, 1.2);
+  // Cap (roof) with a gold rim along its lower edge.
+  ctx.beginPath();
+  ctx.moveTo(2.9, 3.3);
+  ctx.lineTo(5.1, 3.3);
+  ctx.lineTo(6.9, 4.8);
+  ctx.lineTo(1.1, 4.8);
+  ctx.closePath();
+  ctx.fillStyle = iron(1.1, 6.9);
+  ctx.fill();
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 0.3;
+  ctx.stroke();
+  ctx.fillStyle = gold;
+  ctx.fillRect(1.2, 4.55, 5.6, 0.35);
+  // Violet glass, brightest around the flame.
+  const glass = ctx.createRadialGradient(4, 7.4, 0.2, 4, 7.2, 3.4);
+  glass.addColorStop(0, '#f6e0ff');
+  glass.addColorStop(0.35, '#c27cf4');
+  glass.addColorStop(0.75, '#7a34c4');
+  glass.addColorStop(1, '#3e1670');
+  ctx.fillStyle = glass;
+  ctx.fillRect(1.5, 4.9, 5, 4.8);
+  // Flame.
+  ctx.beginPath();
+  ctx.moveTo(4, 5.6);
+  ctx.quadraticCurveTo(5.1, 7.4, 4, 8.5);
+  ctx.quadraticCurveTo(2.9, 7.4, 4, 5.6);
+  ctx.fillStyle = '#fff4ff';
+  ctx.fill();
+  // Iron cage: frame and two bars.
+  ctx.strokeStyle = '#141317';
+  ctx.lineWidth = 0.45;
+  ctx.strokeRect(1.5, 4.9, 5, 4.8);
+  ctx.lineWidth = 0.3;
+  ctx.beginPath();
+  ctx.moveTo(3.1, 4.9);
+  ctx.lineTo(3.1, 9.7);
+  ctx.moveTo(4.9, 4.9);
+  ctx.lineTo(4.9, 9.7);
+  ctx.stroke();
+  // Base with a gold rim on top, and a small drip finial.
+  ctx.beginPath();
+  ctx.moveTo(1.1, 9.7);
+  ctx.lineTo(6.9, 9.7);
+  ctx.lineTo(5.4, 11);
+  ctx.lineTo(2.6, 11);
+  ctx.closePath();
+  ctx.fillStyle = iron(1.1, 6.9);
+  ctx.fill();
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 0.3;
+  ctx.stroke();
+  ctx.fillStyle = gold;
+  ctx.fillRect(1.2, 9.6, 5.6, 0.35);
+  ctx.fillStyle = '#1a191e';
+  ctx.beginPath();
+  ctx.moveTo(3.5, 11);
+  ctx.lineTo(4.5, 11);
+  ctx.lineTo(4, 11.9);
+  ctx.closePath();
+  ctx.fill();
+  cache.set(key, c);
+  return c;
+}
+
+/**
+ * Two purple lanterns on the end wall, one each side of Death's Door, with a
+ * soft violet wash on the wall, a faint pool on the floor, and a gentle
+ * flicker from animTime. Draws in world space (caller's transform).
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{x:number,y:number,w:number,h:number}} door door slab rect, world px
+ * @param {number} wallBottom world y of the wall face's floor line
+ */
+export function drawDeathsDoorLanterns(ctx, door, wallBottom, camX, camY, animTime = 0) {
+  const spr = paintDeathsDoorLantern();
+  const gap = 9;
+  const top = door.y - 2;
+  const glassY = top + 7.3;
+  const xs = [door.x - gap, door.x + door.w + gap];
+  ctx.save();
+  xs.forEach((wx, i) => {
+    const phase = i * 2.1;
+    const f = 0.88 + 0.07 * Math.sin(animTime / 11 + phase) + 0.05 * Math.sin(animTime / 4.7 + phase * 1.7);
+    const cx = wx - camX;
+    const cy = glassY - camY;
+    // Violet wash on the wall around the lantern.
+    const wash = ctx.createRadialGradient(cx, cy, 0.5, cx, cy, 11);
+    wash.addColorStop(0, `rgba(196,120,255,${0.34 * f})`);
+    wash.addColorStop(0.5, `rgba(150,80,240,${0.14 * f})`);
+    wash.addColorStop(1, 'rgba(120,60,220,0)');
+    ctx.fillStyle = wash;
+    ctx.fillRect(cx - 11, cy - 11, 22, 22);
+    // Faint pool on the floor under it.
+    const py = wallBottom - camY + 3.2;
+    ctx.save();
+    ctx.translate(cx, py);
+    ctx.scale(1, 0.36);
+    const pool = ctx.createRadialGradient(0, 0, 0.5, 0, 0, 9);
+    pool.addColorStop(0, `rgba(170,90,255,${0.24 * f})`);
+    pool.addColorStop(1, 'rgba(140,70,240,0)');
+    ctx.fillStyle = pool;
+    ctx.beginPath();
+    ctx.arc(0, 0, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // Lantern body.
+    ctx.drawImage(spr, cx - spr.lw / 2, top - camY, spr.lw, spr.lh);
+    // Flame glow over the glass, breathing with the flicker.
+    const glow = ctx.createRadialGradient(cx, cy, 0.1, cx, cy, 3.2);
+    glow.addColorStop(0, `rgba(255,236,255,${0.55 * f})`);
+    glow.addColorStop(1, 'rgba(210,150,255,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(cx - 3.2, cy - 3.2, 6.4, 6.4);
+  });
+  ctx.restore();
+}
+
+/**
+ * Hallway of Time end wall, logical w×h (world px), in the same cool stone
+ * as the corridor walls: a lit top cap, then a face that darkens toward the
+ * floor, stone courses, and a dark recess plus lintel where the door sits.
+ * @param {number} w @param {number} h
+ * @param {number} dx door x in wall-local logical px @param {number} dy
+ * @param {number} dw @param {number} dh
+ */
+export function paintEndWall(w, h, dx, dy, dw, dh) {
+  const key = `hiendwall-${w}x${h}-${dx},${dy},${dw},${dh}`;
+  if (cache.has(key)) return cache.get(key);
+  const c = canvas(w * S, h * S);
+  c.lw = w;
+  c.lh = h;
+  const ctx = c.getContext('2d');
+  ctx.scale(S, S);
+  const cap = Math.round(h * 0.3);
+  // Cap: the top of the wall seen from above.
+  const capG = ctx.createLinearGradient(0, 0, 0, cap);
+  capG.addColorStop(0, '#a9b8c9');
+  capG.addColorStop(0.5, '#8ea0b4');
+  capG.addColorStop(1, '#6d8096');
+  ctx.fillStyle = capG;
+  ctx.fillRect(0, 0, w, cap);
+  ctx.fillStyle = 'rgba(213,226,238,0.45)';
+  ctx.fillRect(0, 0, w, 1);
+  // Face: lighter under the cap, darkest where it meets the floor.
+  const face = ctx.createLinearGradient(0, cap, 0, h);
+  face.addColorStop(0, '#5a6b80');
+  face.addColorStop(0.45, '#45556a');
+  face.addColorStop(1, '#2a3646');
+  ctx.fillStyle = face;
+  ctx.fillRect(0, cap, w, h - cap);
+  // Ledge shadow under the cap.
+  ctx.fillStyle = 'rgba(20,26,36,0.7)';
+  ctx.fillRect(0, cap, w, 0.8);
+  // Stone courses with staggered joints.
+  ctx.lineWidth = 0.35;
+  const course = (h - cap) / 3;
+  for (let r = 0; r < 3; r++) {
+    const y0 = cap + r * course;
+    if (r > 0) {
+      ctx.strokeStyle = 'rgba(18,24,34,0.5)';
+      ctx.beginPath();
+      ctx.moveTo(0, y0);
+      ctx.lineTo(w, y0);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(190,205,222,0.14)';
+      ctx.beginPath();
+      ctx.moveTo(0, y0 + 0.45);
+      ctx.lineTo(w, y0 + 0.45);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(18,24,34,0.45)';
+    ctx.beginPath();
+    for (let x = (r % 2) * 8 + 8; x < w; x += 16) {
+      ctx.moveTo(x, y0 + 0.8);
+      ctx.lineTo(x, y0 + course);
+    }
+    ctx.stroke();
+  }
+  // Baseboard where the wall meets the floor.
+  ctx.fillStyle = '#1c2430';
+  ctx.fillRect(0, h - 1.2, w, 1.2);
+  // Outer ends of the wall meet the void.
+  ctx.fillStyle = 'rgba(10,14,22,0.55)';
+  ctx.fillRect(0, 0, 0.8, h);
+  ctx.fillRect(w - 0.8, 0, 0.8, h);
+  // Door recess and stone lintel, so the door reads as set into the wall.
+  ctx.fillStyle = '#141a24';
+  ctx.fillRect(dx - 1, dy - 1, dw + 2, dh + 1);
+  const lt = dy - 3.6;
+  const lintel = ctx.createLinearGradient(0, lt, 0, dy - 1);
+  lintel.addColorStop(0, '#9aabbe');
+  lintel.addColorStop(1, '#5c6d82');
+  ctx.fillStyle = lintel;
+  ctx.fillRect(dx - 2.5, lt, dw + 5, 2.6);
+  ctx.strokeStyle = 'rgba(18,24,34,0.8)';
+  ctx.lineWidth = 0.4;
+  ctx.strokeRect(dx - 2.5, lt, dw + 5, 2.6);
+  // Jambs either side of the door.
+  ctx.fillStyle = '#5c6d82';
+  ctx.fillRect(dx - 2.5, dy - 1, 1.5, dh + 1);
+  ctx.fillStyle = '#3a4758';
+  ctx.fillRect(dx + dw + 1, dy - 1, 1.5, dh + 1);
+  cache.set(key, c);
+  return c;
+}
+
+/**
+ * Decision Room corner pieces, drawn for the same 3/4 top-down camera as the
+ * room: tops of things are visible (ellipse rims, seat tops) with a short
+ * front face below, light from the upper left, a soft contact shadow pushed
+ * down-right, and a thin dark outline so they sit with the pixel character.
+ * Logical box stays 18×18 so placement in buildDecisionRoom is unchanged.
+ * Coordinates below are in logical (world) pixels; the canvas is 8× that.
+ * @param {'pillar'|'plant'|'sconce'|'armchair'} kind
+ */
 export function paintDecor(kind) {
   const key = `hidecor-${kind}`;
   if (cache.has(key)) return cache.get(key);
@@ -239,77 +596,293 @@ export function paintDecor(kind) {
   c.lw = lw;
   c.lh = lh;
   const ctx = c.getContext('2d');
-  const n = lw * S;
-  if (kind === 'pillar') {
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.beginPath();
-    ctx.ellipse(n / 2, n * 0.86, n * 0.32, n * 0.08, 0, 0, Math.PI * 2);
-    ctx.fill();
-    const g = ctx.createLinearGradient(n * 0.3, 0, n * 0.7, n);
-    g.addColorStop(0, '#e4e8ee');
-    g.addColorStop(0.4, '#9aa3ad');
-    g.addColorStop(1, '#5c656e');
-    ctx.fillStyle = g;
-    roundRect(ctx, n * 0.22, n * 0.12, n * 0.56, n * 0.16, 6);
-    ctx.fill();
-    ctx.fillRect(n * 0.3, n * 0.28, n * 0.4, n * 0.36);
-    roundRect(ctx, n * 0.16, n * 0.62, n * 0.68, n * 0.18, 4);
-    ctx.fill();
-  } else if (kind === 'plant') {
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.beginPath();
-    ctx.ellipse(n / 2, n * 0.84, n * 0.22, n * 0.06, 0, 0, Math.PI * 2);
-    ctx.fill();
-    const pot = ctx.createLinearGradient(0, n * 0.55, 0, n * 0.84);
-    pot.addColorStop(0, '#d4926a');
-    pot.addColorStop(1, '#8a4e30');
-    ctx.fillStyle = pot;
-    ctx.beginPath();
-    ctx.moveTo(n * 0.32, n * 0.55);
-    ctx.lineTo(n * 0.68, n * 0.55);
-    ctx.lineTo(n * 0.6, n * 0.82);
-    ctx.lineTo(n * 0.4, n * 0.82);
-    ctx.fill();
-    ctx.fillStyle = '#2f8a3a';
-    ctx.beginPath();
-    ctx.ellipse(n * 0.38, n * 0.42, n * 0.16, n * 0.1, -0.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#3cb04a';
-    ctx.beginPath();
-    ctx.ellipse(n * 0.55, n * 0.36, n * 0.18, n * 0.12, 0.3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#1f7030';
-    ctx.beginPath();
-    ctx.ellipse(n * 0.68, n * 0.46, n * 0.12, n * 0.08, 0.6, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (kind === 'sconce') {
-    ctx.fillStyle = '#4a5058';
-    ctx.fillRect(n * 0.44, n * 0.48, n * 0.12, n * 0.32);
-    const flame = ctx.createRadialGradient(n * 0.5, n * 0.4, 2, n * 0.5, n * 0.42, n * 0.22);
-    flame.addColorStop(0, '#fff4d0');
-    flame.addColorStop(0.45, '#ffb04a');
-    flame.addColorStop(1, 'rgba(255,80,20,0)');
-    ctx.fillStyle = flame;
-    ctx.beginPath();
-    ctx.ellipse(n * 0.5, n * 0.38, n * 0.16, n * 0.22, 0, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    const g = ctx.createLinearGradient(0, 0, 0, n);
-    g.addColorStop(0, '#e6c89a');
-    g.addColorStop(1, '#6b4224');
-    ctx.fillStyle = g;
-    ctx.fillRect(n * 0.1, n * 0.12, n * 0.78, n * 0.14);
-    ctx.fillRect(n * 0.12, n * 0.26, n * 0.14, n * 0.58);
-    ctx.strokeStyle = '#a87448';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(n * 0.26, n * 0.32);
-    ctx.quadraticCurveTo(n * 0.7, n * 0.28, n * 0.72, n * 0.7);
-    ctx.stroke();
-  }
+  ctx.scale(S, S);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  const draw = DECOR[kind] || DECOR.pillar;
+  draw(ctx);
   cache.set(key, c);
   return c;
 }
+
+const DECOR_OUTLINE = 0.5;
+
+function ellipsePath(ctx, cx, cy, rx, ry) {
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+}
+
+function fillOutline(ctx, fill, stroke, lw = DECOR_OUTLINE) {
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lw;
+    ctx.stroke();
+  }
+}
+
+/** Soft contact shadow. Light is upper-left, so it sits a touch down-right. */
+function contactShadow(ctx, cx, cy, rx, ry, alpha = 0.36) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, ry / rx);
+  const g = ctx.createRadialGradient(0, 0, rx * 0.15, 0, 0, rx);
+  g.addColorStop(0, `rgba(28,16,8,${alpha})`);
+  g.addColorStop(0.65, `rgba(28,16,8,${alpha * 0.7})`);
+  g.addColorStop(1, 'rgba(28,16,8,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, rx, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function hGrad(ctx, x0, x1, stops) {
+  const g = ctx.createLinearGradient(x0, 0, x1, 0);
+  stops.forEach((col, i) => g.addColorStop(i / (stops.length - 1), col));
+  return g;
+}
+
+function dGrad(ctx, x0, y0, x1, y1, stops) {
+  const g = ctx.createLinearGradient(x0, y0, x1, y1);
+  stops.forEach((col, i) => g.addColorStop(i / (stops.length - 1), col));
+  return g;
+}
+
+const DECOR = {
+  /** Stone column seen from above: round capital top, fluted shaft, square plinth. */
+  pillar(ctx) {
+    const ink = '#262a32';
+    contactShadow(ctx, 10, 15.4, 8, 2.6);
+    // Plinth: lit top face, darker south face.
+    ctx.beginPath();
+    ctx.rect(2.4, 13.6, 13.2, 2.4);
+    fillOutline(ctx, hGrad(ctx, 2.4, 15.6, ['#8c96a2', '#6a7380', '#4c5460']), ink);
+    ctx.beginPath();
+    ctx.rect(2.4, 10.4, 13.2, 3.2);
+    fillOutline(ctx, dGrad(ctx, 2.4, 10.4, 15.6, 13.6, ['#f2f5f8', '#c8d0d8', '#9ba5b0']), ink);
+    // Soft shade on the plinth top where the shaft stands.
+    ellipsePath(ctx, 9.6, 12.7, 5.4, 1.4);
+    ctx.fillStyle = 'rgba(40,48,60,0.28)';
+    ctx.fill();
+    // Shaft (cylinder): light on the left, shade on the right.
+    ctx.beginPath();
+    ctx.moveTo(5, 4.6);
+    ctx.lineTo(5, 11.8);
+    ctx.ellipse(9, 11.8, 4, 1.1, 0, Math.PI, 0, true);
+    ctx.lineTo(13, 4.6);
+    ctx.closePath();
+    fillOutline(ctx, hGrad(ctx, 5, 13, ['#e9edf2', '#cbd2da', '#9aa4af', '#68717c']), ink);
+    ctx.strokeStyle = 'rgba(56,64,76,0.4)';
+    ctx.lineWidth = 0.35;
+    ctx.beginPath();
+    for (const fx of [7, 9, 11]) {
+      ctx.moveTo(fx, 6.4);
+      ctx.lineTo(fx, 11.4);
+    }
+    ctx.stroke();
+    // Base molding: a short curved band wrapping the front of the shaft.
+    ctx.beginPath();
+    ctx.ellipse(9, 12.7, 5.1, 1.3, 0, 0, Math.PI);
+    ctx.lineTo(3.9, 11.4);
+    ctx.ellipse(9, 11.4, 5.1, 1.3, 0, Math.PI, 0, true);
+    ctx.closePath();
+    fillOutline(ctx, hGrad(ctx, 3.9, 14.1, ['#eef1f4', '#b6bfc8', '#7a838e']), ink);
+    // Capital: short front band, then the round top seen from above.
+    ctx.beginPath();
+    ctx.ellipse(9, 5.2, 6.2, 2.5, 0, 0, Math.PI);
+    ctx.lineTo(2.8, 3.6);
+    ctx.ellipse(9, 3.6, 6.2, 2.5, 0, Math.PI, 0, true);
+    ctx.closePath();
+    fillOutline(ctx, hGrad(ctx, 2.8, 15.2, ['#b8c0c9', '#8d97a2', '#5f6873']), ink);
+    ellipsePath(ctx, 9, 3.6, 6.2, 2.5);
+    const top = ctx.createRadialGradient(6.8, 2.6, 0.4, 9, 3.6, 6.4);
+    top.addColorStop(0, '#ffffff');
+    top.addColorStop(0.5, '#dfe4ea');
+    top.addColorStop(1, '#a9b2bc');
+    fillOutline(ctx, top, ink);
+    ellipsePath(ctx, 9, 3.6, 3.6, 1.4);
+    ctx.strokeStyle = 'rgba(80,90,104,0.35)';
+    ctx.lineWidth = 0.35;
+    ctx.stroke();
+  },
+
+  /** Leafy plant in a round terracotta pot, rim and soil seen from above. */
+  plant(ctx) {
+    const ink = '#2a160c';
+    const leafInk = '#123a1c';
+    contactShadow(ctx, 10, 16, 6.6, 2);
+    // Pot body: tapers to the base, rounded front.
+    ctx.beginPath();
+    ctx.moveTo(3.2, 11);
+    ctx.lineTo(4.7, 15.4);
+    ctx.quadraticCurveTo(9, 17.3, 13.3, 15.4);
+    ctx.lineTo(14.8, 11);
+    ctx.closePath();
+    fillOutline(ctx, hGrad(ctx, 3.2, 14.8, ['#e6a478', '#c47648', '#97522f', '#6c3720']), ink);
+    // Rim (ellipse from above) and dark soil inside it.
+    ellipsePath(ctx, 9, 11, 6, 2.4);
+    fillOutline(ctx, dGrad(ctx, 3, 8.6, 15, 13.4, ['#f6c8a0', '#d8946a', '#a95e38']), ink);
+    ellipsePath(ctx, 9, 11.15, 4.7, 1.7);
+    fillOutline(ctx, dGrad(ctx, 4.3, 9.5, 13.7, 12.8, ['#22140a', '#4a2e1a']), null);
+    const leaf = (deg, len, wid, light) => {
+      const a = (deg * Math.PI) / 180;
+      ctx.save();
+      ctx.translate(9 + Math.cos(a) * 0.8, 10.6 + Math.sin(a) * 0.4);
+      ctx.rotate(a);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(len * 0.45, -wid, len, 0);
+      ctx.quadraticCurveTo(len * 0.45, wid, 0, 0);
+      const tones = light > 0.66
+        ? ['#9be27a', '#4fb24c']
+        : light > 0.33
+          ? ['#62c056', '#2f8a3a']
+          : ['#3e9a44', '#1f5e2c'];
+      ctx.fillStyle = tones[1];
+      ctx.fill();
+      ctx.strokeStyle = leafInk;
+      ctx.lineWidth = 0.4;
+      ctx.stroke();
+      // Lit half of the blade.
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(len * 0.45, -wid, len, 0);
+      ctx.closePath();
+      ctx.fillStyle = tones[0];
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(18,58,28,0.55)';
+      ctx.lineWidth = 0.25;
+      ctx.beginPath();
+      ctx.moveTo(0.6, 0);
+      ctx.lineTo(len * 0.9, 0);
+      ctx.stroke();
+      ctx.restore();
+    };
+    // Broad leaves fan up and out from the back of the soil; one droops over
+    // the front-left of the rim so the rim ellipse still reads.
+    leaf(-150, 7.0, 2.6, 0.55);
+    leaf(-28, 6.8, 2.6, 0.15);
+    leaf(-172, 5.4, 2.2, 0.45);
+    leaf(-6, 5.4, 2.2, 0.1);
+    leaf(-120, 8.4, 2.8, 0.9);
+    leaf(-60, 8.0, 2.8, 0.4);
+    leaf(-92, 8.8, 2.9, 0.75);
+    leaf(-104, 5.4, 2.2, 0.95);
+    leaf(146, 4.4, 2.0, 0.5);
+  },
+
+  /** Standing brass candle stand from above: round foot, pole, drip dish, lit candle. */
+  sconce(ctx) {
+    const ink = '#3a2408';
+    const brass = (x0, x1) => hGrad(ctx, x0, x1, ['#fbe9a8', '#e0b452', '#a8761e', '#6e4a12']);
+    // Warm light pooled on the floor around the stand.
+    const pool = ctx.createRadialGradient(9, 10, 0.5, 9, 10, 9);
+    pool.addColorStop(0, 'rgba(255,206,120,0.34)');
+    pool.addColorStop(0.6, 'rgba(255,190,90,0.14)');
+    pool.addColorStop(1, 'rgba(255,180,80,0)');
+    ctx.fillStyle = pool;
+    ctx.fillRect(0, 0, 18, 18);
+    contactShadow(ctx, 9.8, 15.8, 5.2, 1.6, 0.4);
+    // Foot: thin south face, then the round top.
+    ellipsePath(ctx, 9, 15.3, 4.5, 1.8);
+    fillOutline(ctx, '#7a5216', ink);
+    ellipsePath(ctx, 9, 14.6, 4.5, 1.8);
+    fillOutline(ctx, brass(4.5, 13.5), ink);
+    ellipsePath(ctx, 8.2, 14.2, 1.8, 0.6);
+    ctx.fillStyle = 'rgba(255,248,220,0.55)';
+    ctx.fill();
+    // Pole and collar.
+    ctx.beginPath();
+    ctx.rect(8.25, 7.6, 1.5, 7);
+    fillOutline(ctx, brass(8.25, 9.75), ink, 0.4);
+    ellipsePath(ctx, 9, 11.2, 1.4, 0.6);
+    fillOutline(ctx, brass(7.6, 10.4), ink, 0.4);
+    // Drip dish.
+    ellipsePath(ctx, 9, 7.9, 3.9, 1.6);
+    fillOutline(ctx, '#7a5216', ink);
+    ellipsePath(ctx, 9, 7.3, 3.9, 1.6);
+    fillOutline(ctx, brass(5.1, 12.9), ink);
+    ellipsePath(ctx, 9, 7.3, 2.6, 0.95);
+    ctx.fillStyle = 'rgba(110,74,18,0.45)';
+    ctx.fill();
+    // Candle: cylinder with its wax top showing.
+    ctx.beginPath();
+    ctx.rect(7.9, 3.8, 2.2, 3.5);
+    fillOutline(ctx, hGrad(ctx, 7.9, 10.1, ['#fffaf0', '#efe4cc', '#c9b894']), '#6a5434', 0.4);
+    ellipsePath(ctx, 9, 3.8, 1.1, 0.5);
+    fillOutline(ctx, '#fffdf6', '#6a5434', 0.35);
+    // Flame and halo.
+    const halo = ctx.createRadialGradient(9, 2.4, 0.2, 9, 2.4, 3.8);
+    halo.addColorStop(0, 'rgba(255,236,170,0.75)');
+    halo.addColorStop(0.5, 'rgba(255,190,80,0.3)');
+    halo.addColorStop(1, 'rgba(255,160,60,0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(9, 2.4, 3.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(9, 0.5);
+    ctx.quadraticCurveTo(10.4, 2.4, 9, 3.5);
+    ctx.quadraticCurveTo(7.6, 2.4, 9, 0.5);
+    const flame = ctx.createRadialGradient(8.9, 2.7, 0.1, 9, 2.4, 1.6);
+    flame.addColorStop(0, '#fffbe6');
+    flame.addColorStop(0.55, '#ffd36a');
+    flame.addColorStop(1, '#ff9a2a');
+    ctx.fillStyle = flame;
+    ctx.fill();
+  },
+
+  /**
+   * Upholstered armchair from above, facing west into the room: the back
+   * runs along the east side, arms north and south, seat cushion between,
+   * and only the south face shows as a short front edge.
+   */
+  armchair(ctx) {
+    const ink = '#2a1210';
+    contactShadow(ctx, 10, 15.6, 8.4, 2.4);
+    // South face of the whole chair (the only side face this camera sees).
+    ctx.beginPath();
+    ctx.rect(2.4, 14, 13.8, 2.2);
+    fillOutline(ctx, hGrad(ctx, 2.4, 16.2, ['#8a3a30', '#6a2620', '#4e1a16']), ink);
+    ctx.fillStyle = '#4a2c18';
+    ctx.fillRect(2.8, 16.2, 1.2, 0.8);
+    ctx.fillRect(14.6, 16.2, 1.2, 0.8);
+    // Seat cushion.
+    roundRect(ctx, 3.4, 4.4, 9.4, 7.6, 1.4);
+    fillOutline(ctx, dGrad(ctx, 3.4, 4.4, 12.8, 12, ['#e48a70', '#c25a46', '#943a30']), ink);
+    ctx.strokeStyle = 'rgba(70,20,16,0.45)';
+    ctx.lineWidth = 0.35;
+    ctx.beginPath();
+    ctx.moveTo(4.4, 8.2);
+    ctx.lineTo(11.8, 8.2);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,230,210,0.35)';
+    ctx.fillRect(4.2, 5, 4.2, 0.7);
+    // Arms (north and south), lit on top.
+    const arm = (y) => {
+      roundRect(ctx, 2.4, y, 11.2, 3.4, 1.4);
+      fillOutline(ctx, dGrad(ctx, 2.4, y, 2.4, y + 3.4, ['#d8735c', '#b04c3c', '#8a3a30']), ink);
+      ctx.strokeStyle = '#e6c86a';
+      ctx.lineWidth = 0.3;
+      ctx.beginPath();
+      ctx.moveTo(3.4, y + 2.9);
+      ctx.lineTo(12.6, y + 2.9);
+      ctx.stroke();
+    };
+    arm(1.4);
+    arm(10.8);
+    // Back along the east side, taller than the arms.
+    roundRect(ctx, 12.2, 0.8, 4, 13.8, 1.6);
+    fillOutline(ctx, hGrad(ctx, 12.2, 16.2, ['#d06a54', '#a8443a', '#7a2c24']), ink);
+    ctx.fillStyle = '#e6c86a';
+    for (const by of [4.2, 7.6, 11]) {
+      ellipsePath(ctx, 14.1, by, 0.45, 0.45);
+      ctx.fill();
+    }
+  },
+};
 
 /**
  * Decision Room teller window in the same painted language as the doors.
@@ -469,7 +1042,26 @@ const TELLER_ICONS = {
   job: iconPaycheck,
   borrow: iconVault,
   portfolio: iconPortfolio,
+  bank: iconBank,
 };
+
+function iconBank(ctx, x, y, w, h) {
+  // Columned bank front with a gold coin: where Savings / 401(k) money becomes Cash.
+  ctx.fillStyle = '#f4e7d0';
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.08, y + h * 0.34);
+  ctx.lineTo(x + w * 0.5, y + h * 0.08);
+  ctx.lineTo(x + w * 0.92, y + h * 0.34);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillRect(x + w * 0.1, y + h * 0.8, w * 0.8, h * 0.1);
+  ctx.fillStyle = '#c9b48e';
+  for (const cx of [0.18, 0.38, 0.58, 0.78]) ctx.fillRect(x + w * cx, y + h * 0.38, w * 0.07, h * 0.42);
+  ctx.fillStyle = '#e6c86a';
+  ctx.beginPath();
+  ctx.arc(x + w * 0.5, y + h * 0.24, Math.min(w, h) * 0.08, 0, Math.PI * 2);
+  ctx.fill();
+}
 
 function iconPortfolio(ctx, x, y, w, h) {
   // Briefcase / ledger

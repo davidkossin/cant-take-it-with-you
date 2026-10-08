@@ -230,15 +230,64 @@ function canvasLogicalXY(clientX, clientY) {
   return { x: lx, y: ly };
 }
 
+/** Act on a PauseMenu result from a key or a click ('close' | 'quit' | {jump}). */
+function applyPauseResult(result) {
+  if (result === 'close') {
+    if (mode === 'room') room.setInputBlocked(false);
+    else if (mode === 'hallway') hallway.setInputBlocked(false);
+  }
+  if (result === 'quit') {
+    room.leave();
+    hallway.leave();
+    startTitle();
+    return;
+  }
+  if (result && typeof result === 'object' && result.jump) {
+    // Restored hallway branch — re-enter hallway scene
+    room.leave();
+    hallway.leave();
+    mode = 'hallway';
+    hallway.enter(game);
+    game.scene = 'hallway';
+  }
+}
+
+// Pointer input is bound to the canvas only. The on-screen pad is separate DOM
+// above the canvas, so pad taps never reach these handlers (no double fire).
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button != null && e.button !== 0) return;
+  if (e.target !== canvas) return;
   const pt = canvasLogicalXY(e.clientX, e.clientY);
   if (!pt) return;
   if (dialog.active) {
     if (dialog.handlePointer(pt.x, pt.y)) {
       e.preventDefault();
     }
+    return;
   }
+  if (pause.open && game) {
+    const { handled, result } = pause.handlePointerDown(pt.x, pt.y, game);
+    if (handled) {
+      e.preventDefault();
+      canvas.style.cursor = '';
+      applyPauseResult(result);
+    }
+  }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'touch') return; // touch has no hover; taps go through pointerdown
+  const pt = canvasLogicalXY(e.clientX, e.clientY);
+  let over = false;
+  if (pt && pause.open && game) {
+    over = dialog.active ? dialog.hoverPointer(pt.x, pt.y) : pause.handlePointerMove(pt.x, pt.y, game);
+  }
+  canvas.style.cursor = over ? 'pointer' : '';
+});
+
+canvas.addEventListener('pointerleave', () => {
+  pause.hoverKey = null;
+  canvas.style.cursor = '';
 });
 
 window.addEventListener('keydown', async (e) => {
@@ -248,25 +297,8 @@ window.addEventListener('keydown', async (e) => {
   }
 
   if (pause.open) {
-    const result = pause.handleKey(e, game);
-    if (result === 'close') {
-      if (mode === 'room') room.setInputBlocked(false);
-      else if (mode === 'hallway') hallway.setInputBlocked(false);
-    }
-    if (result === 'quit') {
-      room.leave();
-      hallway.leave();
-      startTitle();
-      return;
-    }
-    if (result && typeof result === 'object' && result.jump) {
-      // Restored hallway branch — re-enter hallway scene
-      room.leave();
-      hallway.leave();
-      mode = 'hallway';
-      hallway.enter(game);
-      game.scene = 'hallway';
-    }
+    applyPauseResult(pause.handleKey(e, game));
+    if (!pause.open) canvas.style.cursor = '';
     return;
   }
 
@@ -353,7 +385,7 @@ function syncVirtualPad() {
     !dialog.active &&
     !pause.open &&
     !interacting &&
-    (mode === 'room' || mode === 'hallway');
+    (mode === 'room' || (mode === 'hallway' && hallway.ready));
   virtualPad.setLayout({ discrete, showRun: walking });
 }
 

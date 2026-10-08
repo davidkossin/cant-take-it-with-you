@@ -315,6 +315,22 @@ export class Dialog {
     return false;
   }
 
+  /**
+   * Mouse hover in logical canvas coords: move the option cursor onto the
+   * option under the pointer (no activation).
+   * @returns {boolean} whether the pointer is over an option
+   */
+  hoverPointer(lx, ly) {
+    if (!this.active || this.mode === 'loading') return false;
+    for (const hit of this._optionHitRects) {
+      if (lx >= hit.x && lx <= hit.x + hit.w && ly >= hit.y && ly <= hit.y + hit.h) {
+        this.selected = hit.index;
+        return true;
+      }
+    }
+    return false;
+  }
+
   _activateSelected() {
     const opt = this.options[this.selected];
     if (!opt) return;

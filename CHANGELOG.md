@@ -10,6 +10,28 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-10-07
+
+### Fixed
+- Pause → Charts no longer reruns the Monte Carlo simulation in the Hallway of Time. Forecast results and in-flight workers are now shared across the Hallway and Pause menu, keyed on the same model inputs, path count and seed/scenario. The Hallway's 1,000-path run is also cached under its selected (pinned) Hallway scenario, which reproduces the same forecast, so Charts reuse it and the cyan Hallway path stays the same. Opening Pause mid-run waits on the Hallway's worker instead of starting a second one, and closing Pause no longer cancels it. A rerun happens only when inputs change (e.g. a decision) or a different simulation count (5,000/10,000) is chosen; switching back to 1,000 reuses the cached run. Forecast math is unchanged.
+- The character sprite is pixel-crisp again in the Decision Room and Hallway of Time. Door/decor drawing left image smoothing on, so the 16×24 sprite was bilinear-blurred when scaled 4×; it now always draws nearest-neighbor at an integer scale, snapped to whole frame pixels (movement stays smooth). Environment art is unchanged.
+- Entering the Hallway of Time now shows a full-screen "Generating Your Future" splash (progress bar, Press Start 2P, title-safe) while the Monte Carlo run finishes, then fades into the Hallway; it replaces the old in-Hallway loading panel. Cached or saved paths skip the splash.
+
+### Changed
+- Removed the 'You Can't Take It With You' title text from the top bar next to the Objects In Space button.
+- The Generating Your Future splash reads "Simulating 1,000 lifetimes" under the title and shows only the bar and percentage (a retry hint appears only on error); the panel is shorter to match.
+- Removed the "Monte Carlo journey · gains and losses · Pause → Charts for the range" banner from the top of the Hallway of Time.
+- Decision Room corner pieces are redrawn for the room's top-down 3/4 camera (tops and rims visible, short front face, upper-left light, soft contact shadow): stone column with a round capital top, leafy plant in a round pot seen from above, brass candle stand, and an armchair facing into the room in place of the old wall bracket.
+- The End of the Line door no longer floats at the top of the Hallway of Time: a solid stone end wall now spans the corridor, and the door is set flush and centered in it, recolored black with gold trim, hinges and handle. The wall and door stop the player on the same line; the door works as before.
+- Death's Door (internal name for the End of the Line door) now has a purple wall lantern on either side, mounted on the stone end wall with a soft violet wash and a gentle flicker.
+- Pause menu accepts mouse and touch: hover highlights / moves the selection and a click activates exactly like Enter/A on menu rows (Portfolio, Map, Charts, Resume, Quit), the Tab next / Esc back links, Portfolio page links, Charts shortcuts (options, ← / → year, history, real, liquid, paths, coverage, export), Map timeline numbers, hallway jump points (tap selects, click on the selected one jumps), Compare and its side/year controls, and Chart options dialog rows. Clicks map from the scaled canvas to the 1920×1080 frame, use the same rects that are drawn, ignore empty space and on-screen pad taps, and show a pointer cursor over clickable items. Keyboard / D-pad navigation is unchanged.
+- Pause menu: Quit is now the last item (after Resume) and asks "Are you sure you want to quit?" with the note "Your file saved the last time you passed through a doorway". No is highlighted by default; Yes quits to the title, No or Esc/B returns to the menu with Quit still selected. Works with keyboard, D-pad, mouse and touch, and the text is fitted to stay title-safe on phones.
+- **Cash-only funding:** only Cash pays bills. The game no longer drains savings, sells stocks or withdraws 401(k)/Roth money on its own; those are now your decisions. Any bill Cash can't cover hits the glass wall ("Not enough Cash to pay [year]'s bills — enter a Decision Room to raise cash"). Taxes, margin calls (no forced sale) and Roth contributions (skipped quietly when short) use Cash only. Purchases are refused with "Not enough cash — sell or transfer first." Required minimum distributions stay automatic. Engine version 2.1.0.
+- New **Bank: Move Money** teller on the Decision Room's north wall (left of the Hallway door): move Savings to Cash or Cash to Savings, make a one-time 401(k) or Roth withdrawal (an early 401(k) withdrawal asks you to accept the 10% penalty), or set a standing yearly withdrawal that is paid into Cash every month and grows with inflation.
+- The Portfolio teller no longer edits balances (Cash, Savings, stocks, 401(k), Roth, lot market values) during play; it still edits salary, spending, contribution rates, savings rate, retirement age and setup inputs. New-game setup is unchanged.
+- Starman (Standard portfolio) now starts with $155,000 Cash (was $15,000; everything else unchanged), so his first glass wall stays about 15 years out: 2040 at age 44 if nothing changes, 2039 at age 43 at the median across 1,000 simulated paths.
+- The Hallway now follows the path whose first glass wall is the median year across 1,000 simulated paths (ties go to the ending net worth nearest the median). Pause → Charts leads with "First glass wall · median year (age) · P10–P90", with the wall-free rate as a second line. Saved Hallway paths from the previous rules are dropped on load and chosen again.
+
 ## [0.6.4] — 2026-10-05
 
 ### Changed

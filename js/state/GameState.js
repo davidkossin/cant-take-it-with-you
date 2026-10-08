@@ -66,13 +66,15 @@ export function createDefaultSetup() {
  *
  * Starman, age 30, married, no children. Salary $80k, spend $48k.
  * Primary home $380k, mortgage $270k @ 6.5% / 27 years left.
- * Cash $15,000, savings $35,000 @ 2%, stocks $85,000 (basis $72,250),
+ * Cash $155,000, savings $35,000 @ 2%, stocks $85,000 (basis $72,250),
  * 401(k) $62,000 (6% contribution, 100% match on the first 3% of salary).
  * ZIP 85001, Standard difficulty.
  *
- * Starting Cash $15,000, starting net worth $307,000.
- * The Monte Carlo Hallway's funding-wall year depends on its saved scenario.
- * Dollar inputs only — engine math unchanged.
+ * Starting Cash $155,000, starting net worth $447,000.
+ * Only Cash pays bills (cash-only funding), so Cash sets when the first glass wall
+ * arrives: the deterministic projection runs out of Cash in 2040 (age 44, wall at
+ * Hallway year index 15); the 1,000-path median first wall is 2039 (age 43).
+ * Any Cash from $154k to $159k gives index 15. Everything else about Starman is unchanged.
  */
 export function createStandardPortfolioSetup() {
   const home = {
@@ -98,7 +100,7 @@ export function createStandardPortfolioSetup() {
     age: 30,
     hairColor: 'dark',
     hairLength: 'short',
-    cash: 15000,
+    cash: 155000,
     salary: 80000,
     savings: 35000,
     savingsRate: 0.02,

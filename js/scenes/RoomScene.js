@@ -38,6 +38,10 @@ import {
   takeHeloc,
   takeSecuritiesLoan,
   annualLoanPayment,
+  transferSavings,
+  withdrawRetirement,
+  retirementAccess,
+  setRetirementWithdrawalPlan,
 } from '../finance/Engine.js';
 import { getDifficulty } from '../finance/Difficulty.js';
 import { commitRoomDecisions, currentNode, westReturnHallway, jumpToHallwayNode } from '../state/GameState.js';
@@ -384,7 +388,7 @@ export class RoomScene {
       if (!financed) {
         game.portfolio = largePurchase(game.portfolio, price, { label });
         await dialog.show(
-          game.portfolio.lastTransaction?.reason || `Purchased ${label} — paid in full from liquid assets.`,
+          game.portfolio.lastTransaction?.reason || `Purchased ${label} — paid in full from Cash.`,
           { title: 'Make Large Purchase' }
         );
         return;
@@ -430,7 +434,151 @@ export class RoomScene {
       await this.handleBorrow(game, dialog);
     } else if (action === 'portfolio') {
       await this.handlePortfolioEditor(game, dialog, diff);
+    } else if (action === 'bank') {
+      await this.handleBank(game, dialog);
     }
+  }
+
+  /**
+   * Bank teller — the player's own ways to raise Cash (only Cash pays bills; nothing is
+   * moved automatically): Savings ↔ Cash, one-time 401(k)/Roth withdrawals, and a standing
+   * yearly withdrawal the engine pays into Cash each month.
+   */
+  async handleBank(game, dialog) {
+    const title = 'Bank: Move Money';
+    const money = formatMoneyDisplay;
+    const report = async (heading) => {
+      const t = game.portfolio.lastTransaction || {};
+      await dialog.show(t.accepted === false ? t.reason : t.description || 'Done.', { title: heading });
+    };
+    while (true) {
+      const p = game.portfolio;
+      const plan = p.retirementWithdrawalPlan;
+      const choice = await dialog.menu(
+        `Only Cash pays bills.\nCash ${money(p.cash || 0)} · Savings ${money(p.savings || 0)}\n` +
+          `401(k) ${money(p.k401Balance || 0)} · Roth ${money(p.rothBalance || 0)}`,
+        [
+          { label: 'Move Savings to Cash', value: 'toCash' },
+          { label: 'Move Cash to Savings', value: 'toSavings' },
+          { label: 'Withdraw from 401(k) / Roth', value: 'withdraw' },
+          {
+            label: plan
+              ? `Standing withdrawal: ${money(plan.amount)}/yr (${plan.account === 'roth' ? 'Roth' : '401(k)'})`
+              : 'Set a standing yearly withdrawal',
+            value: 'plan',
+          },
+          { label: 'Done', value: null },
+        ],
+        { title }
+      );
+      if (!choice) return;
+      if (choice === 'toCash' || choice === 'toSavings') {
+        const toCash = choice === 'toCash';
+        const available = toCash ? p.savings || 0 : p.cash || 0;
+        if (!(available > 0)) {
+          await dialog.show(`There is no money in ${toCash ? 'Savings' : 'Cash'} to move.`, { title });
+          continue;
+        }
+        const amount = await dialog.prompt(
+          toCash ? 'Move how much from Savings to Cash?' : 'Move how much from Cash to Savings?',
+          { title, defaultValue: String(Math.round(available)), type: 'money', prefix: '$' }
+        );
+        if (amount == null) continue;
+        game.portfolio = transferSavings(p, amount, choice);
+        await report(title);
+      } else if (choice === 'withdraw') {
+        await this.handleRetirementWithdrawal(game, dialog, report);
+      } else if (choice === 'plan') {
+        await this.handleStandingWithdrawal(game, dialog, report);
+      }
+    }
+  }
+
+  async handleRetirementWithdrawal(game, dialog, report) {
+    const title = 'Withdraw to Cash';
+    const p = game.portfolio;
+    const money = formatMoneyDisplay;
+    const rothAccess = retirementAccess(p, 'roth').available;
+    const account = await dialog.menu(
+      'Withdraw from which account?\n401(k) withdrawals are income taxed at year-end (paid from Cash).',
+      [
+        { label: `401(k) — ${money(p.k401Balance || 0)}`, value: 'traditional' },
+        { label: `Roth — ${money(rothAccess)} available of ${money(p.rothBalance || 0)}`, value: 'roth' },
+        { label: 'Cancel', value: null },
+      ],
+      { title }
+    );
+    if (!account) return;
+    let early = false;
+    if (account === 'traditional' && retirementAccess(p, 'traditional').gated) {
+      early = await dialog.confirm(
+        'You are under 59½. A 401(k) withdrawal now adds a 10% early-withdrawal penalty on top of income tax. Withdraw anyway?',
+        { title, yes: 'Accept penalty', no: 'Cancel' }
+      );
+      if (early !== true) return;
+    }
+    const available = retirementAccess(p, account, { early }).available;
+    if (!(available > 0)) {
+      await dialog.show(
+        account === 'roth'
+          ? 'No Roth money is available yet. Before 59½ and five years after opening, only your contributions can come out.'
+          : 'The 401(k) is empty.',
+        { title }
+      );
+      return;
+    }
+    const amount = await dialog.prompt(`Withdraw how much into Cash? (up to ${money(available)})`, {
+      title,
+      defaultValue: String(Math.round(Math.min(available, 10000))),
+      type: 'money',
+      prefix: '$',
+    });
+    if (amount == null) return;
+    game.portfolio = withdrawRetirement(p, { amount, account, early });
+    await report(title);
+  }
+
+  async handleStandingWithdrawal(game, dialog, report) {
+    const title = 'Standing withdrawal';
+    const p = game.portfolio;
+    const money = formatMoneyDisplay;
+    const current = p.retirementWithdrawalPlan;
+    const account = await dialog.menu(
+      'A yearly amount you choose, paid into Cash in monthly parts every year from now on. ' +
+        'It grows with inflation like your spending; 401(k) amounts are taxed at year-end.',
+      [
+        { label: 'From the 401(k)', value: 'traditional' },
+        { label: 'From the Roth', value: 'roth' },
+        ...(current ? [{ label: `Stop the ${money(current.amount)}/yr withdrawal`, value: 'stop' }] : []),
+        { label: 'Back', value: null },
+      ],
+      { title }
+    );
+    if (!account) return;
+    if (account === 'stop') {
+      game.portfolio = setRetirementWithdrawalPlan(p, { amount: 0 });
+      await report(title);
+      return;
+    }
+    let early = false;
+    if (account === 'traditional' && retirementAccess(p, 'traditional').gated) {
+      early = (await dialog.confirm(
+        'You are under 59½. Start now with a 10% early-withdrawal penalty, or wait until 59½?',
+        { title, yes: 'Start now (penalty)', no: 'Wait for 59½' }
+      )) === true;
+    }
+    const amount = await dialog.prompt('Withdraw how much each year? ($0 stops it)', {
+      title,
+      defaultValue: String(Math.round(current?.amount || p.annualSpending || 0)),
+      type: 'money',
+      prefix: '$',
+    });
+    if (amount == null) return;
+    game.portfolio = setRetirementWithdrawalPlan(p, { amount, account, early });
+    if (account === 'traditional' && !early && retirementAccess(p, 'traditional').gated && amount > 0) {
+      game.portfolio.lastTransaction.description += ' It starts at age 59½.';
+    }
+    await report(title);
   }
 
   async handleBorrow(game, dialog) {
@@ -598,19 +746,19 @@ export class RoomScene {
 
   
   /**
-   * Portfolio teller — edit any current portfolio parameter.
+   * Portfolio teller — edit income, spending, contributions and setup inputs. Balances
+   * (Cash, Savings, stocks, 401(k), Roth) are locked during play: they change only through
+   * Decision Room actions (Bank, Buy/Sell Stock, Buy/Sell Home, Borrow, purchases).
    */
   async handlePortfolioEditor(game, dialog, diff) {
     const p = game.portfolio;
     while (true) {
       const choice = await dialog.menu(
-        'Edit portfolio parameters',
+        'Edit income, spending and setup.\nBalances change only through Decision Room actions.',
         [
-          { label: 'Cash (checking)', value: 'cash' },
-          { label: 'Savings / rate', value: 'savings' },
+          { label: 'Savings interest rate', value: 'savings' },
           { label: 'Salary', value: 'salary' },
-          { label: 'Stocks total', value: 'stocks' },
-          { label: '401(k) / Roth', value: 'retire' },
+          { label: '401(k) / Roth contributions', value: 'retire' },
           { label: 'Retirement age', value: 'retireAge' },
           { label: 'ZIP / filing status', value: 'tax' },
           { label: 'Difficulty rates', value: 'rates' },
@@ -622,25 +770,15 @@ export class RoomScene {
         { title: 'Portfolio' }
       );
       if (!choice) return;
-      if (choice === 'planning') { await editPlanningInputs(p, dialog); }
-      else if (choice === 'cash') {
-        const v = await dialog.prompt('Cash (checking)', {
-          title: 'Portfolio',
-          defaultValue: String(p.cash || 0),
-          type: 'money',
-          prefix: '$',
-        });
-        if (v != null) p.cash = Math.max(0, v);
-      } else if (choice === 'savings') {
+      if (choice === 'planning') { await editPlanningInputs(p, dialog, { lockBalances: true }); }
+      else if (choice === 'savings') {
         const pct = ((p.savingsRate || 0) * 100).toFixed(2).replace(/\.?0+$/, '');
-        const form = await dialog.form('Savings', [
-          { key: 'bal', label: 'Savings', type: 'money', prefix: '$', defaultValue: String(p.savings || 0) },
-          { key: 'rate', label: 'Interest rate', type: 'percent', defaultValue: pct },
-        ], { title: 'Portfolio' });
-        if (form) {
-          p.savings = Math.max(0, form.bal || 0);
-          p.savingsRate = Math.max(0, (form.rate || 0) / 100);
-        }
+        const v = await dialog.prompt(`Savings interest rate (balance ${formatMoneyDisplay(p.savings || 0)})`, {
+          title: 'Portfolio',
+          defaultValue: pct,
+          type: 'percent',
+        });
+        if (v != null) p.savingsRate = Math.max(0, (v || 0) / 100);
       } else if (choice === 'salary') {
         const v = await dialog.prompt('Annual household salary', {
           title: 'Portfolio',
@@ -653,22 +791,16 @@ export class RoomScene {
           p.employed = p.salary > 0 && !p.retired;
           p.peakSalary = Math.max(p.peakSalary || 0, p.salary);
         }
-      } else if (choice === 'stocks') {
-        await editPlanningInputs(p, dialog);
       } else if (choice === 'retire') {
-        const form = await dialog.form('Retirement accounts', [
-          { key: 'k401', label: '401(k) balance', type: 'money', prefix: '$', defaultValue: String(p.k401Balance || 0) },
+        const form = await dialog.form('Contributions (balances are locked during play)', [
           { key: 'kRate', label: '401(k) contrib % of salary', type: 'percent', defaultValue: String(((p.k401ContribRate || 0) * 100).toFixed(2)) },
-          { key: 'roth', label: 'Roth IRA balance', type: 'money', prefix: '$', defaultValue: String(p.rothBalance || 0) },
-          { key: 'rothC', label: 'Roth annual contribution', type: 'money', prefix: '$', defaultValue: String(p.rothAnnualContribution || 0) },
+          { key: 'rothC', label: 'Roth annual contribution (from Cash)', type: 'money', prefix: '$', defaultValue: String(p.rothAnnualContribution || 0) },
         ], { title: 'Portfolio' });
         if (form) {
-          p.k401Balance = Math.max(0, form.k401 || 0);
           p.k401ContribRate = Math.max(0, Math.min(1, (form.kRate || 0) / 100));
-          p.has401k = p.k401Balance > 0 || p.k401ContribRate > 0;
-          p.rothBalance = Math.max(0, form.roth || 0);
+          p.has401k = (p.k401Balance || 0) > 0 || p.k401ContribRate > 0;
           p.rothAnnualContribution = Math.max(0, form.rothC || 0);
-          p.hasRoth = p.rothBalance > 0 || p.rothAnnualContribution > 0;
+          p.hasRoth = (p.rothBalance || 0) > 0 || p.rothAnnualContribution > 0;
         }
       } else if (choice === 'retireAge') {
         const v = await dialog.prompt('Retirement age', {

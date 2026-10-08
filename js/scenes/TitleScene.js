@@ -145,7 +145,7 @@ export class TitleScene {
       'Starman — age 30, married, no kids.\n' +
         'Salary $80k · spend $48k/yr.\n' +
         'Home $380k ($270k @ 6.5%, 27yr).\n' +
-        'Cash $15k · savings $35k ·\nstocks $85k · 401(k) $62k.\n' +
+        'Cash $155k · savings $35k ·\nstocks $85k · 401(k) $62k.\n' +
         'ZIP 85001 · Standard difficulty.\n' +
         'Glass wall ~15 years if unchanged.',
       [

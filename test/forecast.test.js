@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { household } from './fixtures.js';
 import { economicYear, PLANNING_ASSUMPTIONS, holdingReturn } from '../js/finance/Market.js';
 import { projectMonteCarlo, createForecast, addForecastPaths, finishForecast, forecastKey } from '../js/finance/Forecast.js';
-import { projectYears, computeWorth } from '../js/finance/Engine.js';
+import { projectYears, computeWorth, setRetirementWithdrawalPlan } from '../js/finance/Engine.js';
 
 test('annual return draws recover configured arithmetic moments and permit market losses',()=>{
   const a={...PLANNING_ASSUMPTIONS},N=50000;
@@ -45,22 +45,28 @@ test('zero-volatility cash fixture collapses bands and reports all success/all f
   const a=projectMonteCarlo(p,{paths:50});
   assert.equal(a.successProbability,1);assert.equal(a.series.at(-1).netWorth.p10,80000);
   assert.equal(a.series.at(-1).netWorth.p90,80000);
+  assert.deepEqual(a.firstWall,{p10:null,p50:null,p90:null,wallFree:50,count:50});
   const fail=projectMonteCarlo({...p,cash:0},{paths:50});assert.equal(fail.successProbability,0);
   assert.equal(fail.count,50);assert.equal(fail.series.at(-1).netWorth.p50,0);
   assert.ok(fail.successInterval95[1]>0);
+  assert.deepEqual(fail.firstWall.p50,{year:2026,age:98});assert.equal(fail.firstWall.wallFree,0);
 });
-test('cash-flow order distinguishes early crash from late crash despite equal cumulative returns',()=>{
-  const p=household({age:60,cash:0,stocksTotal:100000,stocksCostBasis:100000,annualSpending:30000});
+test('cash-flow order distinguishes early crash from late crash for a standing withdrawal',()=>{
+  // Only the player's own standing 401(k) withdrawal draws on the market; nothing is sold automatically.
+  const p=setRetirementWithdrawalPlan(household({age:60,cash:0,k401Balance:100000,annualSpending:30000,employed:false}),
+    {amount:33000,account:'traditional'});
   const marketPath=(returns)=>Object.fromEntries(returns.map((r,i)=>[2026+i,{equity:r,bond:0,inflation:0,homeReturn:0}]));
   const early=projectYears(p,3,'standard',{marketPath:marketPath([-.5,0,1]),deterministic:true}).at(-1);
   const late=projectYears(p,3,'standard',{marketPath:marketPath([1,0,-.5]),deterministic:true}).at(-1);
   assert.ok(early.state.planFailed);assert.ok(!late.state.planFailed);
-  assert.ok(computeWorth(late.state).stocks>computeWorth(early.state).stocks);
+  assert.ok(computeWorth(late.state).k401Balance>computeWorth(early.state).k401Balance);
 });
 test('forecast cache changes for model inputs and versions, not reporting noise',()=>{
   const p=household();assert.notEqual(forecastKey(p),forecastKey({...p,annualSpending:1}));
   assert.equal(forecastKey(p),forecastKey({...p,transactions:[{type:'ui-only'}]}));
   assert.notEqual(forecastKey(p,1000),forecastKey(p,5000));
+  const key=JSON.parse(forecastKey(p));
+  assert.equal(key.funding,'cash-only');assert.equal(key.selection,'median-first-wall');
 });
 
 test('partial injected economic paths retain finite account factors; crash affects specific stocks',()=>{

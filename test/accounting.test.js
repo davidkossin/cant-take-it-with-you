@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDefaultSetup, createGameFromSetup } from '../js/state/GameState.js';
-import { buyStock, sellStock, buyHome, computeWorth, projectYears } from '../js/finance/Engine.js';
+import { buyStock, sellStock, buyHome, computeWorth, projectYears, NOT_ENOUGH_CASH } from '../js/finance/Engine.js';
 
 export function portfolio(overrides = {}) {
   return createGameFromSetup({ ...createDefaultSetup(), year: 2026, cash: 20000,
@@ -31,6 +31,7 @@ test('an unfunded home down payment cannot create equity', () => {
   const p = portfolio({ cash: 10000, stocksTotal: 0, stocksCostBasis: 0, stocksHoldings: [] });
   const bought = buyHome(p, { value: 200000, downPayment: 50000 });
   assert.equal(bought.homes.length, 0);
+  assert.ok(bought.lastTransaction.reason.startsWith(NOT_ENOUGH_CASH));
   assert.equal(computeWorth(bought).netWorth, computeWorth(p).netWorth);
 });
 test('legal zero inputs survive setup', () => {

@@ -19,10 +19,41 @@ import { computeWorth } from '../finance/Engine.js';
 import { drawWorthChart, drawForecastChart, BRANCH_COLORS } from '../render/Charts.js';
 import { makeDialogChrome } from '../render/Assets.js';
 import { formatMoneyDisplay } from '../render/Dialog.js';
+import { fitPixelFont } from '../render/FutureSplash.js';
 
 const VIEW_TABS = ['portfolio', 'map', 'charts'];
+const MENU_ITEMS = [
+  { label: 'Portfolio', value: 'portfolio' },
+  { label: 'Map', value: 'map' },
+  { label: 'Charts', value: 'charts' },
+  { label: 'Resume', value: 'resume' },
+  { label: 'Quit', value: 'quit' },
+];
+const QUIT_INDEX = MENU_ITEMS.findIndex((item) => item.value === 'quit');
+export const QUIT_TITLE = 'Are you sure you want to quit?';
+export const QUIT_SUBTITLE = 'Your file saved the last time you passed through a doorway';
+/** Quit confirmation rows; No is the default highlight. */
+const QUIT_CHOICES = [
+  { label: 'Yes', value: true },
+  { label: 'No', value: false },
+];
+
+function fontPx(font) {
+  return Number(/(\d+(?:\.\d+)?)px/.exec(String(font))?.[1]) || 16;
+}
 
 /** Charts remain focused on the current path; timeline comparison lives on Map. */
+
+/**
+ * Charts headline: when the first glass wall arrives across the Monte Carlo paths
+ * (median year/age, P10–P90). A missing year means no wall through age 100.
+ */
+export function firstWallHeadline(firstWall) {
+  if (!firstWall) return 'First glass wall · not available for this forecast';
+  const year = (w) => (w ? String(w.year) : 'none');
+  const median = firstWall.p50 ? firstWall.p50.year + ' (age ' + Math.round(firstWall.p50.age) + ')' : 'no wall by age 100';
+  return 'First glass wall · median ' + median + ' · P10–P90 ' + year(firstWall.p10) + '–' + year(firstWall.p90);
+}
 
 export class PauseMenu {
   constructor() {
@@ -33,7 +64,10 @@ export class PauseMenu {
     this.chartMetric = 'netWorth';
     this.chartYear = 0;
     this.forecastPaths = 1000;
-    this.screen = 'menu'; // menu | portfolio | map | charts
+    this.screen = 'menu'; // menu | portfolio | map | charts | confirmQuit
+    /** Quit confirmation highlight: index into QUIT_CHOICES (1 = No). */
+    this.quitChoice = 1;
+    this.quitChrome = null;
     this.selected = 0;
     this.portfolioPage = 0; // 0 = summary, 1 = homes and loans
     this.portfolioDetailPage = 0;
@@ -58,6 +92,15 @@ export class PauseMenu {
     this.mapJumpPoints = [];
     /** @type {object|null} Cached map model from last refresh. */
     this.mapModel = null;
+    /**
+     * Pointer hit regions for the frame last drawn, in 1920×1080 frame px.
+     * draw() rebuilds them from the same rects it paints, so hit-testing
+     * always matches what is on screen.
+     * @type {Array<{key:string,x:number,y:number,w:number,h:number,hover?:Function,activate:Function}>}
+     */
+    this._hits = [];
+    /** Key of the hit region under the mouse (hint links highlight on hover). */
+    this.hoverKey = null;
   }
 
   show(game, dialog = null) {
@@ -78,6 +121,214 @@ export class PauseMenu {
   hide() {
     this.forecast.cancel();
     this.open = false;
+    this._hits = [];
+    this.hoverKey = null;
+  }
+
+  // ---- Shared actions (keyboard / D-pad and mouse / touch run the same code) ----
+
+  /** Escape / B: leave a Map compare mode, then a sub-view, then the pause menu. */
+  back() {
+    if (this.screen === 'confirmQuit') {
+      // Escape / B on the quit question = No: back to the menu, Quit still highlighted.
+      this.screen = 'menu';
+      this.selected = QUIT_INDEX;
+      return undefined;
+    }
+    if (this.screen === 'map' && this.mapMode !== 'overview') {
+      this.mapMode = 'overview';
+      return undefined;
+    }
+    if (this.screen !== 'menu') {
+      this.forecast.cancel();
+      this.screen = 'menu';
+      this.selected = 0;
+      return undefined;
+    }
+    this.hide();
+    return 'close';
+  }
+
+  /** Enter / A on a main-menu row. */
+  activateMenuItem(index, game) {
+    const choice = MENU_ITEMS[index]?.value;
+    if (!choice) return undefined;
+    this.selected = index;
+    if (choice === 'resume') {
+      this.hide();
+      return 'close';
+    }
+    if (choice === 'quit') {
+      this.screen = 'confirmQuit';
+      this.quitChoice = 1; // default No
+      return undefined;
+    }
+    this.screen = choice;
+    this.selected = 0;
+    this.portfolioPage = 0;
+    this.portfolioDetailPage = 0;
+    this.refresh(game);
+    return undefined;
+  }
+
+  /** Quit confirmation: Yes quits to the title (as Quit did before); No returns to the menu. */
+  answerQuit(index) {
+    if (QUIT_CHOICES[index]?.value === true) {
+      this.hide();
+      return 'quit';
+    }
+    return this.back();
+  }
+
+  /** Tab / Q: cycle Portfolio → Map → Charts. */
+  nextTab(game) {
+    const current = VIEW_TABS.indexOf(this.screen);
+    this.screen = VIEW_TABS[(current + 1) % VIEW_TABS.length];
+    this.selected = 0;
+    this.portfolioPage = 0;
+    this.portfolioDetailPage = 0;
+    if (this.screen === 'map') this.syncMapSelection(game, { resetFocus: true });
+    return undefined;
+  }
+
+  togglePortfolioPage() {
+    this.portfolioPage = this.portfolioPage === 0 ? 1 : 0;
+    this.portfolioDetailPage = 0;
+    return undefined;
+  }
+
+  stepPortfolioDetailPage(game, dir = 1) {
+    const pages = this.portfolioDetailPages(game.portfolio).length;
+    if (pages > 1) this.portfolioDetailPage = (this.portfolioDetailPage + (dir > 0 ? 1 : pages - 1)) % pages;
+    return undefined;
+  }
+
+  /** Map overview ←/→ (or a click on a column number): pick a timeline, focus its nearest hallway. */
+  selectMapTimeline(game, index) {
+    const timelines = this.mapModel?.timelines || [];
+    if (!timelines.length) return;
+    this.mapTimelineIndex = ((index % timelines.length) + timelines.length) % timelines.length;
+    this.mapFocus = 'point';
+    this.mapPointIndex = 0;
+    this.syncMapSelection(game);
+    const liveYear = game.portfolio?.year ?? this.mapModel?.current?.year ?? 0;
+    if (this.mapJumpPoints.length) {
+      this.mapPointIndex = nearestHallwayIndex(this.mapJumpPoints, liveYear);
+      this.syncMapSelection(game);
+    }
+  }
+
+  /** Map overview Enter / A: open Compare, or jump to the focused hallway. */
+  activateMapFocus(game) {
+    if (this.mapFocus === 'compare') {
+      if (listCompareBranches(game).length >= 2) {
+        this.mapMode = 'select';
+        this.mapCompareActive = 0;
+      }
+      return undefined;
+    }
+    const node = this.mapJumpPoints[this.mapPointIndex];
+    if (node && jumpToHallwayNode(game, node.id)) {
+      this.hide();
+      return { jump: node.id };
+    }
+    return undefined;
+  }
+
+  /** Map C: toggle Compare selection. */
+  toggleMapCompare(game) {
+    if (listCompareBranches(game).length < 2) return undefined;
+    this.mapMode = this.mapMode === 'overview' || this.mapMode === 'result' ? 'select' : 'overview';
+    this.mapCompareActive = 0;
+    return undefined;
+  }
+
+  /** Charts shortcuts by name (keys F/R/L/P/C/E, ←/→, Enter). */
+  chartAction(name, game) {
+    if (name === 'options') void this.showChartOptions(game);
+    if (name === 'history') this.chartMode = this.chartMode === 'forecast' ? 'history' : 'forecast';
+    if (name === 'real') this.chartReal = !this.chartReal;
+    if (name === 'liquid') this.chartMetric = this.chartMetric === 'netWorth' ? 'liquid' : 'netWorth';
+    if (name === 'paths') this.forecastPaths = this.forecastPaths === 1000 ? 5000 : this.forecastPaths === 5000 ? 10000 : 1000;
+    if (name === 'next') this.chartYear = Math.min(100 - game.portfolio.age, this.chartYear + 1);
+    if (name === 'prev') this.chartYear = Math.max(0, this.chartYear - 1);
+    if (name === 'coverage') void this.showModelCoverage(game);
+    if (name === 'export') this.exportForecast();
+    return undefined;
+  }
+
+  // ---- Pointer (mouse / touch on the canvas) ----
+
+  /** Topmost-closest hit region containing frame point (lx, ly), else null. */
+  hitAt(lx, ly) {
+    let best = null;
+    let bestDist = Infinity;
+    for (const h of this._hits) {
+      if (lx < h.x || lx > h.x + h.w || ly < h.y || ly > h.y + h.h) continue;
+      const d = Math.hypot(lx - (h.x + h.w / 2), ly - (h.y + h.h / 2));
+      if (d < bestDist) { bestDist = d; best = h; }
+    }
+    return best;
+  }
+
+  /**
+   * Mouse hover: highlight / move the selection like the arrow keys would.
+   * @returns {boolean} whether the pointer is over a clickable item
+   */
+  handlePointerMove(lx, ly, game) {
+    if (!this.open) return false;
+    const hit = this.hitAt(lx, ly);
+    this.hoverKey = hit?.key ?? null;
+    if (hit?.hover) hit.hover(game);
+    return !!hit;
+  }
+
+  /**
+   * Click / tap: activate the item exactly as Enter / A (or Esc / B for Back).
+   * Clicks outside every item do nothing.
+   * @returns {{handled:boolean, result?:'close'|'quit'|{jump:string}|undefined}}
+   */
+  handlePointerDown(lx, ly, game) {
+    if (!this.open) return { handled: false };
+    const hit = this.hitAt(lx, ly);
+    if (!hit) return { handled: false };
+    const result = hit.activate(game);
+    // Regions belong to the frame that was clicked; the next draw rebuilds them.
+    this._hits = [];
+    this.hoverKey = null;
+    return { handled: true, result };
+  }
+
+  _addHit(hit) {
+    this._hits.push(hit);
+    return hit;
+  }
+
+  /**
+   * Draw a hint line left to right in the current font. Parts with `action`
+   * become clickable links (gold + underline on hover) using the same rects.
+   * @param {Array<{text:string, action?:Function, key?:string}>} parts
+   */
+  drawLinks(ctx, parts, x, y) {
+    const px = fontPx(ctx.font);
+    const base = ctx.fillStyle;
+    let cx = x;
+    for (const part of parts) {
+      const w = ctx.measureText(part.text).width;
+      if (part.action) {
+        const key = part.key || `link:${part.text}`;
+        const hovered = this.hoverKey === key;
+        this._addHit({ key, x: cx - 6, y: y - 8, w: w + 12, h: px + 16, activate: part.action });
+        ctx.fillStyle = hovered ? PALETTE.gold : base;
+        ctx.fillText(part.text, cx, y);
+        if (hovered) ctx.fillRect(cx, y + px + 3, w, 2);
+      } else {
+        ctx.fillStyle = base;
+        ctx.fillText(part.text, cx, y);
+      }
+      cx += w;
+    }
+    ctx.fillStyle = base;
   }
 
   refresh(game) {
@@ -190,79 +441,54 @@ export class PauseMenu {
 
     if (KEYS.cancel.includes(e.key)) {
       e.preventDefault();
-      if (this.screen === 'map' && this.mapMode !== 'overview') {
-        this.mapMode = 'overview';
-        return undefined;
-      }
-      if (this.screen !== 'menu') {
-        this.forecast.cancel();
-        this.screen = 'menu';
-        this.selected = 0;
-        return undefined;
-      }
-      this.hide();
-      return 'close';
+      return this.back();
     }
 
-    if (this.screen === 'menu') {
-      if (KEYS.up.includes(e.key)) {
-        this.selected = (this.selected - 1 + 5) % 5;
-        e.preventDefault();
-        return undefined;
-      }
-      if (KEYS.down.includes(e.key)) {
-        this.selected = (this.selected + 1) % 5;
+    if (this.screen === 'confirmQuit') {
+      if (KEYS.up.includes(e.key) || KEYS.down.includes(e.key) || KEYS.left.includes(e.key) || KEYS.right.includes(e.key)) {
+        this.quitChoice = (this.quitChoice + 1) % QUIT_CHOICES.length;
         e.preventDefault();
         return undefined;
       }
       if (KEYS.confirm.includes(e.key)) {
         e.preventDefault();
-        const choice = ['portfolio', 'map', 'charts', 'quit', 'resume'][this.selected];
-        if (choice === 'resume') {
-          this.hide();
-          return 'close';
-        }
-        if (choice === 'quit') {
-          this.hide();
-          return 'quit';
-        }
-        this.screen = choice;
-        this.selected = 0;
-        this.portfolioPage = 0;
-        this.portfolioDetailPage = 0;
-        this.refresh(game);
+        return this.answerQuit(this.quitChoice);
+      }
+      return undefined; // Tab / shortcuts do nothing while the question is up
+    }
+
+    if (this.screen === 'menu') {
+      if (KEYS.up.includes(e.key)) {
+        this.selected = (this.selected - 1 + MENU_ITEMS.length) % MENU_ITEMS.length;
+        e.preventDefault();
         return undefined;
+      }
+      if (KEYS.down.includes(e.key)) {
+        this.selected = (this.selected + 1) % MENU_ITEMS.length;
+        e.preventDefault();
+        return undefined;
+      }
+      if (KEYS.confirm.includes(e.key)) {
+        e.preventDefault();
+        return this.activateMenuItem(this.selected, game);
       }
       return undefined;
     }
 
     // Tab / Q keeps the original quick-switch behavior between pause views.
     if (e.key === 'Tab' || e.key === 'q' || e.key === 'Q') {
-      const current = VIEW_TABS.indexOf(this.screen);
-      this.screen = VIEW_TABS[(current + 1) % VIEW_TABS.length];
-      this.selected = 0;
-      this.portfolioPage = 0;
-      this.portfolioDetailPage = 0;
-      if (this.screen === 'map') this.syncMapSelection(game, { resetFocus: true });
       e.preventDefault();
-      return undefined;
+      return this.nextTab(game);
     }
 
     if (this.screen === 'portfolio') {
       if (this.portfolioPage === 1 && (KEYS.up.includes(e.key) || KEYS.down.includes(e.key))) {
-        const pages = this.portfolioDetailPages(game.portfolio).length;
-        if (pages > 1) {
-          this.portfolioDetailPage =
-            (this.portfolioDetailPage + (KEYS.down.includes(e.key) ? 1 : pages - 1)) % pages;
-        }
         e.preventDefault();
-        return undefined;
+        return this.stepPortfolioDetailPage(game, KEYS.down.includes(e.key) ? 1 : -1);
       }
       if (KEYS.confirm.includes(e.key)) {
-        this.portfolioPage = this.portfolioPage === 0 ? 1 : 0;
-        this.portfolioDetailPage = 0;
         e.preventDefault();
-        return undefined;
+        return this.togglePortfolioPage();
       }
       return undefined;
     }
@@ -270,10 +496,8 @@ export class PauseMenu {
     if (this.screen === 'map') {
       const branches = listCompareBranches(game);
       if ((e.key === 'c' || e.key === 'C') && branches.length >= 2) {
-        this.mapMode = this.mapMode === 'overview' || this.mapMode === 'result' ? 'select' : 'overview';
-        this.mapCompareActive = 0;
         e.preventDefault();
-        return undefined;
+        return this.toggleMapCompare(game);
       }
 
       if (this.mapMode === 'select') {
@@ -317,18 +541,8 @@ export class PauseMenu {
       const timelines = this.mapModel?.timelines || [];
       if (KEYS.left.includes(e.key) || KEYS.right.includes(e.key)) {
         if (timelines.length >= 2) {
-          const dir = KEYS.right.includes(e.key) ? 1 : -1;
-          this.mapTimelineIndex =
-            (this.mapTimelineIndex + dir + timelines.length) % timelines.length;
-          this.mapFocus = 'point';
-          this.mapPointIndex = 0;
-          this.syncMapSelection(game);
           // After timeline change, pick hallway nearest live year on that lane
-          const liveYear = game.portfolio?.year ?? this.mapModel?.current?.year ?? 0;
-          if (this.mapJumpPoints.length) {
-            this.mapPointIndex = nearestHallwayIndex(this.mapJumpPoints, liveYear);
-            this.syncMapSelection(game);
-          }
+          this.selectMapTimeline(game, this.mapTimelineIndex + (KEYS.right.includes(e.key) ? 1 : -1));
         }
         e.preventDefault();
         return undefined;
@@ -360,35 +574,16 @@ export class PauseMenu {
       }
       if (KEYS.confirm.includes(e.key)) {
         e.preventDefault();
-        if (this.mapFocus === 'compare') {
-          if (branches.length >= 2) {
-            this.mapMode = 'select';
-            this.mapCompareActive = 0;
-          }
-          return undefined;
-        }
-        const node = this.mapJumpPoints[this.mapPointIndex];
-        if (node) {
-          const ok = jumpToHallwayNode(game, node.id);
-          if (ok) {
-            this.hide();
-            return { jump: node.id };
-          }
-        }
-        return undefined;
+        return this.activateMapFocus(game);
       }
     }
 
     if (this.screen === 'charts') {
-      if (KEYS.confirm.includes(e.key) && e.key.toLowerCase() !== 'e') { e.preventDefault(); void this.showChartOptions(game); return undefined; }
-      if (e.key.toLowerCase() === 'f') this.chartMode = this.chartMode === 'forecast' ? 'history' : 'forecast';
-      if (e.key.toLowerCase() === 'r') this.chartReal = !this.chartReal;
-      if (e.key.toLowerCase() === 'l') this.chartMetric = this.chartMetric === 'netWorth' ? 'liquid' : 'netWorth';
-      if (e.key.toLowerCase() === 'p') this.forecastPaths = this.forecastPaths === 1000 ? 5000 : this.forecastPaths === 5000 ? 10000 : 1000;
-      if (KEYS.right.includes(e.key)) this.chartYear = Math.min(100 - game.portfolio.age, this.chartYear + 1);
-      if (KEYS.left.includes(e.key)) this.chartYear = Math.max(0, this.chartYear - 1);
-      if (e.key.toLowerCase() === 'c') void this.showModelCoverage(game);
-      if (e.key.toLowerCase() === 'e') this.exportForecast();
+      if (KEYS.confirm.includes(e.key) && e.key.toLowerCase() !== 'e') { e.preventDefault(); return this.chartAction('options', game); }
+      const byKey = { f: 'history', r: 'real', l: 'liquid', p: 'paths', c: 'coverage', e: 'export' };
+      if (byKey[e.key.toLowerCase()]) this.chartAction(byKey[e.key.toLowerCase()], game);
+      if (KEYS.right.includes(e.key)) this.chartAction('next', game);
+      if (KEYS.left.includes(e.key)) this.chartAction('prev', game);
       e.preventDefault(); return undefined;
     }
 
@@ -423,6 +618,8 @@ export class PauseMenu {
 
   draw(ctx, game) {
     if (!this.open) return;
+    this._hits = [];
+    ctx.textAlign = 'left';
 
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fillRect(0, 0, FRAME_W, FRAME_H);
@@ -436,11 +633,21 @@ export class PauseMenu {
     }
     ctx.drawImage(this.chrome, x, y);
 
-    if (this.screen === 'menu') {
-      this.drawMenu(ctx, x, y, boxW);
+    if (this.screen === 'confirmQuit') {
+      // Pause menu stays visible underneath; only the question is clickable.
+      this.drawMenu(ctx, x, y, boxW, game);
+      this._hits = [];
+      this.drawQuitConfirm(ctx);
+    } else if (this.screen === 'menu') {
+      this.drawMenu(ctx, x, y, boxW, game);
     } else {
       this.drawSubView(ctx, game, x, y, boxW, boxH);
     }
+  }
+
+  /** Main-menu row rects — shared by drawMenu and pointer hit-testing. */
+  menuItemRects(x, y, boxW) {
+    return MENU_ITEMS.map((item, i) => ({ ...item, index: i, x: x + 40, y: y + 152 + i * 64, w: boxW - 80, h: 48 }));
   }
 
   drawMenu(ctx, x, y, boxW) {
@@ -452,25 +659,92 @@ export class PauseMenu {
     ctx.fillStyle = PALETTE.uiText;
     ctx.fillText('Choose a view', x + 48, y + 100);
 
-    const options = ['Portfolio', 'Map', 'Charts', 'Quit', 'Resume'];
-    let oy = y + 160;
-    options.forEach((label, i) => {
-      const selected = i === this.selected;
+    for (const row of this.menuItemRects(x, y, boxW)) {
+      const selected = row.index === this.selected;
+      this._addHit({
+        key: `menu:${row.value}`, x: row.x, y: row.y, w: row.w, h: row.h,
+        hover: () => { this.selected = row.index; },
+        activate: (g) => this.activateMenuItem(row.index, g),
+      });
       if (selected) {
         ctx.fillStyle = 'rgba(200,160,80,0.25)';
-        ctx.fillRect(x + 40, oy - 8, boxW - 80, 48);
+        ctx.fillRect(row.x, row.y, row.w, row.h);
         ctx.fillStyle = PALETTE.gold;
       } else {
         ctx.fillStyle = PALETTE.uiText;
       }
       ctx.font = '28px "Press Start 2P", monospace';
-      ctx.fillText(`${selected ? '▶' : ' '} ${label}`, x + 56, oy);
-      oy += 64;
-    });
+      ctx.fillText(`${selected ? '▶' : ' '} ${row.label}`, row.x + 16, row.y + 8);
+    }
 
     ctx.font = '16px "Press Start 2P", monospace';
     ctx.fillStyle = '#777';
-    ctx.fillText('Enter select · Esc resume', x + 48, y + 860);
+    this.drawLinks(ctx, [{ text: 'Enter select · ' }, { text: 'Esc resume', action: () => this.back() }], x + 48, y + 860);
+  }
+
+  /** Yes / No row rects for the quit question — shared by drawing and hit-testing. */
+  quitChoiceRects(x, top, innerW) {
+    return QUIT_CHOICES.map((choice, i) => ({ ...choice, index: i, x, y: top + i * 76, w: innerW, h: 60 }));
+  }
+
+  /**
+   * "Are you sure you want to quit?" panel, centered in the 80% title-safe
+   * area; title / subtitle / rows are fitted with fitPixelFont so they stay
+   * inside it at any canvas scale (phone portrait / landscape, 1920×1080).
+   */
+  drawQuitConfirm(ctx) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, FRAME_W, FRAME_H);
+    const boxW = Math.round(FRAME_W * 0.8);
+    const boxH = 470;
+    const x = Math.round((FRAME_W - boxW) / 2);
+    const y = Math.round((FRAME_H - boxH) / 2);
+    if (!this.quitChrome || this.quitChrome.width !== boxW || this.quitChrome.height !== boxH) {
+      this.quitChrome = makeDialogChrome(boxW, boxH);
+    }
+    ctx.drawImage(this.quitChrome, x, y);
+
+    const pad = 64;
+    const innerW = boxW - pad * 2;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    let ty = y + 56;
+    const titlePx = fitPixelFont(ctx, [QUIT_TITLE], 44, innerW);
+    ctx.font = `${titlePx}px "Press Start 2P", monospace`;
+    ctx.fillStyle = PALETTE.gold;
+    ctx.fillText(QUIT_TITLE, x + pad, ty);
+    ty += titlePx + 26;
+
+    const subPx = fitPixelFont(ctx, [QUIT_SUBTITLE], 24, innerW);
+    ctx.font = `${subPx}px "Press Start 2P", monospace`;
+    ctx.fillStyle = '#a89878';
+    ctx.fillText(QUIT_SUBTITLE, x + pad, ty);
+    ty += subPx + 52;
+
+    const rows = this.quitChoiceRects(x + pad - 16, ty, innerW + 32);
+    const rowPx = fitPixelFont(ctx, rows.map((r) => `▶ ${r.label}`), 30, innerW);
+    for (const row of rows) {
+      const selected = row.index === this.quitChoice;
+      this._addHit({
+        key: `quit:${row.label}`, x: row.x, y: row.y, w: row.w, h: row.h,
+        hover: () => { this.quitChoice = row.index; },
+        activate: () => this.answerQuit(row.index),
+      });
+      if (selected) {
+        ctx.fillStyle = 'rgba(200,160,80,0.25)';
+        ctx.fillRect(row.x, row.y, row.w, row.h);
+        ctx.fillStyle = PALETTE.gold;
+      } else {
+        ctx.fillStyle = PALETTE.uiText;
+      }
+      ctx.font = `${rowPx}px "Press Start 2P", monospace`;
+      ctx.fillText(`${selected ? '▶' : ' '} ${row.label}`, row.x + 16, row.y + Math.round((row.h - rowPx) / 2));
+    }
+
+    ctx.font = '16px "Press Start 2P", monospace';
+    ctx.fillStyle = '#777';
+    this.drawLinks(ctx, [{ text: 'Enter select · ' }, { text: 'Esc no', key: 'quit:esc', action: () => this.back() }],
+      x + pad, y + boxH - 48);
   }
 
   drawSubView(ctx, game, x, y, boxW, boxH) {
@@ -488,10 +762,14 @@ export class PauseMenu {
     ctx.fillText(title, x + 12, y + 10);
     ctx.fillStyle = '#666';
     ctx.font = '14px "Press Start 2P", monospace';
-    ctx.fillText('Tab next · Esc back', x + boxW - 360, y + 28);
+    this.drawLinks(ctx, [
+      { text: 'Tab next', key: 'head:tab', action: (g) => this.nextTab(g) },
+      { text: ' · ' },
+      { text: 'Esc back', key: 'head:back', action: () => this.back() },
+    ], x + boxW - 360, y + 28);
 
     if (this.screen === 'portfolio') {
-      this.drawPortfolio(ctx, game.portfolio, x, y, boxW, boxH);
+      this.drawPortfolio(ctx, game.portfolio, x, y, boxW, boxH, game);
     } else if (this.screen === 'map') {
       this.drawMap(ctx, game, x, y, boxW, boxH);
     } else {
@@ -535,10 +813,11 @@ export class PauseMenu {
   exportForecast() {
     const f = this.forecast.result;
     if (!f) return;
-    const rows = [['year','age','net_worth_p10','net_worth_p50','net_worth_p90','real_net_worth_p50','liquid_p10','liquid_p50','liquid_p90','hallway_net_worth','hallway_liquid','hallway_real_net_worth','hallway_real_liquid','hallway_path_index','hallway_selection_paths','hallway_origin_year','paths','success_rate','seed','engine','assumptions','tax_rules'],
+    const rows = [['year','age','net_worth_p10','net_worth_p50','net_worth_p90','real_net_worth_p50','liquid_p10','liquid_p50','liquid_p90','hallway_net_worth','hallway_liquid','hallway_real_net_worth','hallway_real_liquid','hallway_path_index','hallway_selection_paths','hallway_origin_year','paths','wall_free_rate','first_wall_p10','first_wall_median','first_wall_p90','seed','engine','assumptions','tax_rules'],
       ...f.series.map((r,i) => [r.year,r.age,r.netWorth.p10,r.netWorth.p50,r.netWorth.p90,r.realNetWorth.p50,r.liquid.p10,r.liquid.p50,r.liquid.p90,
         f.scenarioSeries[i].netWorth,f.scenarioSeries[i].liquid,f.scenarioSeries[i].realNetWorth,f.scenarioSeries[i].realLiquid,
-        f.scenario.simulationIndex,f.scenario.selectionPaths,f.scenario.originYear,f.count,f.successProbability,f.seed,f.engineVersion,f.assumptionVersion,f.taxRuleVersion])];
+        f.scenario.simulationIndex,f.scenario.selectionPaths,f.scenario.originYear,f.count,f.successProbability,
+        ...['p10','p50','p90'].map(k => f.firstWall?.[k]?.year ?? 'none'),f.seed,f.engineVersion,f.assumptionVersion,f.taxRuleVersion])];
     const blob = new Blob([rows.map(r => r.join(',')).join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob), anchor = document.createElement('a');
     anchor.href = url; anchor.download = 'cant-take-it-forecast.csv'; anchor.click();
@@ -547,7 +826,18 @@ export class PauseMenu {
 
   drawCharts(ctx, game, x, y, boxW, boxH) {
     ctx.font = '14px "Press Start 2P", monospace'; ctx.fillStyle = '#aaa';
-    ctx.fillText('Enter/A options · ←/→ year · F history · R real · L liquid · P paths · C coverage · E export', x + 28, y + 58);
+    const act = (name) => (g) => this.chartAction(name, g);
+    this.drawLinks(ctx, [
+      { text: 'Enter/A options', action: act('options') }, { text: ' · ' },
+      { text: '←', key: 'chart:prev', action: act('prev') }, { text: '/' },
+      { text: '→', key: 'chart:next', action: act('next') }, { text: ' year · ' },
+      { text: 'F history', action: act('history') }, { text: ' · ' },
+      { text: 'R real', action: act('real') }, { text: ' · ' },
+      { text: 'L liquid', action: act('liquid') }, { text: ' · ' },
+      { text: 'P paths', action: act('paths') }, { text: ' · ' },
+      { text: 'C coverage', action: act('coverage') }, { text: ' · ' },
+      { text: 'E export', action: act('export') },
+    ], x + 28, y + 58);
     if (this.chartMode === 'history') {
       drawWorthChart(ctx, (game.worthHistory || []).map(r => ({ ...r,
         netWorth: this.chartReal && r.legacy ? null : r.netWorth / (this.chartReal ? r.priceIndex || 1 : 1), bank: this.chartReal && r.legacy ? null : r.bank / (this.chartReal ? r.priceIndex || 1 : 1) })),
@@ -567,11 +857,12 @@ export class PauseMenu {
     const dollars = this.chartReal ? 'real (original setup-year dollars)' : 'nominal dollars';
     const metric = this.chartReal ? (this.chartMetric === 'liquid' ? 'realLiquid' : 'realNetWorth') : this.chartMetric;
     ctx.fillStyle = '#d4a84b';ctx.font = '16px "Press Start 2P", monospace';
-    ctx.fillText('Funding success ' + (f.successProbability * 100).toFixed(1) + '% · 95% sampling interval ' +
-      f.successInterval95.map(p => (p * 100).toFixed(1) + '%').join('–') + ' · N=' + f.count, x + 28, y + 95);
+    ctx.fillText(firstWallHeadline(f.firstWall), x + 28, y + 95);
     ctx.font = '14px "Press Start 2P", monospace';ctx.fillStyle = '#aaa';
-    ctx.fillText((this.chartMetric === 'liquid' ? 'Available taxable liquid assets' : 'Net worth') + ' · ' + dollars + ' · includes failed paths', x + 28, y + 126);
-    drawForecastChart(ctx, f, { x: x + 28, y: y + 166, w: boxW - 64, h: boxH - 465, metric, selected: this.chartYear });
+    ctx.fillText('Wall-free ' + (f.successProbability * 100).toFixed(1) + '% · 95% sampling interval ' +
+      f.successInterval95.map(p => (p * 100).toFixed(1) + '%').join('–') + ' · N=' + f.count, x + 28, y + 122);
+    ctx.fillText((this.chartMetric === 'liquid' ? 'Available taxable liquid assets' : 'Net worth') + ' · ' + dollars + ' · includes paths that hit a wall', x + 28, y + 148);
+    drawForecastChart(ctx, f, { x: x + 28, y: y + 178, w: boxW - 64, h: boxH - 477, metric, selected: this.chartYear });
     const row = f.series[this.chartYear], v = row[metric], money = formatMoneyDisplay;
     let yy = y + boxH - 275;
     ctx.fillStyle = '#eee';ctx.font = '16px "Press Start 2P", monospace';
@@ -589,7 +880,7 @@ export class PauseMenu {
     ctx.fillText('Equity mean ' + (f.assumptions.equityReturn * 100).toFixed(1) + '% · volatility ' + (f.assumptions.equityVolatility * 100).toFixed(1) +
       '% · CPI ' + (f.assumptions.inflation * 100).toFixed(1) + '% · illustrative inputs', x + 28, yy);
     yy += 30;
-    ctx.fillText('Success = modeled obligations paid in every month through age 100; home equity needs an explicit sale.', x + 28, yy);
+    ctx.fillText('Wall-free = Cash paid every bill each month through age 100; nothing is sold or withdrawn for you.', x + 28, yy);
     yy += 30;
     ctx.fillStyle = '#d4a84b';
     ctx.fillText('C: coverage / ' + f.warnings.length + ' input warnings · Future law is projected. Sampling interval excludes model uncertainty.', x + 28, yy);
@@ -647,7 +938,7 @@ export class PauseMenu {
     }
   }
 
-  drawPortfolio(ctx, p, x, y, boxW, boxH) {
+  drawPortfolio(ctx, p, x, y, boxW, boxH, game) {
     const worth = computeWorth(p);
     ctx.font = '15px "Press Start 2P", monospace';
     ctx.textBaseline = 'top';
@@ -667,14 +958,20 @@ export class PauseMenu {
     ctx.font = '5px "Press Start 2P", monospace';
     if (this.portfolioPage === 0) {
       ctx.font = '13px "Press Start 2P", monospace';
-      ctx.fillText('Enter details', x + 36, y + boxH - 52);
-      ctx.fillText('Tab next · Esc back', x + 36, y + boxH - 28);
+      this.drawLinks(ctx, [{ text: 'Enter details', action: () => this.togglePortfolioPage() }], x + 36, y + boxH - 52);
+      this.drawLinks(ctx, [
+        { text: 'Tab next', key: 'foot:tab', action: (g) => this.nextTab(g) },
+        { text: ' · ' },
+        { text: 'Esc back', key: 'foot:back', action: () => this.back() },
+      ], x + 36, y + boxH - 28);
     } else {
       const pages = this.portfolioDetailPages(p).length;
       const pageLabel = pages > 1 ? ` · Page ${this.portfolioDetailPage + 1}/${pages}` : '';
       ctx.font = '13px "Press Start 2P", monospace';
-      ctx.fillText('Enter summary', x + 36, y + boxH - 52);
-      ctx.fillText(`Up/Down page${pageLabel}`, x + 36, y + boxH - 28);
+      this.drawLinks(ctx, [{ text: 'Enter summary', action: () => this.togglePortfolioPage() }], x + 36, y + boxH - 52);
+      this.drawLinks(ctx, [pages > 1
+        ? { text: `Up/Down page${pageLabel}`, key: 'portfolio:page', action: (g) => this.stepPortfolioDetailPage(g || game, 1) }
+        : { text: `Up/Down page${pageLabel}` }], x + 36, y + boxH - 28);
     }
   }
 
@@ -791,12 +1088,16 @@ export class PauseMenu {
     const yearLabel = this.compareYear == null ? '' : ` · ${this.compareYear}`;
     ctx.font = '16px "Press Start 2P", monospace';
     ctx.fillStyle = PALETTE.uiText;
-    ctx.fillText(
+    const promptYear = () => { void this.promptMapCompareYear(game); return undefined; };
+    const canCompareLink = listCompareBranches(game).length >= 2;
+    this.drawLinks(ctx,
       compareResult
-        ? `Compare${yearLabel} · Enter year · C change`
+        ? [{ text: `Compare${yearLabel} · ` }, { text: 'Enter year', action: promptYear }, { text: ' · ' },
+          { text: 'C change', action: (g) => this.toggleMapCompare(g) }]
         : compareSelect
-          ? 'Compare · ←/→ side · ↑/↓ timeline · Enter year'
-          : '←/→ timeline · ↑/↓ point · Enter jump · Compare',
+          ? [{ text: 'Compare · ←/→ side · ↑/↓ timeline · ' }, { text: 'Enter year', action: promptYear }]
+          : [{ text: '←/→ timeline · ↑/↓ point · ' }, { text: 'Enter jump', action: (g) => this.activateMapFocus(g) },
+            { text: ' · ' }, canCompareLink ? { text: 'Compare', key: 'map:compare-link', action: (g) => this.toggleMapCompare(g) } : { text: 'Compare' }],
       x + 28,
       y + 56
     );
@@ -870,10 +1171,42 @@ export class PauseMenu {
     for (const lab of layout.yearLabels || []) {
       ctx.fillText(String(lab.year), lab.x, lab.y - 2);
     }
+    const overview = !compareSelect && !compareResult;
     for (const col of layout.columnLabels || []) {
       const selected = selectedTl && col.number === selectedTl.number;
       ctx.fillStyle = selected ? PALETTE.gold : '#888';
       ctx.fillText(String(col.number), col.x - 2, col.y);
+      const ti = timelines.findIndex((t) => t.number === col.number);
+      if (overview && ti >= 0) {
+        const w = Math.max(28, ctx.measureText(String(col.number)).width + 16);
+        // Selecting a timeline is a cursor move (←/→), so hover only highlights the number.
+        this._addHit({ key: `map:col:${col.number}`, x: col.x - 10, y: col.y - 8, w, h: 30,
+          activate: (g) => { this.selectMapTimeline(g, ti); return undefined; } });
+      }
+    }
+    // Hallway jump targets on every timeline. Hover moves the selection (gold box)
+    // like ↑/↓ and ←/→; a click on the selected hallway jumps, as Enter does. A tap
+    // on an unselected one only selects it, so touch needs a second tap to jump.
+    if (overview && layout.xy) {
+      timelines.forEach((tl, ti) => {
+        hallwayNodesForTimeline(game, tl.tipId).forEach((node, pi) => {
+          const p = layout.xy(tl.lane, node.year);
+          const isSel = () => this.mapFocus === 'point' && this.mapTimelineIndex === ti && this.mapPointIndex === pi;
+          const select = (g) => {
+            this.mapTimelineIndex = ti;
+            this.mapFocus = 'point';
+            this.mapPointIndex = pi;
+            this.syncMapSelection(g);
+          };
+          this._addHit({ key: `map:node:${node.id}`, x: p.x - 14, y: p.y - 14, w: 28, h: 28,
+            hover: select,
+            activate: (g) => {
+              if (isSel()) return this.activateMapFocus(g);
+              select(g);
+              return undefined;
+            } });
+        });
+      });
     }
 
     for (const pt of layout.points || []) {
@@ -922,13 +1255,14 @@ export class PauseMenu {
         const timeline = timelines.find((t) => t.tipId === branch?.tipId);
         const active = this.mapCompareActive === side;
         ctx.fillStyle = active ? PALETTE.gold : PALETTE.uiText;
-        ctx.fillText(
-          `${active ? '▶' : ' '} ${side === 0 ? 'A' : 'B'}: Timeline ${timeline?.number ?? branchIndex + 1}${
-            branch?.isCurrent ? '*' : ''
-          }`,
-          x + 12,
-          ly
-        );
+        const label = `${active ? '▶' : ' '} ${side === 0 ? 'A' : 'B'}: Timeline ${timeline?.number ?? branchIndex + 1}${
+          branch?.isCurrent ? '*' : ''
+        }`;
+        ctx.fillText(label, x + 12, ly);
+        // Row = the side (←/→); a click picks the side and asks for the year (Enter).
+        this._addHit({ key: `map:side:${side}`, x: x + 8, y: ly - 2, w: Math.max(160, ctx.measureText(label).width + 8), h: 11,
+          hover: () => { this.mapCompareActive = side; },
+          activate: () => { this.mapCompareActive = side; void this.promptMapCompareYear(game); return undefined; } });
         ly += 11;
       });
       return;
@@ -961,6 +1295,9 @@ export class PauseMenu {
       const btnX = x + 10;
       const btnW = boxW - 20;
       const btnH = 36;
+      this._addHit({ key: 'map:compare', x: btnX, y: ly - 2, w: btnW, h: btnH,
+        hover: () => { this.mapFocus = 'compare'; this.syncMapSelection(game); },
+        activate: (g) => { this.mapFocus = 'compare'; return this.activateMapFocus(g); } });
       ctx.fillStyle = focused ? 'rgba(200,160,80,0.2)' : 'rgba(0,0,0,0.25)';
       ctx.fillRect(btnX, ly - 2, btnW, btnH);
       ctx.strokeStyle = focused ? PALETTE.gold : '#555';

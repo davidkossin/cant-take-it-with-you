@@ -1,14 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { household } from './fixtures.js';
-import { projectMonteCarlo, forecastKey, createForecast, addForecastPaths, finishForecast } from '../js/finance/Forecast.js';
-import { projectJourney, HALLWAY_PATHS } from '../js/finance/Journey.js';
-import { projectYears, computeWorth } from '../js/finance/Engine.js';
+import { projectMonteCarlo, forecastKey, createForecast, addForecastPaths, finishForecast, selectHallwayPath } from '../js/finance/Forecast.js';
+import { projectJourney, HALLWAY_PATHS, HALLWAY_SELECTION, isCurrentJourneyScenario } from '../js/finance/Journey.js';
+import { projectYears, computeWorth, setRetirementWithdrawalPlan, FUNDING_RULE } from '../js/finance/Engine.js';
 import { createDefaultSetup, createGameFromSetup, currentNode, enterYearRoom, commitRoomDecisions,
   jumpToHallwayNode } from '../js/state/GameState.js';
 import { migrateGame } from '../js/finance/Schema.js';
 import { autoSave, loadSave, listSaves } from '../js/state/SaveSystem.js';
-import { HallwayScene } from '../js/scenes/HallwayScene.js';
+import { HallwayScene, glassWallMessage } from '../js/scenes/HallwayScene.js';
+import { firstWallHeadline } from '../js/scenes/PauseMenu.js';
+import { buildDecisionRoom } from '../js/render/World.js';
 import { virtualStick } from '../js/input/VirtualPad.js';
 
 function invested(overrides = {}) {
@@ -18,11 +20,15 @@ function invested(overrides = {}) {
   return p;
 }
 
-test('Hallway selects a complete path nearest the terminal median, with gains and losses', () => {
+test('Hallway with no glass wall on any path takes the ending net worth nearest the median, with gains and losses', () => {
   const p = invested(), before = JSON.stringify(p);
   const acc = createForecast(p, { seed: 77 });
   addForecastPaths(acc, HALLWAY_PATHS);
   const f = finishForecast(acc), j = projectJourney(p, f.scenario);
+  assert.equal(f.scenario.selection, HALLWAY_SELECTION);
+  assert.equal(f.scenario.fundingRule, FUNDING_RULE);
+  assert.equal(f.scenario.selectionMedianWallYear, null);
+  assert.equal(f.firstWall.p50, null);
   const chosen = acc.terminalPaths.find(r => r.simulationIndex === f.scenario.simulationIndex);
   const nearest = Math.min(...acc.terminalPaths.map(r => Math.abs(r.netWorth - f.series.at(-1).netWorth.p50)));
   assert.equal(Math.abs(chosen.netWorth - f.series.at(-1).netWorth.p50), nearest);
@@ -39,6 +45,68 @@ test('Hallway selects a complete path nearest the terminal median, with gains an
   assert.notDeepEqual(j.slice(1).map(r => r.worth.exactNetWorth),
     projectYears(p, 20, p.difficulty, { deterministic: true }).map(r => r.worth.exactNetWorth));
   assert.equal(JSON.stringify(p), before);
+});
+
+test('selection takes the median first glass wall, then ending net worth nearest that group\'s median', () => {
+  const paths = [
+    { simulationIndex: 0, netWorth: 100, firstFailureYear: 2030 },
+    { simulationIndex: 1, netWorth: 500, firstFailureYear: null },
+    { simulationIndex: 2, netWorth: 300, firstFailureYear: 2035 },
+    { simulationIndex: 3, netWorth: 200, firstFailureYear: 2035 },
+    { simulationIndex: 4, netWorth: 250, firstFailureYear: 2035 },
+    { simulationIndex: 5, netWorth: 50, firstFailureYear: 2031 },
+  ];
+  const picked = selectHallwayPath(paths);
+  assert.equal(picked.medianWallYear, 2035);
+  assert.equal(picked.terminalMedian, 250);
+  assert.equal(picked.chosen.simulationIndex, 4);
+  // Never-failing paths count as Infinity: a majority of them selects a wall-free path.
+  const mostlyFree = selectHallwayPath([{ simulationIndex: 0, netWorth: 1, firstFailureYear: 2030 },
+    { simulationIndex: 1, netWorth: 9, firstFailureYear: null }, { simulationIndex: 2, netWorth: 5, firstFailureYear: null }]);
+  assert.equal(mostlyFree.medianWallYear, null);
+  assert.equal(mostlyFree.chosen.simulationIndex, 1);
+});
+
+test('the Hallway path\'s first glass wall is the median first wall of the Monte Carlo paths', () => {
+  const p = setRetirementWithdrawalPlan(household({ age: 70, cash: 0, k401Balance: 400000, annualSpending: 30000,
+    employed: false }), { amount: 36000, account: 'traditional' });
+  p.rateOverrides.equityReturn = .065; p.rateOverrides.equityVolatility = .18;
+  const acc = createForecast(p, { seed: 41 });
+  addForecastPaths(acc, 200);
+  const f = finishForecast(acc);
+  const years = acc.terminalPaths.map(r => r.firstFailureYear ?? Infinity).sort((a, b) => a - b);
+  const median = years[Math.ceil(years.length / 2) - 1];
+  assert.ok(new Set(years).size > 2, 'fixture should produce varied wall years');
+  const chosen = acc.terminalPaths.find(r => r.simulationIndex === f.scenario.simulationIndex);
+  assert.equal(chosen.firstFailureYear ?? Infinity, median);
+  assert.equal(f.firstWall.p50?.year ?? Infinity, median);
+  assert.equal(f.scenario.selectionMedianWallYear ?? Infinity, median);
+  const j = projectJourney(p, f.scenario);
+  assert.equal(j.at(-1).state.firstFailureYear ?? Infinity, median);
+});
+
+test('saved Hallway paths from an older selection or funding rule are dropped on load', () => {
+  const p = household({ age: 98 }), f = projectMonteCarlo(p, { paths: 10 });
+  assert.ok(isCurrentJourneyScenario(f.scenario));
+  const g = { portfolio: p, hallwayScenario: f.scenario };
+  assert.deepEqual(migrateGame(g).hallwayScenario, f.scenario);
+  const old = { ...f.scenario, selection: 'nearest-terminal-median' };
+  delete old.fundingRule;
+  assert.equal(migrateGame({ portfolio: p, hallwayScenario: old }).hallwayScenario, null);
+});
+
+test('glass wall, Bank teller and Charts headline describe cash-only funding', () => {
+  const text = glassWallMessage(2040);
+  assert.ok(text.startsWith("Not enough Cash to pay 2040's bills — enter a Decision Room to raise cash."));
+  assert.ok(!/≤|<= ?0/.test(text));
+  const bank = buildDecisionRoom().interactables.find(o => o.action === 'bank');
+  assert.equal(bank.kind, 'teller');
+  assert.equal(bank.wallSide, 'north');
+  assert.equal(bank.label, 'Bank: Move Money');
+  assert.equal(firstWallHeadline({ p10: { year: 2036, age: 40 }, p50: { year: 2039, age: 43 }, p90: null }),
+    'First glass wall · median 2039 (age 43) · P10–P90 2036–none');
+  assert.equal(firstWallHeadline({ p10: null, p50: null, p90: null }),
+    'First glass wall · median no wall by age 100 · P10–P90 none–none');
 });
 
 test('failed paths remain eligible and an unfunded Hallway is not resampled', () => {

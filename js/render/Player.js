@@ -22,6 +22,37 @@ export function hairWhiteAmount(age) {
   return Math.max(0, Math.min(1, (n - 50) / 50));
 }
 
+/**
+ * Blit a small pixel-art sprite so every source pixel lands on a whole
+ * block of frame pixels: nearest-neighbor, integer scale, and a draw origin
+ * snapped to the frame (device) pixel grid. Only the drawn position is
+ * snapped; the caller's world x/y stay fractional, so movement keeps its
+ * sub-pixel feel. Smoothing is scoped to this call, so the painted hi-res
+ * environment (drawn with smoothing on) is untouched.
+ * @param {CanvasRenderingContext2D} ctx current transform maps world → frame
+ * @param {HTMLCanvasElement} spr
+ * @param {number} wx world-space left
+ * @param {number} wy world-space top
+ */
+export function drawCrispSprite(ctx, spr, wx, wy) {
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  const m = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null;
+  if (m && m.b === 0 && m.c === 0 && m.a > 0 && m.d > 0) {
+    // Camera offsets are fractional (the hallway camera tracks the player),
+    // so map to frame pixels first, then round once.
+    const sx = Math.max(1, Math.round(m.a));
+    const sy = Math.max(1, Math.round(m.d));
+    const dx = Math.round(m.a * wx + m.e);
+    const dy = Math.round(m.d * wy + m.f);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(spr, dx, dy, spr.width * sx, spr.height * sy);
+  } else {
+    ctx.drawImage(spr, Math.round(wx), Math.round(wy));
+  }
+  ctx.restore();
+}
+
 export class Player {
   constructor(x, y, { speed = 1.35 } = {}) {
     this.x = x;
@@ -154,7 +185,7 @@ export class Player {
       this.facing,
       this.moving ? this.frame : -1
     );
-    ctx.drawImage(spr, Math.round(this.x - 2), Math.round(this.y - 12));
+    drawCrispSprite(ctx, spr, this.x - 2, this.y - 12);
   }
 
   center() {
