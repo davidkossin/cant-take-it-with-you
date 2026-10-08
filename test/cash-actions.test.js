@@ -37,11 +37,12 @@ test('Bank teller one-time 401(k) withdrawal asks before an early penalty', asyn
   const declined = scriptedDialog(['withdraw', 'traditional', false, null]);
   await new RoomScene().handleTeller(g, declined, 'bank');
   assert.equal(g.portfolio.k401Balance, 50000);
-  const accepted = scriptedDialog(['withdraw', 'traditional', true, 10000, null]);
+  const accepted = scriptedDialog(['withdraw', 'traditional', true, 'gross', 10000, true, null]);
   await new RoomScene().handleTeller(g, accepted, 'bank');
-  assert.equal(g.portfolio.cash, 10000);
+  assert.equal(g.portfolio.cash, 9000);
   assert.equal(g.portfolio.k401Balance, 40000);
   assert.equal(g.portfolio.taxRecord.penalties, 1000);
+  assert.equal(g.portfolio.taxRecord.taxPaid, 1000);
 });
 
 test('Bank teller sets and stops a standing yearly withdrawal', async () => {

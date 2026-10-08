@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ForecastClient } from '../js/finance/ForecastClient.js';
 import { household } from './fixtures.js';
-import { projectMonteCarlo } from '../js/finance/Forecast.js';
+import { projectMonteCarlo, createForecast, addForecastPaths, finishForecast } from '../js/finance/Forecast.js';
 import { createDefaultSetup, createGameFromSetup } from '../js/state/GameState.js';
 import { HallwayScene } from '../js/scenes/HallwayScene.js';
 import { PauseMenu } from '../js/scenes/PauseMenu.js';
@@ -111,9 +111,11 @@ test('Pause Charts share the in-flight Hallway run, then reuse its cached result
     pause.forecastPaths = 1000; draw();
     assert.equal(workers[1].terminated, true);
     assert.equal(workers.length, 2);
-    assert.equal(pause.forecast.result, result);
+    assert.deepEqual(pause.chartForecast, JSON.parse(JSON.stringify(result)));
 
-    // Changed model inputs (a decision) do rerun.
+    // A Decision Room preview uses live inputs; archived Hallway inputs stay immutable.
+    g.scene = 'room';
+    g.timeline.nodes[g.timeline.currentNodeId] = { ...g.timeline.nodes[g.timeline.currentNodeId], type: 'room' };
     g.portfolio = { ...g.portfolio, annualSpending: 1000 }; draw();
     assert.equal(workers.length, 3);
   } finally { pause.hide(); hallway.leave(); restore(); }
@@ -134,4 +136,75 @@ test('clients sharing a run: only the last subscriber cancel terminates the work
     b.request(p, 1000);
     assert.equal(workers.length, 2);
   } finally { a.cancel(); b.cancel(); restore(); }
+});
+
+test('editing live inputs during a worker run cannot cache the old result under the new inputs', () => {
+  const { workers, restore } = stubWorkers();
+  const p = household({ age: 99, simulationSeed: 9198123 }), a = new ForecastClient(), b = new ForecastClient();
+  const scenario = { version: 1, seed: p.simulationSeed, simulationIndex: 3, originYear: p.year };
+  try {
+    a.request(p, 50);
+    const originalCash = p.cash;
+    p.cash += 12345;
+    assert.equal(workers[0].message.portfolio.cash, originalCash, 'Worker/cache inputs remain immutable');
+    const result = { count: 50, scenario };
+    workers[0].onmessage({ data: { type: 'result', result } });
+    b.request(p, 50, scenario);
+    assert.equal(workers.length, 2, 'Changed inputs require a new run despite the pinned scenario');
+    assert.equal(b.result, null);
+    assert.equal(workers[1].message.portfolio.cash, p.cash);
+  } finally { a.cancel(); b.cancel(); restore(); }
+});
+
+test('force refresh on the same client bypasses its finished result and cache', () => {
+  const { workers, restore } = stubWorkers();
+  const p = household({ age: 99, simulationSeed: 9198124 }), client = new ForecastClient();
+  try {
+    client.request(p, 25);
+    workers[0].onmessage({ data: { type: 'result', result: { count: 25 } } });
+    client.request(p, 25, null, { force: true });
+    assert.equal(workers.length, 2);
+    assert.equal(client.result, null);
+  } finally { client.cancel(); restore(); }
+});
+
+test('a worker whose initial message fails is terminated and reports a recoverable error', () => {
+  const previous = globalThis.Worker;
+  let worker;
+  globalThis.Worker = class {
+    constructor() { worker = this; }
+    postMessage() { throw new Error('Clone failed'); }
+    terminate() { this.terminated = true; }
+  };
+  try {
+    const client = new ForecastClient();
+    client.request(household({ simulationSeed: 9198125 }), 25);
+    assert.equal(worker.terminated, true);
+    assert.match(client.error, /could not start/);
+    assert.equal(client.worker, null);
+  } finally {
+    if (previous === undefined) delete globalThis.Worker; else globalThis.Worker = previous;
+  }
+});
+
+test('Pause Charts render preliminary bands before the played scenario and annual statements exist', () => {
+  browserStubs();
+  const { workers, restore } = stubWorkers();
+  const game = createGameFromSetup({ ...createDefaultSetup(), ...household({ age: 99, simulationSeed: 9198126 }) });
+  const pause = new PauseMenu(), ctx = stubCanvas();
+  const draw = () => pause.drawCharts(ctx, game, 0, 0, 1800, 1000);
+  try {
+    pause.show(game); draw();
+    const acc = createForecast(workers[0].message.portfolio, { paths: 100 });
+    addForecastPaths(acc, 100);
+    const preview = finishForecast(acc, { partial: true });
+    workers[0].onmessage({ data: { type: 'preview', result: preview } });
+    pause.chartYear = 1;
+    assert.doesNotThrow(draw);
+    assert.equal(pause.chartForecast, preview);
+    assert.equal(pause.chartForecast.provisional, true);
+    assert.equal(pause.chartForecast.scenario, null);
+    assert.equal(pause.forecast.result, null);
+    assert.deepEqual(game.timeline.forecasts, {}, 'Preliminary bands never archive a gameplay forecast');
+  } finally { pause.hide(); restore(); }
 });

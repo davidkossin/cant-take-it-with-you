@@ -1,12 +1,8 @@
 import { PALETTE, FRAME_W, FRAME_H, HUD_H } from '../config.js';
 import { computeWorth } from '../finance/Engine.js';
 import { makeHudIcon, makeHudBox } from './Assets.js';
-
-function money(n) {
-  const v = Math.round(n || 0);
-  const sign = v < 0 ? '-' : '';
-  return sign + '$' + Math.abs(v).toLocaleString('en-US');
-}
+import { formatMoneyDisplay } from './Dialog.js';
+import { householdSalary } from '../scenes/FamilyInputs.js';
 
 /**
  * HUD band above the playfield (not overlaid on the world).
@@ -22,6 +18,7 @@ export class Hud {
    */
   draw(ctx, portfolio, worthOverride = null) {
     const worth = worthOverride || computeWorth(portfolio);
+    const money = n => formatMoneyDisplay(n, portfolio);
 
     // Opaque LTTP-ish dark band — full width, HUD only
     ctx.imageSmoothingEnabled = false;
@@ -38,7 +35,7 @@ export class Hud {
       { icon: 'year', label: String(portfolio.year), w: 280 },
       { icon: 'bank', label: money(worth.bank), w: 420 },
       { icon: 'portfolio', label: money(worth.portfolio), w: 460 },
-      { icon: 'salary', label: money(portfolio.salary || 0), w: 420 },
+      { icon: 'salary', label: money(householdSalary(portfolio)), w: 420 },
     ];
     const total = clusters.reduce((s, c) => s + c.w, 0) + gap * (clusters.length - 1);
     let x = Math.floor((FRAME_W - total) / 2);
@@ -61,6 +58,15 @@ export class Hud {
     }
 
     const kids = portfolio.kids || [];
+    let familyX = clusters[0].x;
+    const familyY = y + boxH + 10;
+    if (portfolio.married) {
+      ctx.font = '18px "Press Start 2P", monospace';
+      ctx.fillStyle = '#dbc69c';
+      const spouse = `${(portfolio.spouseName || 'Spouse').slice(0, 18)} ${portfolio.spouseAge ?? '?'}`;
+      ctx.fillText(spouse, familyX, familyY);
+      familyX += ctx.measureText(spouse).width + 28;
+    }
     if (kids.length) {
       ctx.font = '14px "Press Start 2P", monospace';
       ctx.fillStyle = '#a89878';
@@ -68,7 +74,7 @@ export class Hud {
         .slice(0, 6)
         .map((k) => `${(k.name || '?').slice(0, 10)} ${k.age}`)
         .join('  ·  ');
-      ctx.fillText(names, clusters[0].x, y + boxH + 10);
+      ctx.fillText(names, familyX, familyY + (portfolio.married ? 2 : 0));
     }
   }
 }

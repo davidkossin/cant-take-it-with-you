@@ -92,11 +92,14 @@ export class Player {
     };
     target.addEventListener('keydown', this._kd);
     target.addEventListener('keyup', this._ku);
+    this._blur = () => this.clearKeys();
+    target.addEventListener('blur', this._blur);
   }
 
   unbindInput(target = window) {
     if (this._kd) target.removeEventListener('keydown', this._kd);
     if (this._ku) target.removeEventListener('keyup', this._ku);
+    if (this._blur) target.removeEventListener('blur', this._blur);
   }
 
   clearKeys() {

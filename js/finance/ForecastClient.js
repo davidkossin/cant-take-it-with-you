@@ -1,5 +1,6 @@
 import { forecastKey } from './Forecast.js';
 import { isJourneyScenario } from './Journey.js';
+import { copy } from './Books.js';
 
 const CACHE_LIMIT=8;
 /** Finished forecasts shared by every client (Hallway, Pause → Charts), keyed on model inputs + paths + scenario. */
@@ -24,15 +25,18 @@ function recall(key) {
 function storeResult(run,result) {
   remember(run.key,result);
   if (run.scenario==null && isJourneyScenario(result?.scenario))
-    remember(forecastKey(run.portfolio,run.paths,result.scenario),result);
+    remember(forecastKey(run.portfolio,run.paths,result.scenario,run.options),result);
 }
 function closeRun(run) {
   run.closed=true; run.worker?.terminate();
   if (runs.get(run.key)===run) runs.delete(run.key);
   run.subscribers.clear();
 }
-function startRun(key,portfolio,paths,scenario) {
-  const run={key,portfolio,paths,scenario,worker:null,progress:0,subscribers:new Set(),closed:false};
+function startRun(key,portfolio,paths,scenario,options) {
+  // The player can edit the live portfolio while this worker is running. Keep
+  // cache aliases tied to the inputs actually sent, rather than those edits.
+  portfolio=copy(portfolio); scenario=scenario==null?null:copy(scenario);
+  const run={key,portfolio,paths,scenario,options,worker:null,progress:0,preview:null,subscribers:new Set(),closed:false};
   run.worker=new Worker(new URL('./forecast-worker.js',import.meta.url),{type:'module'});
   const worker=run.worker;
   const live=()=>!run.closed && run.worker===worker;
@@ -42,6 +46,10 @@ function startRun(key,portfolio,paths,scenario) {
       run.progress=data.completed/data.total;
       for (const c of run.subscribers) c.progress=run.progress;
     }
+    if (data.type==='preview') {
+      run.preview=data.result;
+      for (const c of run.subscribers) c.preview=run.preview;
+    }
     if (data.type==='error') fail(run,data.message);
     if (data.type==='result') {
       storeResult(run,data.result);
@@ -50,7 +58,9 @@ function startRun(key,portfolio,paths,scenario) {
     }
   };
   worker.onerror=()=>{ if (live()) fail(run,'Forecast could not run. Reload and try again.'); };
-  worker.postMessage({portfolio,paths,seed:scenario?.seed ?? portfolio.simulationSeed ?? 20261004,scenario});
+  try {
+    worker.postMessage({portfolio,paths,seed:scenario?.seed ?? portfolio.simulationSeed ?? 20261004,scenario,options});
+  } catch (error) { closeRun(run); throw error; }
   runs.set(key,run);
   return run;
 }
@@ -65,21 +75,26 @@ function fail(run,message) {
  * terminated only when its last subscriber cancels.
  */
 export class ForecastClient {
-  constructor() { this.worker=null; this.run=null; this.key=null; this.result=null; this.progress=0; this.error=null; }
-  request(portfolio,paths=1000,scenario=null) {
-    const key=forecastKey(portfolio,paths,scenario);
-    if (key===this.key && (this.run || this.result || this.error)) return;
-    this.cancel(); this.key=key; this.progress=0; this.error=null; this.result=recall(key);
+  constructor() { this.worker=null; this.run=null; this.key=null; this.result=null; this.preview=null; this.progress=0; this.error=null; }
+  request(portfolio,paths=1000,scenario=null,options={}) {
+    paths=Math.max(1,Math.min(20000,Math.round(Number(paths) || 1000)));
+    const key=forecastKey(portfolio,paths,scenario,options);
+    if (!options.force && key===this.key && (this.run || this.result || this.error)) return;
+    this.cancel(); this.key=key; this.progress=0; this.error=null; this.preview=null;
+    this.result=options.force ? null : recall(key);
     if (this.result) { this.progress=1; return; }
     let run=runs.get(key);
     if (!run) {
       if (typeof Worker==='undefined') { this.error='Forecast workers are unavailable in this browser.'; return; }
-      try { run=startRun(key,portfolio,paths,scenario); }
+      try { run=startRun(key,portfolio,paths,scenario,{revision:options.revision ?? null,
+        originYear:options.originYear ?? portfolio.year}); }
       catch { this.error='Forecast could not start. Reload and try again.'; return; }
     }
-    run.subscribers.add(this); this.run=run; this.worker=run.worker; this.progress=run.progress;
+    run.subscribers.add(this); this.run=run; this.worker=run.worker; this.progress=run.progress; this.preview=run.preview;
   }
-  retry(portfolio,paths=1000,scenario=null) { this.cancel(); this.key=null; this.request(portfolio,paths,scenario); }
+  retry(portfolio,paths=1000,scenario=null,options={}) {
+    this.cancel(); this.key=null; this.request(portfolio,paths,scenario,{...options,force:true});
+  }
   /** Detach from the shared run; terminate the worker only if no other client still awaits it. */
   cancel() {
     const run=this.run; this.run=null; this.worker=null;
@@ -88,7 +103,7 @@ export class ForecastClient {
     if (!run.subscribers.size) closeRun(run);
   }
   _settle(result,error) {
-    this.run=null; this.worker=null; this.result=result; this.error=error;
+    this.run=null; this.worker=null; this.result=result; this.preview=null; this.error=error;
     if (result) this.progress=1;
   }
 }

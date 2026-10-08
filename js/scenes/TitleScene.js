@@ -1,5 +1,6 @@
 import { PALETTE, FRAME_W, FRAME_H, TILE, WORLD_SCALE } from '../config.js';
-import { deleteSave, hasSaves, listSaves, loadSave } from '../state/SaveSystem.js';
+import { autoSave, deleteSave, flushSaves, getSaveStatus, hasSaves, listSaves, loadSave, loadStoredRecord } from '../state/SaveSystem.js';
+import { downloadPlan, pickPlanFile } from '../state/PlanExport.js';
 import {
   deleteProfile,
   hasProfiles,
@@ -46,8 +47,8 @@ export class TitleScene {
       opts.push({ label: 'Create a Profile', value: 'createProfile' });
       if (hasSaves()) {
         opts.push({ label: 'Load Game', value: 'load' });
-        opts.push({ label: 'Manage Saves', value: 'manage' });
       }
+      opts.push({ label: 'Manage Saves / Import Plan', value: 'manage' });
       if (hasProfiles()) {
         opts.push({ label: 'Manage Profiles', value: 'manageProfiles' });
       }
@@ -79,7 +80,7 @@ export class TitleScene {
       }
       if (choice === 'help') {
         await dialog.show(
-          'WASD / Arrows move. Enter / Z / E talk. Esc opens Map/Charts (jump timelines). Walk the Hallway of Time — doors start the year after you leave. Wall windows change your portfolio. Auto-saves in localStorage.',
+          'WASD / Arrows move. Enter / Z / E talk. Esc opens Map/Charts (jump timelines). Walk the Hallway of Time — doors start the year after you leave. Wall windows change your portfolio. Auto-saves use this browser’s storage. Export JSON backups to keep portable copies of your complete plan.',
           { title: 'How to Play' }
         );
         continue;
@@ -98,17 +99,7 @@ export class TitleScene {
           await dialog.show('No saves found.', { title: 'Load Game' });
           continue;
         }
-        const pick = await dialog.menu(
-          'Choose a save:',
-          [
-            ...saves.slice(0, MAX_VISIBLE_SAVES).map((s) => ({
-              label: saveIdentification(s),
-              value: s.id,
-            })),
-            { label: 'Cancel', value: null },
-          ],
-          { title: 'Load Game' }
-        );
+        const pick = await this.chooseEntry(dialog, saves, 'Load Game', saveIdentification, MAX_VISIBLE_SAVES);
         if (!pick) continue;
         const loaded = loadSave(pick);
         if (!loaded) {
@@ -174,8 +165,13 @@ export class TitleScene {
       const setupAnswers = await this.setupScene.run(dialog, { mode: 'profile' });
       if (!setupAnswers) return;
       const entry = saveProfile(setupAnswers);
+      if (!entry) {
+        await dialog.show(getSaveStatus().message, { title: 'Profile could not be saved' });
+        return;
+      }
+      const saved = await flushSaves();
       await dialog.show(
-        `Profile created.\n${profileIdentification(entry)}`,
+        `${saved.state === 'saved' ? 'Profile saved.' : 'Profile available in this session.'}\n${profileIdentification(entry)}${saved.state === 'error' ? '\n' + saved.message : ''}`,
         { title: 'Create a Profile' }
       );
     } finally {
@@ -193,17 +189,7 @@ export class TitleScene {
       await dialog.show('No profiles found.', { title: 'Use Profile' });
       return null;
     }
-    const pick = await dialog.menu(
-      'Choose a profile:',
-      [
-        ...profiles.slice(0, MAX_VISIBLE_PROFILES).map((p) => ({
-          label: profileIdentification(p),
-          value: p.id,
-        })),
-        { label: 'Cancel', value: null },
-      ],
-      { title: 'Use Profile' }
-    );
+    const pick = await this.chooseEntry(dialog, profiles, 'Use Profile', profileIdentification, MAX_VISIBLE_PROFILES);
     if (!pick) return null;
     const setup = loadProfile(pick);
     if (!setup) {
@@ -307,17 +293,7 @@ export class TitleScene {
         return;
       }
 
-      const pick = await dialog.menu(
-        'Choose a profile to delete:',
-        [
-          ...profiles.slice(0, MAX_VISIBLE_PROFILES).map((p) => ({
-            label: profileIdentification(p),
-            value: p.id,
-          })),
-          { label: 'Back', value: null },
-        ],
-        { title: 'Manage Profiles' }
-      );
+      const pick = await this.chooseEntry(dialog, profiles, 'Manage Profiles', profileIdentification, MAX_VISIBLE_PROFILES);
       if (!pick) return;
 
       const profile = profiles.find((p) => p.id === pick);
@@ -335,7 +311,8 @@ export class TitleScene {
       if (!confirmed) continue;
 
       deleteProfile(profile.id);
-      await dialog.show('Profile deleted.', { title: 'Manage Profiles' });
+      const saved = await flushSaves();
+      await dialog.show(saved.state === 'saved' ? 'Profile deleted.' : saved.message, { title: 'Manage Profiles' });
       if (!hasProfiles()) {
         await dialog.show('No profiles found.', { title: 'Manage Profiles' });
         return;
@@ -344,32 +321,51 @@ export class TitleScene {
   }
 
   async manageSaves(dialog) {
+    let offset = 0;
     while (true) {
-      // Read the list on every pass so the menu reflects deletions immediately.
       const saves = listSaves();
-      if (!saves.length) {
-        await dialog.show('No saves found.', { title: 'Manage Saves' });
-        return;
-      }
-
+      offset = Math.min(offset, Math.max(0, Math.floor((saves.length - 1) / MAX_VISIBLE_SAVES) * MAX_VISIBLE_SAVES));
+      const options = saves.slice(offset, offset + MAX_VISIBLE_SAVES).map(save => ({ label: saveIdentification(save), value: save.id }));
+      if (offset) options.push({ label: 'Previous saves', value: '__previous' });
+      if (offset + MAX_VISIBLE_SAVES < saves.length) options.push({ label: 'More saves', value: '__next' });
+      options.push({ label: 'Import plan JSON', value: '__import' }, { label: 'Back', value: null });
+      const status = getSaveStatus();
       const pick = await dialog.menu(
-        'Choose a save to delete:',
-        [
-          ...saves.slice(0, MAX_VISIBLE_SAVES).map((s) => ({
-            label: saveIdentification(s),
-            value: s.id,
-          })),
-          { label: 'Back', value: null },
-        ],
+        `${saves.length ? 'Choose a checkpoint to export or delete.' : 'No saves yet. Import a complete plan backup.'}\n${status.message}`,
+        options,
         { title: 'Manage Saves' }
       );
       if (!pick) return;
-
-      // Resolve the selected entry from the current list before confirming;
-      // this keeps the confirmation text tied to the id being deleted.
+      if (pick === '__previous') { offset = Math.max(0, offset - MAX_VISIBLE_SAVES); continue; }
+      if (pick === '__next') { offset += MAX_VISIBLE_SAVES; continue; }
+      if (pick === '__import') {
+        try {
+          const imported = await pickPlanFile();
+          if (!imported) continue;
+          const entry = autoSave(imported.game, 'import');
+          const saved = await flushSaves();
+          await dialog.show(`${entry ? 'Plan imported. Choose Load Game to continue.' : 'Import could not be saved.'}\n${saved.state === 'saved' ? 'Saved on this browser.' : saved.message}${imported.warnings.length ? '\n' + imported.warnings.join('\n') : ''}`, { title: 'Import Plan' });
+          offset = 0;
+        } catch (error) { await dialog.show(error.message || 'This plan file could not be imported.', { title: 'Import Plan' }); }
+        continue;
+      }
       const save = saves.find((s) => s.id === pick);
       if (!save) continue;
-
+      const action = await dialog.menu(saveIdentification(save), [
+        { label: 'Export complete plan JSON', value: 'export' },
+        { label: 'Delete checkpoint', value: 'delete' },
+        { label: 'Back', value: null },
+      ], { title: 'Manage Saves' });
+      if (action === 'export') {
+        try {
+          const game = loadStoredRecord('save', save.id);
+          if (!game) throw new Error('This checkpoint could not be read.');
+          downloadPlan(game);
+          await dialog.show('JSON backup exported. It contains financial inputs, all saved timelines, assumptions and settings.', { title: 'Export Plan' });
+        } catch (error) { await dialog.show(error.message || 'Export failed.', { title: 'Export Plan' }); }
+        continue;
+      }
+      if (action !== 'delete') continue;
       const confirmed = await dialog.menu(
         `Delete ${saveIdentification(save)}?`,
         [
@@ -380,13 +376,23 @@ export class TitleScene {
         { title: 'Manage Saves', selected: 1 }
       );
       if (!confirmed) continue;
-
       deleteSave(save.id);
-      await dialog.show('Save deleted.', { title: 'Manage Saves' });
-      if (!hasSaves()) {
-        await dialog.show('No saves found.', { title: 'Manage Saves' });
-        return;
-      }
+      const saved = await flushSaves();
+      await dialog.show(saved.state === 'saved' ? 'Checkpoint deleted.' : saved.message, { title: 'Manage Saves' });
+    }
+  }
+
+  async chooseEntry(dialog, entries, title, identify, pageSize) {
+    let offset = 0;
+    while (true) {
+      const options = entries.slice(offset, offset + pageSize).map(entry => ({ label: identify(entry), value: entry.id }));
+      if (offset) options.push({ label: 'Previous', value: '__previous' });
+      if (offset + pageSize < entries.length) options.push({ label: 'More', value: '__next' });
+      options.push({ label: 'Cancel', value: null });
+      const pick = await dialog.menu('Choose an entry:', options, { title });
+      if (pick === '__previous') { offset = Math.max(0, offset - pageSize); continue; }
+      if (pick === '__next') { offset += pageSize; continue; }
+      return pick;
     }
   }
 

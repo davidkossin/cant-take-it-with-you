@@ -10,6 +10,25 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-08
+
+### Added
+- Separate spouse identity, age, wages, retirement timing, 401(k), Roth, Social Security and pension inputs. Family setup follows Difficulty; the HUD lists the spouse before children. Older household wage inputs require the player to split or confirm ownership.
+- Family teller with marriage, children and scheduled nanny/daycare costs. Cash and Savings remain household checking/savings accounts.
+- Inflation Adjustment in Setup and Pause → Settings: On shows original setup-year buying power; Off shows nominal dollars for the displayed year. Inputs convert back to the appropriate stored basis; inflation remains active in both modes.
+- Bank withdrawal choices for a gross amount or a net spendable-Cash target, with bounded tax gross-up and year-end credit for prepaid tax.
+- Numeric timelines, alphabetic decision points, year navigation, saved original forecasts and selected paths, and a three-chart comparison with a shared overlay and legend. A new north-door departure runs a fresh forecast using the same seeded calendar-year economic samples.
+- IndexedDB checkpoints, visible save failures, portable JSON plan import/export, and forecast exports with CSV data, exact inputs and model assumptions.
+
+### Fixed
+- Shared income scheduling for the engine and tax previews, independent spouse retirement/benefit timing, separate contribution caps, and stored dollar bases for benefits/college inputs.
+- Explicit market stress reaches custom holdings through their configured exposure even when random variation is disabled.
+- Duplicate property-tax shortfalls, branch history restoration and Cash-only investment purchases.
+
+### Changed
+- Compact simulation state, typed forecast samples, progressive preliminary bands, bounded static-world rendering caches, visible-year timeline rendering and fixed 60 Hz movement independent of screen refresh rate.
+- Game version 0.7.0; engine 2.2.0. Leaves the Godot export unchanged.
+
 ## [0.6.5] — 2026-10-07
 
 ### Fixed

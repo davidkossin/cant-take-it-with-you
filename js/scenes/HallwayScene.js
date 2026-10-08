@@ -10,11 +10,13 @@ import {
 import { computeWorth, cloneState, findBankInsolvencyIndex } from '../finance/Engine.js';
 import { projectJourney, isCurrentJourneyScenario, HALLWAY_PATHS } from '../finance/Journey.js';
 import { ForecastClient } from '../finance/ForecastClient.js';
+import { currentTimeline, getTimelineForecast, storeTimelineForecast, storeTimelineActualPath, timelineForecastOptions } from '../state/TimelineSystem.js';
 import { currentNode, enterYearRoom, commitHallwayNode, returnToLeftDecisionRoom, completeJourney } from '../state/GameState.js';
 import { autoSave } from '../state/SaveSystem.js';
 import { log as debugLog, setHallwayStash } from '../debug/Logger.js';
 import { virtualStick } from '../input/VirtualPad.js';
 import { drawFutureSplash, SPLASH_FADE_MS } from '../render/FutureSplash.js';
+import { financialEventMessages } from '../render/FinancialMessages.js';
 
 const nowMs = () => globalThis.performance?.now?.() ?? Date.now();
 
@@ -49,6 +51,11 @@ export class HallwayScene {
   }
 
   enter(game) {
+    // A map visit requests a location, never a different portfolio baseline.
+    // Consume immediately so a subsequent Decision Room cannot inherit it.
+    this.mapJumpYear = game.timeline.mapJumpYear ?? null;
+    delete game.timeline.mapJumpYear;
+    this.mapJumpNotice = null;
     const node = currentNode(game);
     // Prefer committed end-of-room baseline; fall back to live portfolio
     this.baseline = node?.baseline
@@ -58,8 +65,10 @@ export class HallwayScene {
         : cloneState(game.portfolio);
     this.baseline = cloneState(this.baseline || game.portfolio);
 
-    // Sync portfolio to baseline when entering hallway
+    // Display preferences follow the player while saved economic inputs remain immutable.
+    const inflationAdjusted = game.settings?.inflationAdjusted ?? game.portfolio.inflationAdjusted;
     game.portfolio = cloneState(this.baseline);
+    game.portfolio.inflationAdjusted = inflationAdjusted !== false;
 
     this.leaveYear = this.baseline.year;
     this.leaveAge = this.baseline.age;
@@ -95,25 +104,42 @@ export class HallwayScene {
     this.setInputBlocked(true);
     this.splashing = false;
     this.splashFadeStart = null;
-    if (isCurrentJourneyScenario(game.hallwayScenario)) {
-      this._installProjection(game, game.hallwayScenario);
+    const timeline = currentTimeline(game);
+    this.forecastOptions = timelineForecastOptions(game);
+    if (getTimelineForecast(game, timeline) && timeline.scenario) {
+      this._installProjection(game, timeline.scenario);
+    } else if (isCurrentJourneyScenario(timeline?.scenario)) {
+      // Legacy saves can replay their chosen path, even without an old ensemble.
+      this._installProjection(game, timeline.scenario);
     } else {
-      this.forecast.request(this.baseline, HALLWAY_PATHS);
-      if (this.forecast.result) this._installProjection(game, this.forecast.result.scenario);
+      this.forecast.request(this.baseline, HALLWAY_PATHS, null, { ...this.forecastOptions, force: true });
+      if (this.forecast.result) this._installProjection(game, this.forecast.result.scenario, this.forecast.result);
       else autoSave(game, 'end');
     }
     // Saved path or cached forecast: straight into the Hallway, no splash.
     this.splashing = !this.ready;
   }
 
-  _installProjection(game, scenario) {
-    this.snapshots = projectJourney(this.baseline, scenario);
+  _installProjection(game, scenario, result = null) {
+    if (result) storeTimelineForecast(game, result);
+    const timeline = currentTimeline(game);
+    if (timeline && !timeline.scenario) timeline.scenario = cloneState(scenario);
+    const savedPath = game.timeline.actualPaths?.[timeline?.actualPathId];
+    this.snapshots = savedPath ? cloneState(savedPath) : projectJourney(this.baseline, scenario, { compact: true });
+    if (!savedPath) {
+      storeTimelineActualPath(game, this.snapshots);
+      this.snapshots = cloneState(game.timeline.actualPaths[timeline.actualPathId]);
+    }
+    for (const snapshot of this.snapshots) {
+      if (snapshot.statement) snapshot.state.lastStatement = snapshot.statement;
+    }
     // Keep the scenario outside portfolio snapshots so rewinding cannot reroll the future.
     game.hallwayScenario = cloneState(scenario);
     this.eventAuras = buildEventAuras(this.world, this.snapshots, this.leaveYear);
     this.eventBanner = null;
     this.visual = this.snapshots[0];
     this.glassWall = buildGlassWall(this.world, this.snapshots);
+    this._restoreMapPosition();
     {
       const g = this.glassWall;
       const cashAtYears = this.snapshots.slice(0, 12).map((s, i) => ({
@@ -186,6 +212,29 @@ export class HallwayScene {
     this.forecast.cancel();
   }
 
+  _restoreMapPosition() {
+    if (!Number.isFinite(this.mapJumpYear)) return;
+    const requested = Math.max(0, Math.min(this.snapshots.length - 1, Math.round(this.mapJumpYear - this.leaveYear)));
+    // Inspection may include an unfunded future, but a map jump must not bypass
+    // the bill-funding barrier. The selected year remains selected in Charts.
+    const lastSafe = this.glassWall ? Math.max(0, this.glassWall.yearIndex - 1) : this.snapshots.length - 1;
+    const index = Math.min(requested, lastSafe);
+    if (index > 0 && index < this.snapshots.length - 1) {
+      const door = this.world.doors[index - 1];
+      if (door) this.player.y = door.y + (door.h - this.player.h) / 2;
+    } else if (index === this.snapshots.length - 1) {
+      const door = this.world.interactables.find(obj => obj.kind === 'end-door');
+      if (door) this.player.y = door.y + door.h + 3;
+    }
+    this.player.facing = 'up';
+    this.visual = this.snapshots[index];
+    if (index !== requested) {
+      this.mapJumpNotice = `Raise Cash in ${this.snapshots[index].state.year} first · selected future remains available in Charts`;
+      this.eventBanner = this.mapJumpNotice;
+    }
+    this.mapJumpYear = null;
+  }
+
   setInputBlocked(blocked) {
     if (!this.player) return;
     blocked = blocked || !this.ready;
@@ -201,7 +250,7 @@ export class HallwayScene {
   update(game, dialog) {
     this.animTime += 1;
     if (!this.ready) {
-      if (this.forecast.result) this._installProjection(game, this.forecast.result.scenario);
+      if (this.forecast.result) this._installProjection(game, this.forecast.result.scenario, this.forecast.result);
       else { this.setInputBlocked(true); return; }
     }
     const blocked = !!dialog?.active || this._glassDialogShowing;
@@ -223,9 +272,7 @@ export class HallwayScene {
       this._detectGlassWallBump();
     }
 
-    const progress = this.world.progressAtY(this.player.y);
-    const maxIdx = this.snapshots.length - 1;
-    const idx = Math.max(0, Math.min(maxIdx, Math.floor(progress * maxIdx)));
+    const idx = hallwaySnapshotIndex(this.world, this.player, this.snapshots.length);
     this.visual = this.snapshots[idx];
 
     // Aura portal banner when player crosses an event band
@@ -239,7 +286,9 @@ export class HallwayScene {
         best = aura;
       }
     }
-    this.eventBanner = best ? best.messages.join(' · ') : null;
+    this.eventBanner = best ? [...best.messages, ...financialEventMessages(best.eventDetails, {
+      ...game.portfolio, inflationAdjusted: game.settings?.inflationAdjusted ?? game.portfolio.inflationAdjusted,
+    })].join(' · ') : this.animTime < 300 ? this.mapJumpNotice : null;
   }
 
   /**
@@ -335,7 +384,7 @@ export class HallwayScene {
 
   async tryInteract(game, dialog) {
     if (!this.ready) {
-      if (this.forecast.error) this.forecast.retry(this.baseline, HALLWAY_PATHS);
+      if (this.forecast.error) this.forecast.retry(this.baseline, HALLWAY_PATHS, null, this.forecastOptions);
       return null;
     }
     if (this._canInteractGlassWall()) {
@@ -354,7 +403,7 @@ export class HallwayScene {
       state.age = obj.age;
 
       const ok = await dialog.confirm(
-        `Enter Decision Room for ${obj.year} (age ${obj.age})?\nContinues your Monte Carlo path; view uncertainty in Pause → Charts.`,
+        `Enter Decision Room for ${obj.year} (age ${obj.age})?\nKeep this timeline for comparison. Leaving this room north generates a new projection.`,
         { title: 'Year Door', yes: 'Enter', no: 'Stay' }
       );
       if (!ok) {
@@ -396,7 +445,7 @@ export class HallwayScene {
         cash: state.cash,
         salary: state.salary,
       });
-      // Same room again — not a year-door split, so no new begin node.
+      // A return is a new decision visit; the previous snapshot stays immutable.
       returnToLeftDecisionRoom(game, state);
       autoSave(game, 'begin');
       this.leave();
@@ -449,14 +498,16 @@ export class HallwayScene {
       this._drawSplash(ctx, 1);
       return;
     }
-    const camX = Math.max(
+    const rawCamX = Math.max(
       0,
       Math.min(this.world.width - VIEW_W, this.player.x + 6 - VIEW_W / 2)
     );
-    const camY = Math.max(
+    const rawCamY = Math.max(
       0,
       Math.min(this.world.height - VIEW_H, this.player.y - VIEW_H / 2)
     );
+    const camX = Math.round(rawCamX * WORLD_SCALE) / WORLD_SCALE;
+    const camY = Math.round(rawCamY * WORLD_SCALE) / WORLD_SCALE;
 
     ctx.save();
     ctx.setTransform(WORLD_SCALE, 0, 0, WORLD_SCALE, 0, HUD_H);
@@ -473,7 +524,10 @@ export class HallwayScene {
 
     const portfolio = this.visual?.state || game.portfolio;
     const worth = this.visual?.worth || computeWorth(portfolio);
-    this.hud.draw(ctx, portfolio, worth);
+    this.hud.draw(ctx, { ...portfolio,
+      inflationAdjusted: game.settings?.inflationAdjusted ?? game.portfolio.inflationAdjusted,
+      dollarBaseYear: game.timeline.startYear,
+    }, worth);
 
     // Life-event banner (playfield bottom); prompt sits just below if both active
     if (this.eventBanner) {
@@ -501,6 +555,18 @@ export class HallwayScene {
   }
 }
 
+/** Match the displayed financial year to the nearby labelled door. */
+export function hallwaySnapshotIndex(world, player, snapshotCount) {
+  const last = Math.max(0, snapshotCount - 1);
+  if (!last) return 0;
+  const center = player.y + player.h / 2;
+  const firstDoor = world.doors?.[0];
+  if (!firstDoor) return center <= (world.endPad || 7) * TILE ? last : 0;
+  const firstCenter = firstDoor.y + firstDoor.h / 2;
+  const index = Math.round((firstCenter - center) / ((world.segment || 5) * TILE)) + 1;
+  return Math.max(0, Math.min(last, index));
+}
+
 /** Major one-shot life/finance events → hallway aura portals. */
 function portalMessages(events) {
   const out = [];
@@ -510,32 +576,34 @@ function portalMessages(events) {
     else if (/^Paid off:/i.test(e)) out.push(e.replace(/\.$/, ''));
     else if (/^Purchased /i.test(e)) out.push(e.replace(/\.$/, ''));
     else if (/^Retired/i.test(e)) out.push('Retired');
+    else if (/ retired$/i.test(e)) out.push(e);
     else if (/goes to college/i.test(e)) out.push(e);
   }
   return out;
 }
 
-function buildEventAuras(world, snapshots, leaveYear) {
+export function buildEventAuras(world, snapshots, leaveYear) {
   const auras = [];
   const foyer = world.foyer || 5;
   const segment = world.segment || 3;
   const rows = world.rows;
   const byYear = new Map();
 
-  const addMsgs = (yearOffset, year, age, msgs) => {
-    if (!msgs?.length) return;
+  const addMsgs = (yearOffset, year, age, msgs, eventDetails = []) => {
+    if (!msgs?.length && !eventDetails.length) return;
     const key = yearOffset;
-    if (!byYear.has(key)) byYear.set(key, { year, age, messages: [] });
+    if (!byYear.has(key)) byYear.set(key, { year, age, messages: [], eventDetails: [] });
     const slot = byYear.get(key);
     for (const m of msgs) {
       if (!slot.messages.includes(m)) slot.messages.push(m);
     }
+    slot.eventDetails.push(...eventDetails);
   };
 
   for (let k = 1; k < snapshots.length; k++) {
     const msgs = portalMessages(snapshots[k].events);
     const st = snapshots[k].state || {};
-    addMsgs(k - 1, st.year, st.age, msgs);
+    addMsgs(k - 1, st.year, st.age, msgs, snapshots[k].statement?.eventDetails || []);
   }
 
   // Named purchases recorded on the leave-year baseline
@@ -561,6 +629,7 @@ function buildEventAuras(world, snapshots, leaveYear) {
       year: slot.year,
       age: slot.age,
       messages: slot.messages,
+      eventDetails: slot.eventDetails,
     });
   }
   return auras;

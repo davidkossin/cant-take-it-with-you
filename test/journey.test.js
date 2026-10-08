@@ -156,7 +156,7 @@ test('Hallway waits for the worker, then persists a path through load, room entr
   browserStubs();
   const p = invested({ age: 96 }), g = createGameFromSetup({ ...createDefaultSetup(), ...p });
   const forecast = { result: null, error: null, progress: 0, calls: [],
-    request(...args) { this.calls.push(args); }, cancel() {} };
+    request(...args) { this.result = null; this.calls.push(args); }, cancel() {} };
   const scene = new HallwayScene({ forecast });
   scene.enter(g);
   try {
@@ -182,13 +182,17 @@ test('Hallway waits for the worker, then persists a path through load, room entr
     enterYearRoom(g, path[2].state, path.slice(1, 3));
     commitRoomDecisions(g);
     scene.leave(); scene.enter(g);
-    assert.deepEqual(scene.snapshots.map(r => r.worth), path.slice(2).map(r => r.worth));
-    assert.equal(forecast.calls.length, 1);
+    assert.equal(scene.ready, false);
+    assert.equal(forecast.calls.length, 2);
+    assert.equal(forecast.calls[1][3].originYear, g.timeline.startYear);
+    forecast.result = projectMonteCarlo(scene.baseline, { paths: HALLWAY_PATHS, ...scene.forecastOptions });
+    scene.update(g, null);
+    assert.equal(scene.ready, true);
     assert.ok(jumpToHallwayNode(g, hallwayId));
     scene.leave(); scene.enter(g);
     assert.deepEqual(g.hallwayScenario, scenario);
     assert.deepEqual(scene.snapshots.map(r => r.worth), path.map(r => r.worth));
-    assert.equal(forecast.calls.length, 1);
+    assert.equal(forecast.calls.length, 2);
     const saved = autoSave(g, 'end');
     assert.deepEqual(loadSave(saved.id).hallwayScenario, scenario);
   } finally { virtualStick.y = 0; scene.leave(); }

@@ -4,7 +4,10 @@
 import { getFederalTable } from '../data/tax-brackets.js';
 import { stateFromZip } from '../data/state-from-zip.js';
 import { emptyIncome, money, nonnegative, copy } from './Books.js';
-import { contributionLimits, rothLimit, monthlyBenefit, benefitEarningsReduction } from './Retirement.js';
+import { rothLimit } from './Retirement.js';
+import { incomeSchedule } from './IncomeSchedule.js';
+import { ownerState } from './Household.js';
+import { projectOneYear } from './Engine.js';
 
 export function federalTaxOn(taxable, table) {
   let tax = 0, previous = 0;
@@ -19,20 +22,11 @@ export function federalTaxOn(taxable, table) {
 export function filingStatus(state) {
   return state.filingStatus === 'married' || state.married ? 'married' : 'single';
 }
-export function employee401kDeferral(state) {
-  if (state.has401k === false || !state.employed || state.retired) return 0;
-  const limits = contributionLimits(state.year, state.age, state.taxInflation ?? .025);
-  // Mandatory Roth catch-up for high earners is excluded until a separate Roth 401(k) account exists.
-  const cap = state.year >= 2026 && state.age >= 50 && (state.priorYearWages ?? state.salary) > 150000
-    ? contributionLimits(state.year,49,state.taxInflation ?? .025).k401 : limits.k401;
-  return money(Math.min(nonnegative(state.salary) * Math.min(1, nonnegative(state.k401ContribRate)), cap));
+export function employee401kDeferral(state, owner='primary') {
+  return incomeSchedule(state).annual[owner==='spouse'?'spouseDeferral':'deferral'];
 }
-export function employer401kMatch(state, deferral) {
-  if (state.has401k === false || !state.employed || state.retired) return 0;
-  const match = Math.min(deferral, nonnegative(state.salary) * nonnegative(state.k401MatchOnFirst))
-    * nonnegative(state.k401MatchRate);
-  return money(Math.min(match, Math.max(0, contributionLimits(state.year, state.age,
-    state.taxInflation ?? .025).employerTotal - deferral)));
+export function employer401kMatch(state, deferral, owner='primary') {
+  return money(incomeSchedule(state).months.reduce((sum,row)=>sum+(row[owner]?.match || 0),0));
 }
 export function rothAnnualContribution(state, magi = nonnegative(state.salary) + nonnegative(state.spouseSalary)) {
   if (state.hasRoth === false) return 0;
@@ -91,17 +85,12 @@ export function stateTaxOn(state, agi, taxableSS, table) {
     note: abbr === 'WA' ? 'WA capital gains tax is not implemented' : 'State tax is an explicit flat-rate approximation' };
 }
 export function projectedIncome(state) {
-  const record = { ...emptyIncome(state.year), ...(state.taxRecord?.year === state.year ? state.taxRecord : {}) };
-  record.wages = state.employed && !state.retired ? nonnegative(state.salary) : 0;
-  record.spouseWages = nonnegative(state.spouseSalary);
-  record.deferral = employee401kDeferral(state);
-  const benefitState = copy(state);
-  const wages = record.wages * Math.min(1,Math.max(0,(state.retirementAge ?? 65)-state.age));
-  record.socialSecurity = 0;
-  for (let month=0;month<12;month++) record.socialSecurity += Math.max(0,monthlyBenefit(benefitState,state.age+month/12,state.priceIndex ?? 1)
-    -benefitEarningsReduction(benefitState,state.age+month/12,wages));
-  record.socialSecurity = money(record.socialSecurity);
-  record.traditionalWithdrawals += nonnegative(state._extraOrdinaryIncome);
+  // Every Engine tax calculation receives an explicit record, so this reference
+  // pass cannot recurse into projectedIncome. It shares all income sources,
+  // including interest, dividends, rental receipts and cash-dependent deductions.
+  const result=projectOneYear(state,state.difficulty,{compact:true,randomVariation:false});
+  const record={...result.statement.income};
+  record.traditionalWithdrawals=money(record.traditionalWithdrawals+nonnegative(state._extraOrdinaryIncome));
   return record;
 }
 export function estimateAnnualTax(state, difficulty = {}, record = null) {
@@ -146,12 +135,20 @@ export function estimateAnnualTax(state, difficulty = {}, record = null) {
   for (const h of state.homes || []) property += h.annualPropertyTax != null
     ? nonnegative(h.annualPropertyTax) : nonnegative(h.assessedValue, h.value) * nonnegative(h.propertyTaxRate, .01);
   const warnings = [];
-  if (state.year >= 2026 && state.age >= 50 && (state.priorYearWages ?? state.salary) > 150000) warnings.push('High-income Roth 401(k) catch-up excluded; regular pre-tax contribution limit used');
-  if (state.employed && state.socialSecurityClaimAge < 67) warnings.push('SSA earnings test uses annual limits; verify first-year rules and later benefit adjustment');
-  if (state.socialSecurityClaimAge && state.birthYear < 1943) warnings.push('Older-cohort delayed retirement credits require verification');
+  for (const owner of ['primary','spouse']) {
+    if (owner === 'spouse' && !married) continue;
+    const p=ownerState(state,owner),prefix=owner==='spouse'?'Spouse: ':'';
+    if (state.year >= 2026 && p.age >= 50 && (p.priorYearWages ?? p.salary) > 150000)
+      warnings.push(prefix+'High-income Roth 401(k) catch-up excluded; regular pre-tax contribution limit used');
+    if (p.employed && p.socialSecurityClaimAge < 67)
+      warnings.push(prefix+'SSA earnings test uses annual limits; verify first-year rules and later benefit adjustment');
+    if (p.socialSecurityClaimAge && p.birthYear < 1943)
+      warnings.push(prefix+'Older-cohort delayed retirement credits require verification');
+  }
   if (table.projected) warnings.push('Future/historical tax thresholds are projections');
   if (stateInfo.approximate) warnings.push(stateInfo.note);
-  if (married && state.spouseSalary == null) warnings.push('Household wage ownership is not specified');
+  if (married && (state.spouseSalary == null || state.salaryOwnershipConfirmed === false)) warnings.push('Household wage ownership is not confirmed');
+  if (married && state.spouseAge == null) warnings.push('Spouse age is unknown; confirm it to model retirement and account access');
   if (state.itemizedDeduction > 0 || state.amtPreferenceIncome > 0) warnings.push('Verify itemized/AMT adjustments externally');
   return { federal, state: stateInfo.tax, payroll, niit, amt, penalties: money(r.penalties),
     property: money(property), total: money(federal + stateInfo.tax + payroll + niit + r.penalties),
@@ -160,12 +157,12 @@ export function estimateAnnualTax(state, difficulty = {}, record = null) {
       lossCarry: capital.carry, ruleVersion: table.ruleVersion, projected: table.projected, warnings,
       source: stateInfo.approximate ? 'state-approximation' : 'published-core-rules' } };
 }
-export function estimateCapitalGainsTax({ gains = 0, shortGains, longGains, yearsHeld, state, difficulty = {} }) {
+export function estimateCapitalGainsTax({ gains = 0, shortGains, longGains, yearsHeld, state, afterState = null, difficulty = {} }) {
   const before = projectedIncome(state);
-  const after = copy(before);
   const st = shortGains ?? (yearsHeld < 1 ? gains : 0);
   const lt = longGains ?? (yearsHeld >= 1 ? gains : 0);
-  after.shortGains += st || 0; after.longGains += lt || 0;
+  const after = afterState ? projectedIncome(afterState) : copy(before);
+  if (!afterState) { after.shortGains += st || 0; after.longGains += lt || 0; }
   const base = estimateAnnualTax(state, difficulty, before);
   const withGains = estimateAnnualTax(state, difficulty, after);
   const federal = money(withGains.federal - base.federal);

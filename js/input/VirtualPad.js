@@ -383,13 +383,7 @@ export class VirtualPad {
     window.dispatchEvent(new Event('resize'));
   }
 
-  hide() {
-    if (!this.visible && this.root.hidden) return;
-    this.visible = false;
-    this.root.hidden = true;
-    this.root.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('has-virtual-pad');
-    window.dispatchEvent(new Event('resize'));
+  clearHeldInput() {
     virtualRunHeld = false;
     this._releaseStick();
     this._releaseDir();
@@ -398,5 +392,15 @@ export class VirtualPad {
       fireKey(key, 'keyup');
     }
     this.root.querySelectorAll('.is-down').forEach((el) => el.classList.remove('is-down'));
+  }
+
+  hide() {
+    if (!this.visible && this.root.hidden) return;
+    this.visible = false;
+    this.root.hidden = true;
+    this.root.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('has-virtual-pad');
+    window.dispatchEvent(new Event('resize'));
+    this.clearHeldInput();
   }
 }

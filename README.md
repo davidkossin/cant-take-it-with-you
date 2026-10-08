@@ -6,20 +6,20 @@ A 16-bit, top-down life & finance RPG (A Link to the Past vibe) playable in the 
 
 ## How to play
 
-1. **Title** — New Game (Standard portfolio or Custom setup), Load Game, or Manage Saves (localStorage).
-2. **Setup** — Custom: LTTP-styled prompts with **Back** on every step: name, year, age, appearance, starting **Cash**, annual household gross salary, savings (+ interest %), **401(k)** (balance, contribution %, employer match), homes (rate as %), stocks (total only), family (kid **name** + age), spending, ZIP, difficulty.
+1. **Title** — New Game (Standard portfolio or Custom setup), Load Game, or Manage Saves (browser checkpoints and JSON backups).
+2. **Setup** — Custom prompts collect Difficulty, Family, Inflation Adjustment, joint Cash/Savings, separate salaries and retirement inputs, household taxable investments/property, living spending and ZIP. Married players enter the spouse's identity, age and separate account/benefit inputs. **Back** revisits answers.
 3. **Decision Room** — Walk with WASD / arrows. Wall-embedded teller windows (`Enter` / `Z` / `E`), layout W2 / S2 / E2:
    - Buy / Sell Home
    - Buy / Sell Stock (capital gains tax on sell)
-   - Have A Kid (name only → age 0)
+   - **Family** — Have a kid, Get married, and nanny/daycare costs for a chosen number of years
    - Large Purchase
    - Job / Retire
    - **Borrow** — HELOC or loan against shares (asset-backed only; APRs shown)
 4. **North door** — “Hallway of Time.” Confirm leaving the year.
 5. **Hallway** — Narrow corridor through a dark purple stippled void. First door = **leave year + 1**. HUD and year doors follow one complete Monte Carlo path selected near the terminal median of 1,000 simulations. Gains, losses and life-event shocks are saved and reused across year rooms and timeline branches. A **glass wall** blocks this path at its first unfunded obligation; zero checking cash alone is not a failure. Pause → Charts shows the Hallway path alongside the uncertainty bands. Lanterns flicker beside doors.
-6. **Esc** — Pause: **Portfolio** (holdings / net worth), **Map** (timeline tree — time ↑, forks ↗ right as Y branches; jump back to a Hallway node; **C Compare** selects two timelines and a year for side-by-side portfolio snapshots), and **Charts** (Monte Carlo forecasts and recorded history).
+6. **Esc** — Pause: **Portfolio**, **Map**, **Charts**, and **Settings**. Map numbers timelines and letters their origin/decision/age-100 points. Jump using a selected point, or choose **Compare** and select two timelines with clicks or arrows/Enter. Comparison shows their original Monte Carlo bands separately and overlaid. A Cash barrier still limits playable years; later years remain inspectable in Charts.
 7. **Age 100** — “End of the Line.” Ending → See your charts / New Game.
-8. **Saves** — Auto-save on entering a year’s room and when entering the hallway (`ycitwy_saves_v2`).
+8. **Saves** — Browser IndexedDB checkpoints on entering a year's room and the hallway, with legacy localStorage migration. Settings and Manage Saves export portable JSON backups; Manage Saves imports them. A visible warning explains storage failures; the current session can continue and export a backup.
 
 ## Controls
 
@@ -42,7 +42,9 @@ cant-take-it/
     config.js         # palette, difficulty presets, constants
     state/
       GameState.js    # setup → game, timeline graph + snapshots
-      SaveSystem.js   # localStorage begin/end slots
+      SaveSystem.js   # IndexedDB checkpoints + legacy migration
+      TimelineSystem.js # immutable numbered timeline inputs/results
+      PlanExport.js   # validated JSON backup + forecast export
     finance/          # pure JS — no DOM
       Engine.js       # projectOneYear, worth, decisions, CGT sells
       Tax.js          # federal brackets, ZIP→state, capital gains
@@ -76,7 +78,13 @@ The root JavaScript game uses the corrected monthly engine and Monte Carlo forec
 
 In **Pause → Charts**, the default view is a 1,000-path forecast. **Enter / mobile A** opens options for history, real dollars, liquid assets, 5,000 or 10,000 paths, coverage notes and CSV export. Left/right selects a year. Keyboard shortcuts: F history, R real dollars, L liquid assets, P path count, C coverage, E export.
 
-The **Portfolio teller → Planning inputs / benefits** edits benefits, account allocation, costs and verified basis data. Living spending excludes housing, taxes, child/college costs and contributions; those are modeled separately. SSA benefits remain $0 until a statement amount is entered. Initial dollar amounts in the Standard profile are preserved; corrected taxes/costs may reveal an early funding shortfall.
+The **Portfolio teller → Planning inputs / benefits** edits separate owner benefits, account allocation, costs and verified basis data. Living spending excludes housing, taxes, child/college costs and contributions; those are modeled separately. SSA benefits remain $0 until a statement amount is entered. Initial dollar amounts in the Standard profile are preserved; corrected taxes/costs may reveal an early funding shortfall.
+
+**Cash means checking.** Only checking pays bills; Savings and asset sales are player decisions. Bank can transfer Savings, withdraw a gross retirement amount or solve for a net Cash target. Only required minimum distributions and the player's chosen standing withdrawals run automatically. The wall-free percentage measures this Cash funding plan, not whether total wealth could fund an alternative withdrawal strategy.
+
+**Inflation Adjustment:** On displays amounts in the original setup year's buying power; Off displays nominal dollars for the year being viewed. Transaction fields follow the same units. Economic inflation always runs. A new timeline's forecast reuses the same seeded economic samples for meaningful comparisons, while its selected played path may differ because decisions alter which path has the median first wall.
+
+See [the update and validation notes](docs/planning-update.md) for patch application, saved timeline behavior and manual browser checks.
 
 ## Development and validation
 

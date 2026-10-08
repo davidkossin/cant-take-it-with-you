@@ -5,7 +5,7 @@ import { isCurrentJourneyScenario } from './Journey.js';
 
 export function normalizePortfolio(input, { legacy = input.financeVersion !== 2 } = {}) {
   const s = copy(input);
-  const dynamic = ['No Social Security','Property tax basis','Roth basis/opening','Spouse wage ownership','Holding dates'];
+  const dynamic = ['No Social Security','Property tax basis','Roth basis/opening','Spouse wage ownership','Spouse age','Holding dates'];
   s.modelWarnings = (s.modelWarnings || []).filter(w => !dynamic.some(prefix => w.startsWith(prefix)));
   const warn = text => { if (!s.modelWarnings.includes(text)) s.modelWarnings.push(text); };
   if (legacy) {
@@ -20,6 +20,9 @@ export function normalizePortfolio(input, { legacy = input.financeVersion !== 2 
     if (s.socialSecurity && s.socialSecurityMonthly == null) warn('Legacy salary-based Social Security removed; enter the SSA statement benefit.');
   }
   s.financeVersion = 2; s.difficulty = resolveDifficultyId(s.difficulty);
+  s.householdVersion ??= 1;
+  s.salaryOwnershipConfirmed ??= !s.married;
+  s.inflationAdjusted ??= true;s.dollarBaseYear ??= s.year;
   s.simulationSeed ??= 20261004; s.birthYear ??= s.year - Math.floor(s.age);
   s.priceIndex ??= 1; s.childCostInflator ??= 1;
   s.annualSpending = nonnegative(s.annualSpending, 30000);
@@ -28,6 +31,16 @@ export function normalizePortfolio(input, { legacy = input.financeVersion !== 2 
   s.socialSecurity = 0; s.investmentFee ??= .002;
   s.taxInflation ??= .025; s.annualCollegeCost ??= 28000;
   s.k401Allocation ??= { equity: 1 }; s.rothAllocation ??= { equity: 1 };
+  s.spouseK401Allocation ??= {equity:1};s.spouseRothAllocation ??= {equity:1};
+  if (s.spouseAge!=null) s.spouseBirthYear ??= s.year-Math.floor(s.spouseAge);
+  s.spouseRetirementAge ??= 65;
+  s.spouseSocialSecurityMonthly ??= 0;s.spouseSocialSecurityClaimAge ??= 67;
+  s.childcarePlans ||= [];
+  for (const plan of s.childcarePlans) {
+    plan.entryPriceIndex ??= plan.enteredPriceIndex ?? s.priceIndex;
+    plan.startYear ??= s.year;
+    if (plan.endYearExclusive==null && plan.years!=null) plan.endYearExclusive=plan.startYear+Math.max(0,Math.floor(plan.years));
+  }
   s.homes ||= []; s.otherLoans ||= []; s.kids ||= [];
   for (const h of s.homes) {
     h.rate = nonnegative(h.rate, .065);
@@ -69,14 +82,23 @@ export function normalizePortfolio(input, { legacy = input.financeVersion !== 2 
     warn('Roth basis/opening year are missing; unknown earnings are unavailable for spending.');
   if (!s.socialSecurityMonthly && !s.socialSecurityMonthlyAtFRA && s.socialSecurityEligible !== false)
     warn('No Social Security benefit entered; projections include $0 until supplied.');
-  if (s.married && s.spouseSalary == null) warn('Spouse wage ownership is unknown; enter spouse salary separately.');
+  if (s.married && !s.salaryOwnershipConfirmed) warn('Spouse wage ownership is not confirmed; split or confirm the existing salary total without duplicating income.');
+  if (s.married && s.spouseAge == null) warn('Spouse age is unknown; enter it to model independent retirement and account access.');
+  if (s.spouseRothBalance>0 && (s.spouseRothContributionBasis==null || s.spouseRothOpenedYear==null))
+    warn('Roth basis/opening year are missing for the spouse; unknown earnings are unavailable for spending.');
   return s;
 }
 /** Migration reads a clone; original localStorage entries remain available unchanged. */
 export function migrateGame(input) {
   const game = copy(input), legacy = game.portfolio?.financeVersion !== 2;
+  const dollarBaseYear=game.dollarBaseYear ?? game.timeline?.startYear ?? game.timeline?.nodes?.[game.timeline?.rootId]?.year
+    ?? Math.min(...Object.values(game.timeline?.nodes || {}).map(n=>n.year).filter(Number.isFinite),game.portfolio.year);
   game.portfolio = normalizePortfolio(game.portfolio);
-  for (const [id, p] of Object.entries(game.timeline?.snapshots || {})) game.timeline.snapshots[id] = normalizePortfolio(p);
+  game.portfolio.dollarBaseYear=input.portfolio?.dollarBaseYear ?? dollarBaseYear;
+  for (const [id, p] of Object.entries(game.timeline?.snapshots || {})) {
+    game.timeline.snapshots[id]=normalizePortfolio(p);
+    game.timeline.snapshots[id].dollarBaseYear=p.dollarBaseYear ?? dollarBaseYear;
+  }
   if (legacy) {
     for (const row of game.worthHistory || []) row.legacy = true;
     for (const node of Object.values(game.timeline?.nodes || {})) node.legacy = true;

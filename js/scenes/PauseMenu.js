@@ -2,30 +2,29 @@ import { ForecastClient } from '../finance/ForecastClient.js';
 import { MODEL_SCOPE, SUCCESS_DEFINITION } from '../finance/Forecast.js';
 /**
  * Esc pause — Portfolio overview, Map (timeline graph + jump/compare), and Charts.
- * Map Compare provides side-by-side portfolio snapshots for two timelines.
+ * Map Compare preserves the original Monte Carlo charts for two timelines.
  */
 
 import { PALETTE, FRAME_W, FRAME_H, KEYS } from '../config.js';
-import {
-  listTimelineNodes,
-  jumpToHallwayNode,
-  listCompareBranches,
-  portfolioAtYearOnBranch,
-  layoutTimelineMap,
-  buildTimelineMapModel,
-  hallwayNodesForTimeline,
-} from '../state/GameState.js';
+import { jumpToHallwayNode, currentNode } from '../state/GameState.js';
+import { currentTimeline, getTimelineForecast, listTimelines, timelineMapModel, timelineForecastOptions } from '../state/TimelineSystem.js';
+import { drawTimelineMap, drawTimelineComparison } from '../render/TimelineMap.js';
+import { setMoneyContext } from '../finance/DollarBasis.js';
+import { getSaveStatus, flushSaves, autoSave } from '../state/SaveSystem.js';
+import { downloadPlan, downloadForecastBundle } from '../state/PlanExport.js';
+import { editInflationSettings, inflationToggleLabel, moneyUnitSubtitle } from './PlanningInputs.js';
 import { computeWorth } from '../finance/Engine.js';
-import { drawWorthChart, drawForecastChart, BRANCH_COLORS } from '../render/Charts.js';
+import { drawWorthChart, drawForecastChart } from '../render/Charts.js';
 import { makeDialogChrome } from '../render/Assets.js';
 import { formatMoneyDisplay } from '../render/Dialog.js';
 import { fitPixelFont } from '../render/FutureSplash.js';
 
-const VIEW_TABS = ['portfolio', 'map', 'charts'];
+const VIEW_TABS = ['portfolio', 'map', 'charts', 'settings'];
 const MENU_ITEMS = [
   { label: 'Portfolio', value: 'portfolio' },
   { label: 'Map', value: 'map' },
   { label: 'Charts', value: 'charts' },
+  { label: 'Settings', value: 'settings' },
   { label: 'Resume', value: 'resume' },
   { label: 'Quit', value: 'quit' },
 ];
@@ -60,7 +59,8 @@ export class PauseMenu {
     this.open = false;
     this.forecast = new ForecastClient();
     this.chartMode = 'forecast';
-    this.chartReal = false;
+    this.chartReal = true;
+    this.chartForecast = null;
     this.chartMetric = 'netWorth';
     this.chartYear = 0;
     this.forecastPaths = 1000;
@@ -71,16 +71,9 @@ export class PauseMenu {
     this.selected = 0;
     this.portfolioPage = 0; // 0 = summary, 1 = homes and loans
     this.portfolioDetailPage = 0;
-    this.hallwayNodes = [];
     this.chrome = null;
     /** Map compare: overview | select | result. */
     this.mapMode = 'overview';
-    this.mapCompareActive = 0;
-    this.mapCompareA = 0;
-    this.mapCompareB = 1;
-    /** Calendar year for Map Compare side-by-side portfolio snapshots. */
-    this.compareYear = null;
-    this._askingYear = false;
     /** @type {import('../render/Dialog.js').Dialog|null} */
     this.dialog = null;
     /** Map overview focus: timeline index + point index (or Compare). */
@@ -92,6 +85,8 @@ export class PauseMenu {
     this.mapJumpPoints = [];
     /** @type {object|null} Cached map model from last refresh. */
     this.mapModel = null;
+    this.compareSelectionIndex = 0;
+    this.selectedComparison = [];
     /**
      * Pointer hit regions for the frame last drawn, in 1920×1080 frame px.
      * draw() rebuilds them from the same rects it paints, so hit-testing
@@ -105,16 +100,14 @@ export class PauseMenu {
 
   show(game, dialog = null) {
     this.open = true;
+    this.chartReal = game?.portfolio?.inflationAdjusted !== false;
+    setMoneyContext(game.portfolio);
     this.screen = 'menu';
     this.selected = 0;
     this.portfolioPage = 0;
     this.portfolioDetailPage = 0;
     this.dialog = dialog || this.dialog;
-    this.compareYear = game?.portfolio?.year ?? this.compareYear;
     this.mapMode = 'overview';
-    this.mapCompareActive = 0;
-    this.mapCompareA = 0;
-    this.mapCompareB = 1;
     this.refresh(game);
   }
 
@@ -180,7 +173,7 @@ export class PauseMenu {
     return this.back();
   }
 
-  /** Tab / Q: cycle Portfolio → Map → Charts. */
+  /** Tab / Q: cycle the pause views. */
   nextTab(game) {
     const current = VIEW_TABS.indexOf(this.screen);
     this.screen = VIEW_TABS[(current + 1) % VIEW_TABS.length];
@@ -205,41 +198,40 @@ export class PauseMenu {
 
   /** Map overview ←/→ (or a click on a column number): pick a timeline, focus its nearest hallway. */
   selectMapTimeline(game, index) {
-    const timelines = this.mapModel?.timelines || [];
+    const timelines = this.mapModel?.timelines || listTimelines(game);
     if (!timelines.length) return;
-    this.mapTimelineIndex = ((index % timelines.length) + timelines.length) % timelines.length;
-    this.mapFocus = 'point';
-    this.mapPointIndex = 0;
+    this.mapTimelineIndex = (index + timelines.length) % timelines.length;
+    this.mapPointIndex = 0; this.mapFocus = 'point';
     this.syncMapSelection(game);
-    const liveYear = game.portfolio?.year ?? this.mapModel?.current?.year ?? 0;
-    if (this.mapJumpPoints.length) {
-      this.mapPointIndex = nearestHallwayIndex(this.mapJumpPoints, liveYear);
-      this.syncMapSelection(game);
-    }
   }
 
-  /** Map overview Enter / A: open Compare, or jump to the focused hallway. */
+  /** Restore the selected timeline at its selected year without rerolling its future. */
   activateMapFocus(game) {
-    if (this.mapFocus === 'compare') {
-      if (listCompareBranches(game).length >= 2) {
-        this.mapMode = 'select';
-        this.mapCompareActive = 0;
-      }
-      return undefined;
-    }
-    const node = this.mapJumpPoints[this.mapPointIndex];
-    if (node && jumpToHallwayNode(game, node.id)) {
-      this.hide();
-      return { jump: node.id };
+    if (this.mapFocus === 'compare') return this.toggleMapCompare(game);
+    const timeline = this.mapModel?.timelines[this.mapTimelineIndex];
+    const point = timeline?.points[this.mapPointIndex];
+    if (timeline?.hallwayNodeId && jumpToHallwayNode(game, timeline.hallwayNodeId)) {
+      game.timeline.mapJumpYear = point?.year ?? timeline.startYear;
+      this.chartYear = Math.max(0, game.timeline.mapJumpYear - timeline.startYear);
+      this.hide(); return { jump: timeline.hallwayNodeId };
     }
     return undefined;
   }
 
   /** Map C: toggle Compare selection. */
   toggleMapCompare(game) {
-    if (listCompareBranches(game).length < 2) return undefined;
-    this.mapMode = this.mapMode === 'overview' || this.mapMode === 'result' ? 'select' : 'overview';
-    this.mapCompareActive = 0;
+    if (listTimelines(game).length < 2) return undefined;
+    this.mapMode = 'select'; this.selectedComparison = [];
+    this.compareSelectionIndex = this.mapTimelineIndex;
+    return undefined;
+  }
+
+  selectComparisonTimeline(game, index) {
+    const timelines = listTimelines(game), timeline = timelines[index];
+    if (!timeline || this.selectedComparison.includes(timeline.id)) return undefined;
+    this.selectedComparison.push(timeline.id);
+    this.compareSelectionIndex = (index + 1) % timelines.length;
+    if (this.selectedComparison.length === 2) this.mapMode = 'result';
     return undefined;
   }
 
@@ -247,13 +239,13 @@ export class PauseMenu {
   chartAction(name, game) {
     if (name === 'options') void this.showChartOptions(game);
     if (name === 'history') this.chartMode = this.chartMode === 'forecast' ? 'history' : 'forecast';
-    if (name === 'real') this.chartReal = !this.chartReal;
+    if (name === 'real') { this.chartReal = !this.chartReal; game.portfolio.inflationAdjusted = this.chartReal; game.settings = { ...game.settings, inflationAdjusted: this.chartReal }; setMoneyContext(game.portfolio); }
     if (name === 'liquid') this.chartMetric = this.chartMetric === 'netWorth' ? 'liquid' : 'netWorth';
     if (name === 'paths') this.forecastPaths = this.forecastPaths === 1000 ? 5000 : this.forecastPaths === 5000 ? 10000 : 1000;
     if (name === 'next') this.chartYear = Math.min(100 - game.portfolio.age, this.chartYear + 1);
     if (name === 'prev') this.chartYear = Math.max(0, this.chartYear - 1);
     if (name === 'coverage') void this.showModelCoverage(game);
-    if (name === 'export') this.exportForecast();
+    if (name === 'export') this.exportForecast(game);
     return undefined;
   }
 
@@ -332,19 +324,6 @@ export class PauseMenu {
   }
 
   refresh(game) {
-    this.hallwayNodes = listTimelineNodes(game).filter((n) => n.type === 'hallway');
-    const branches = listCompareBranches(game);
-    if (branches.length < 2) {
-      this.mapMode = 'overview';
-      this.mapCompareA = 0;
-      this.mapCompareB = 1;
-    } else {
-      this.mapCompareA = Math.min(this.mapCompareA, branches.length - 1);
-      this.mapCompareB = Math.min(this.mapCompareB, branches.length - 1);
-      if (this.mapCompareA === this.mapCompareB) {
-        this.mapCompareB = this.mapCompareA === 0 ? 1 : 0;
-      }
-    }
     this.syncMapSelection(game, { resetFocus: true });
   }
 
@@ -354,78 +333,21 @@ export class PauseMenu {
    * the hallway nearest to live portfolio year (or the current hallway node).
    */
   syncMapSelection(game, { resetFocus = false } = {}) {
-    const model = buildTimelineMapModel(game);
-    this.mapModel = model;
-    const timelines = model.timelines || [];
-    if (!timelines.length) {
-      this.mapTimelineIndex = 0;
-      this.mapPointIndex = 0;
-      this.mapFocus = 'point';
-      this.mapJumpPoints = [];
-      this.selected = 0;
-      return;
-    }
-
+    this.mapModel = timelineMapModel(game);
+    const timelines = this.mapModel.timelines;
     if (resetFocus) {
-      let ti = timelines.findIndex((t) => t.isCurrent);
-      if (ti < 0) ti = 0;
-      const currentId = game.timeline?.currentNodeId;
-      const curNode = currentId ? game.timeline?.nodes?.[currentId] : null;
-      // Prefer deepest timeline whose path/lane matches current when multiple claim isCurrent
-      if (curNode) {
-        const byLane = timelines.findIndex((t) => t.lane === (model.current?.lane ?? t.lane) && t.isCurrent);
-        if (byLane >= 0) ti = byLane;
-      }
-      this.mapTimelineIndex = ti;
-    } else {
-      this.mapTimelineIndex = Math.min(this.mapTimelineIndex, timelines.length - 1);
+      this.mapTimelineIndex = Math.max(0, timelines.findIndex(t => t.isCurrent));
+      this.mapPointIndex = 0; this.mapFocus = 'point';
     }
-
-    const tl = timelines[this.mapTimelineIndex];
-    this.mapJumpPoints = hallwayNodesForTimeline(game, tl?.tipId);
-    const canCompare = listCompareBranches(game).length >= 2;
-
-    if (resetFocus) {
-      this.mapFocus = 'point';
-      const liveYear = game.portfolio?.year ?? model.current?.year ?? 0;
-      const currentId = game.timeline?.currentNodeId;
-      const curNode = currentId ? game.timeline?.nodes?.[currentId] : null;
-      let pi = 0;
-      if (curNode?.type === 'hallway') {
-        const exact = this.mapJumpPoints.findIndex((n) => n.id === curNode.id);
-        if (exact >= 0) pi = exact;
-        else if (this.mapJumpPoints.length) {
-          pi = nearestHallwayIndex(this.mapJumpPoints, liveYear);
-        }
-      } else if (this.mapJumpPoints.length) {
-        pi = nearestHallwayIndex(this.mapJumpPoints, liveYear);
-      }
-      this.mapPointIndex = pi;
-    } else if (this.mapFocus === 'compare' && !canCompare) {
-      this.mapFocus = 'point';
-      this.mapPointIndex = Math.min(this.mapPointIndex, Math.max(0, this.mapJumpPoints.length - 1));
-    } else if (this.mapFocus === 'point') {
-      if (!this.mapJumpPoints.length) {
-        this.mapPointIndex = 0;
-        if (canCompare) this.mapFocus = 'compare';
-      } else {
-        this.mapPointIndex = Math.min(this.mapPointIndex, this.mapJumpPoints.length - 1);
-      }
-    }
-
-    const sel = this.mapFocus === 'point' ? this.mapJumpPoints[this.mapPointIndex] : null;
-    this.selected = sel
-      ? Math.max(0, this.hallwayNodes.findIndex((n) => n.id === sel.id))
-      : 0;
+    this.mapTimelineIndex = Math.min(this.mapTimelineIndex, Math.max(0, timelines.length - 1));
+    this.mapJumpPoints = timelines[this.mapTimelineIndex]?.points || [];
+    this.mapPointIndex = Math.min(this.mapPointIndex, Math.max(0, this.mapJumpPoints.length - 1));
   }
 
   /** Focus list for ↑/↓ on the selected timeline: jump points then optional Compare. */
   mapFocusItems(game) {
-    const points = this.mapJumpPoints || [];
-    const items = points.map((n, i) => ({ kind: 'point', index: i, node: n }));
-    if (listCompareBranches(game).length >= 2) {
-      items.push({ kind: 'compare' });
-    }
+    const items = (this.mapJumpPoints || []).map((point, index) => ({ kind: 'point', index, point }));
+    if (listTimelines(game).length >= 2) items.push({ kind: 'compare' });
     return items;
   }
 
@@ -493,89 +415,46 @@ export class PauseMenu {
       return undefined;
     }
 
+    if (this.screen === 'settings') {
+      if (KEYS.up.includes(e.key) || KEYS.down.includes(e.key)) {
+        this.selected = (this.selected + (KEYS.down.includes(e.key) ? 1 : 2)) % 3;
+        e.preventDefault(); return undefined;
+      }
+      if (KEYS.confirm.includes(e.key)) { e.preventDefault(); void this.settingsAction(this.selected, game); }
+      return undefined;
+    }
+
     if (this.screen === 'map') {
-      const branches = listCompareBranches(game);
-      if ((e.key === 'c' || e.key === 'C') && branches.length >= 2) {
-        e.preventDefault();
-        return this.toggleMapCompare(game);
-      }
-
-      if (this.mapMode === 'select') {
-        if (KEYS.left.includes(e.key) || KEYS.right.includes(e.key)) {
-          this.mapCompareActive = KEYS.right.includes(e.key) ? 1 : 0;
-          e.preventDefault();
-          return undefined;
-        }
-        if (KEYS.up.includes(e.key) || KEYS.down.includes(e.key)) {
-          const dir = KEYS.down.includes(e.key) ? 1 : -1;
-          const other = this.mapCompareActive === 0 ? this.mapCompareB : this.mapCompareA;
-          let value = this.mapCompareActive === 0 ? this.mapCompareA : this.mapCompareB;
-          for (let i = 0; i < branches.length; i += 1) {
-            value = (value + dir + branches.length) % branches.length;
-            if (value !== other) break;
-          }
-          if (this.mapCompareActive === 0) this.mapCompareA = value;
-          else this.mapCompareB = value;
-          e.preventDefault();
-          return undefined;
-        }
-        if (KEYS.confirm.includes(e.key)) {
-          e.preventDefault();
-          this.promptMapCompareYear(game);
-          return undefined;
-        }
-        return undefined;
-      }
-
-      if (this.mapMode === 'result') {
-        if (KEYS.confirm.includes(e.key)) {
-          e.preventDefault();
-          this.promptMapCompareYear(game);
-          return undefined;
-        }
-        return undefined;
-      }
-
-      // Overview: ←/→ timeline · ↑/↓ point (and Compare) · Enter jump/Compare
       this.syncMapSelection(game);
-      const timelines = this.mapModel?.timelines || [];
-      if (KEYS.left.includes(e.key) || KEYS.right.includes(e.key)) {
-        if (timelines.length >= 2) {
-          // After timeline change, pick hallway nearest live year on that lane
-          this.selectMapTimeline(game, this.mapTimelineIndex + (KEYS.right.includes(e.key) ? 1 : -1));
+      const timelines = this.mapModel.timelines;
+      if (e.key.toLowerCase() === 'c') { e.preventDefault(); return this.toggleMapCompare(game); }
+      if (this.mapMode === 'select') {
+        if ([...KEYS.left, ...KEYS.up, ...KEYS.right, ...KEYS.down].includes(e.key)) {
+          const dir = KEYS.left.includes(e.key) || KEYS.up.includes(e.key) ? -1 : 1;
+          this.compareSelectionIndex = (this.compareSelectionIndex + dir + timelines.length) % timelines.length;
+          e.preventDefault(); return undefined;
         }
-        e.preventDefault();
+        if (KEYS.confirm.includes(e.key)) { e.preventDefault(); return this.selectComparisonTimeline(game, this.compareSelectionIndex); }
         return undefined;
+      }
+      if (this.mapMode === 'result') {
+        if (KEYS.confirm.includes(e.key)) { e.preventDefault(); return this.toggleMapCompare(game); }
+        return undefined;
+      }
+      if (KEYS.left.includes(e.key) || KEYS.right.includes(e.key)) {
+        this.selectMapTimeline(game, this.mapTimelineIndex + (KEYS.right.includes(e.key) ? 1 : -1));
+        e.preventDefault(); return undefined;
       }
       if (KEYS.up.includes(e.key) || KEYS.down.includes(e.key)) {
         const items = this.mapFocusItems(game);
-        if (items.length) {
-          let cur = 0;
-          if (this.mapFocus === 'compare') {
-            cur = items.findIndex((it) => it.kind === 'compare');
-          } else {
-            cur = items.findIndex(
-              (it) => it.kind === 'point' && it.index === this.mapPointIndex
-            );
-          }
-          if (cur < 0) cur = 0;
-          const dir = KEYS.down.includes(e.key) ? 1 : -1;
-          const next = items[(cur + dir + items.length) % items.length];
-          if (next.kind === 'compare') {
-            this.mapFocus = 'compare';
-          } else {
-            this.mapFocus = 'point';
-            this.mapPointIndex = next.index;
-          }
-          this.syncMapSelection(game);
-        }
-        e.preventDefault();
-        return undefined;
+        const current = this.mapFocus === 'compare' ? items.length - 1 : this.mapPointIndex;
+        // Later years appear higher on the map, so Up advances along the lane.
+        const next = items[(current + (KEYS.up.includes(e.key) ? 1 : -1) + items.length) % items.length];
+        if (next) { this.mapFocus = next.kind; if (next.kind === 'point') this.mapPointIndex = next.index; }
+        e.preventDefault(); return undefined;
       }
-      if (KEYS.confirm.includes(e.key)) {
-        e.preventDefault();
-        return this.activateMapFocus(game);
-      }
+      if (KEYS.confirm.includes(e.key)) { e.preventDefault(); return this.activateMapFocus(game); }
+      return undefined;
     }
 
     if (this.screen === 'charts') {
@@ -590,35 +469,10 @@ export class PauseMenu {
     return undefined;
   }
 
-  /** Start Map Compare's year prompt after two timelines are selected. */
-  async promptMapCompareYear(game) {
-    if (!this.dialog || this._askingYear) return;
-    this._askingYear = true;
-    const branches = listCompareBranches(game);
-    const defaultYear =
-      this.compareYear ?? game.portfolio?.year ?? branches[0]?.yearMax ?? new Date().getFullYear();
-    try {
-      const year = await this.dialog.prompt('Year to compare across timelines?', {
-        title: 'Map Compare',
-        defaultValue: String(defaultYear),
-        type: 'number',
-      });
-      if (year != null && year !== '') {
-        const y = Math.round(Number(year));
-        if (Number.isFinite(y)) {
-          this.compareYear = y;
-          this.mapMode = 'result';
-        }
-      }
-    } finally {
-      this._askingYear = false;
-    }
-  }
-
-
   draw(ctx, game) {
     if (!this.open) return;
     this._hits = [];
+    setMoneyContext(game.portfolio);
     ctx.textAlign = 'left';
 
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
@@ -758,7 +612,7 @@ export class PauseMenu {
           : 'Portfolio Details'
         : this.screen === 'map'
           ? 'Timeline Map'
-          : this.chartTitle(game);
+          : this.screen === 'settings' ? 'Settings' : this.chartTitle(game);
     ctx.fillText(title, x + 12, y + 10);
     ctx.fillStyle = '#666';
     ctx.font = '14px "Press Start 2P", monospace';
@@ -772,6 +626,8 @@ export class PauseMenu {
       this.drawPortfolio(ctx, game.portfolio, x, y, boxW, boxH, game);
     } else if (this.screen === 'map') {
       this.drawMap(ctx, game, x, y, boxW, boxH);
+    } else if (this.screen === 'settings') {
+      this.drawSettings(ctx, game, x, y, boxW, boxH);
     } else {
       this.drawCharts(ctx, game, x, y, boxW, boxH);
     }
@@ -789,10 +645,10 @@ export class PauseMenu {
       {label:this.chartMetric === 'netWorth' ? 'Show available liquid assets' : 'Show net worth',value:'metric'},
       {label:'Simulation count (' + this.forecastPaths + ')',value:'paths'},
       {label:'Model coverage / input warnings',value:'coverage'},
-      {label:'Export forecast CSV',value:'export'},
+      {label:'Export forecast, inputs and plan',value:'export'},
       {label:'Back',value:null}], {title:'Charts'});
     if (choice === 'mode') this.chartMode = this.chartMode === 'forecast' ? 'history' : 'forecast';
-    if (choice === 'real') this.chartReal = !this.chartReal;
+    if (choice === 'real') this.chartAction('real', game);
     if (choice === 'metric') this.chartMetric = this.chartMetric === 'netWorth' ? 'liquid' : 'netWorth';
     if (choice === 'paths') {
       const count = await this.dialog.menu('Monte Carlo paths', [{label:'1,000 (preview)',value:1000},
@@ -800,28 +656,22 @@ export class PauseMenu {
       if (count) this.forecastPaths = count;
     }
     if (choice === 'coverage') await this.showModelCoverage(game);
-    if (choice === 'export') this.exportForecast();
+    if (choice === 'export') this.exportForecast(game);
   }
 
   async showModelCoverage(game) {
     if (!this.dialog || this.dialog.active) return;
-    for (const text of [SUCCESS_DEFINITION, ...MODEL_SCOPE, ...(this.forecast.result?.warnings || game.portfolio.modelWarnings || [])]) {
+    for (const text of [SUCCESS_DEFINITION, ...MODEL_SCOPE, ...(this.chartForecast?.warnings || this.forecast.result?.warnings || game.portfolio.modelWarnings || [])]) {
       await this.dialog.show(text, { title: 'Forecast coverage' });
     }
   }
 
-  exportForecast() {
-    const f = this.forecast.result;
-    if (!f) return;
-    const rows = [['year','age','net_worth_p10','net_worth_p50','net_worth_p90','real_net_worth_p50','liquid_p10','liquid_p50','liquid_p90','hallway_net_worth','hallway_liquid','hallway_real_net_worth','hallway_real_liquid','hallway_path_index','hallway_selection_paths','hallway_origin_year','paths','wall_free_rate','first_wall_p10','first_wall_median','first_wall_p90','seed','engine','assumptions','tax_rules'],
-      ...f.series.map((r,i) => [r.year,r.age,r.netWorth.p10,r.netWorth.p50,r.netWorth.p90,r.realNetWorth.p50,r.liquid.p10,r.liquid.p50,r.liquid.p90,
-        f.scenarioSeries[i].netWorth,f.scenarioSeries[i].liquid,f.scenarioSeries[i].realNetWorth,f.scenarioSeries[i].realLiquid,
-        f.scenario.simulationIndex,f.scenario.selectionPaths,f.scenario.originYear,f.count,f.successProbability,
-        ...['p10','p50','p90'].map(k => f.firstWall?.[k]?.year ?? 'none'),f.seed,f.engineVersion,f.assumptionVersion,f.taxRuleVersion])];
-    const blob = new Blob([rows.map(r => r.join(',')).join('\n')], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob), anchor = document.createElement('a');
-    anchor.href = url; anchor.download = 'cant-take-it-forecast.csv'; anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  exportForecast(game) {
+    const f = this.chartForecast || this.forecast.result;
+    if (!f || f.provisional || !game) return;
+    const timeline = currentTimeline(game);
+    const baseline = f.inputSnapshot || (currentNode(game)?.type === 'hallway' ? timeline?.baseline : game.portfolio);
+    downloadForecastBundle(game, f, { baseline, settings: { inflationAdjusted: game.portfolio.inflationAdjusted !== false } });
   }
 
   drawCharts(ctx, game, x, y, boxW, boxH) {
@@ -845,8 +695,16 @@ export class PauseMenu {
       ctx.fillText('Recorded journeys; earlier saves may contain reference-path or legacy-engine years.', x + 28, y + boxH - 38);
       return;
     }
-    this.forecast.request(game.portfolio, this.forecastPaths, game.hallwayScenario || null);
-    const f = this.forecast.result;
+    const timeline = currentTimeline(game);
+    const inHallway = currentNode(game)?.type === 'hallway';
+    const baseline = inHallway && timeline ? timeline.baseline : game.portfolio;
+    const originalForecast = getTimelineForecast(game, timeline);
+    const saved = inHallway && originalForecast?.count === this.forecastPaths ? originalForecast : null;
+    if (saved) this.forecast.cancel();
+    if (!saved) this.forecast.request(baseline, this.forecastPaths, inHallway ? timeline?.scenario || null : null,
+      { ...timelineForecastOptions(game), revision: inHallway ? timeline?.id : `${timeline?.id || 'setup'}-preview` });
+    const f = saved || this.forecast.result || this.forecast.preview;
+    this.chartForecast = f;
     if (!f) {
       ctx.fillStyle = '#d4a84b'; ctx.font = '20px "Press Start 2P", monospace';
       ctx.fillText(this.forecast.error || 'Simulating ' + this.forecastPaths + ' paths · ' + Math.round(this.forecast.progress * 100) + '%', x + 36, y + 140);
@@ -857,25 +715,27 @@ export class PauseMenu {
     const dollars = this.chartReal ? 'real (original setup-year dollars)' : 'nominal dollars';
     const metric = this.chartReal ? (this.chartMetric === 'liquid' ? 'realLiquid' : 'realNetWorth') : this.chartMetric;
     ctx.fillStyle = '#d4a84b';ctx.font = '16px "Press Start 2P", monospace';
-    ctx.fillText(firstWallHeadline(f.firstWall), x + 28, y + 95);
+    ctx.fillText((f.provisional ? 'Preliminary · ' : '') + firstWallHeadline(f.firstWall), x + 28, y + 95);
     ctx.font = '14px "Press Start 2P", monospace';ctx.fillStyle = '#aaa';
     ctx.fillText('Wall-free ' + (f.successProbability * 100).toFixed(1) + '% · 95% sampling interval ' +
       f.successInterval95.map(p => (p * 100).toFixed(1) + '%').join('–') + ' · N=' + f.count, x + 28, y + 122);
     ctx.fillText((this.chartMetric === 'liquid' ? 'Available taxable liquid assets' : 'Net worth') + ' · ' + dollars + ' · includes paths that hit a wall', x + 28, y + 148);
     drawForecastChart(ctx, f, { x: x + 28, y: y + 178, w: boxW - 64, h: boxH - 477, metric, selected: this.chartYear });
-    const row = f.series[this.chartYear], v = row[metric], money = formatMoneyDisplay;
+    const row = f.series[this.chartYear], v = row[metric], money = amount => formatMoneyDisplay(amount, null, { alreadyDisplay: true });
     let yy = y + boxH - 275;
     ctx.fillStyle = '#eee';ctx.font = '16px "Press Start 2P", monospace';
     ctx.fillText('← / → Year ' + row.year + ' · Age ' + row.age + ' · P10 ' + money(v.p10) + ' · Median ' + money(v.p50) + ' · P90 ' + money(v.p90), x + 28, yy);
     yy += 34;ctx.font = '14px "Press Start 2P", monospace';ctx.fillStyle = '#aaa';
-    const reference = f.reference[Math.max(0,this.chartYear - 1)]?.statement;
-    if (this.chartYear && reference) {
-      ctx.fillText('Hallway ' + money(f.scenarioSeries[this.chartYear][metric]) + ' · costs ' + money(reference.requiredSpending) +
-        ' · income/payroll tax ' + money(reference.tax.total) + ' · shortfall ' + money(reference.unfunded), x + 28, yy);
+    const referenceRow = f.reference?.[Math.max(0,this.chartYear - 1)];
+    const reference = referenceRow?.statement;
+    const statementMoney = amount => money(amount / (this.chartReal ? referenceRow?.priceIndex || 1 : 1));
+    if (this.chartYear && reference && f.scenarioSeries?.[this.chartYear]) {
+      ctx.fillText('Hallway ' + money(f.scenarioSeries[this.chartYear][metric]) + ' · costs ' + statementMoney(reference.requiredSpending) +
+        ' · income/payroll tax ' + statementMoney(reference.tax.total) + ' · shortfall ' + statementMoney(reference.unfunded), x + 28, yy);
     } else ctx.fillText('Hallway follows one complete simulated path; the median line shows annual ensemble percentiles.', x + 28, yy);
     yy += 30;
-    ctx.fillText('Stress: early crash ' + (f.stress.crash.success ? 'funded' : 'shortfall') + ' · persistent 7% inflation ' +
-      (f.stress.inflation.success ? 'funded' : 'shortfall') + ' · seed ' + f.seed, x + 28, yy);
+    ctx.fillText(f.stress ? 'Stress: early crash ' + (f.stress.crash.success ? 'funded' : 'shortfall') + ' · persistent 7% inflation ' +
+      (f.stress.inflation.success ? 'funded' : 'shortfall') + ' · seed ' + f.seed : 'Preliminary bands; the played scenario is selected when this run completes.', x + 28, yy);
     yy += 30;
     ctx.fillText('Equity mean ' + (f.assumptions.equityReturn * 100).toFixed(1) + '% · volatility ' + (f.assumptions.equityVolatility * 100).toFixed(1) +
       '% · CPI ' + (f.assumptions.inflation * 100).toFixed(1) + '% · illustrative inputs', x + 28, yy);
@@ -883,59 +743,7 @@ export class PauseMenu {
     ctx.fillText('Wall-free = Cash paid every bill each month through age 100; nothing is sold or withdrawn for you.', x + 28, yy);
     yy += 30;
     ctx.fillStyle = '#d4a84b';
-    ctx.fillText('C: coverage / ' + f.warnings.length + ' input warnings · Future law is projected. Sampling interval excludes model uncertainty.', x + 28, yy);
-  }
-
-  drawSnapshotColumn(ctx, branch, snap, year, cx, cy, colW, colH, compact = false) {
-    const color =
-      BRANCH_COLORS[
-        Math.max(0, (branch.letter || 'A').charCodeAt(0) - 65) % BRANCH_COLORS.length
-      ];
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.fillRect(cx, cy, colW, colH);
-    ctx.strokeStyle = color;
-    ctx.strokeRect(cx + 0.5, cy + 0.5, colW - 1, colH - 1);
-
-    ctx.font = '6px "Press Start 2P", monospace';
-    ctx.fillStyle = color;
-    const head = `${branch.letter}${branch.isCurrent ? '*' : ''}`;
-    ctx.fillText(head, cx + 4, cy + 4);
-
-    ctx.font = compact ? '12px "Press Start 2P", monospace' : '14px "Press Start 2P", monospace';
-    if (snap.status === 'before') {
-      ctx.fillStyle = '#888';
-      ctx.fillText('Before branch', cx + 4, cy + 18);
-      ctx.fillText(`(starts ${snap.yearMin})`, cx + 4, cy + 28);
-      return;
-    }
-    if (snap.status === 'after') {
-      ctx.fillStyle = '#888';
-      ctx.fillText('After end', cx + 4, cy + 18);
-      ctx.fillText(`(ends ${snap.yearMax})`, cx + 4, cy + 28);
-      return;
-    }
-    if (snap.status === 'gap') {
-      ctx.fillStyle = '#888';
-      ctx.fillText('n/a this year', cx + 4, cy + 18);
-      ctx.fillText('(no snapshot)', cx + 4, cy + 28);
-      return;
-    }
-    if (snap.status !== 'ok' || !snap.portfolio || !snap.worth) {
-      ctx.fillStyle = '#888';
-      ctx.fillText('n/a', cx + 4, cy + 18);
-      return;
-    }
-
-    const p = snap.portfolio;
-    const w = snap.worth;
-    const lines = snapshotLines(p, w, snap);
-    let ry = cy + (compact ? 14 : 16);
-    for (const line of lines) {
-      if (ry > cy + colH - (compact ? 5 : 10)) break;
-      ctx.fillStyle = line.heading ? PALETTE.gold : PALETTE.uiText;
-      ctx.fillText(clip(line.text, colW - 8), cx + 4, ry);
-      ry += compact ? 16 : 20;
-    }
+    ctx.fillText('C: coverage / ' + (f.warnings?.length || 0) + ' input warnings · Future law is projected. Sampling interval excludes model uncertainty.', x + 28, yy);
   }
 
   drawPortfolio(ctx, p, x, y, boxW, boxH, game) {
@@ -1002,6 +810,7 @@ export class PauseMenu {
     return [
       { text: `Year ${p.year} · Age ${p.age} · ${filing}` },
       { text: zipLine },
+      ...(p.married ? [{ text: `${p.spouseName || 'Spouse'} · Age ${p.spouseAge ?? '?'} · Salary ${money(p.spouseSalary || 0)}` }] : []),
       ...salaryRows,
       { text: `Cash (checking) ${money(worth.cash)}` },
       { text: `Savings ${money(worth.savings)}${savingsRate}` },
@@ -1036,6 +845,10 @@ export class PauseMenu {
     rows.push({ text: 'Retirement', heading: true });
     rows.push({ text: `401(k) ${money(p.k401Balance)}` });
     rows.push({ text: `Roth ${money(p.rothBalance || 0)}` });
+    if (p.married) {
+      rows.push({ text: `${p.spouseName || 'Spouse'} · Retirement @ ${p.spouseRetirementAge || 65}` });
+      rows.push({ text: `401(k) ${money(p.spouseK401Balance || 0)} · Roth ${money(p.spouseRothBalance || 0)}` });
+    }
     if (p.housing === 'rent') {
       rows.push({ text: 'Housing: Rent', heading: true });
       rows.push({ text: `${money(p.monthlyRent)}/mo` });
@@ -1077,296 +890,97 @@ export class PauseMenu {
     return pages.length ? pages : [[{ text: 'No homes or loans.' }]];
   }
 
-  /**
-   * Vertical timeline tree. Time goes up. Columns 1, 2, 3… are timelines.
-   * Left edge is the calendar year. A/B/C only. Dashed below a fork's A.
-   * D-pad: ←/→ timeline · ↑/↓ jump point (and Compare) · Enter jump / open Compare.
-   */
   drawMap(ctx, game, x, y, boxW, boxH) {
-    const compareSelect = this.mapMode === 'select';
-    const compareResult = this.mapMode === 'result';
-    const yearLabel = this.compareYear == null ? '' : ` · ${this.compareYear}`;
-    ctx.font = '16px "Press Start 2P", monospace';
-    ctx.fillStyle = PALETTE.uiText;
-    const promptYear = () => { void this.promptMapCompareYear(game); return undefined; };
-    const canCompareLink = listCompareBranches(game).length >= 2;
-    this.drawLinks(ctx,
-      compareResult
-        ? [{ text: `Compare${yearLabel} · ` }, { text: 'Enter year', action: promptYear }, { text: ' · ' },
-          { text: 'C change', action: (g) => this.toggleMapCompare(g) }]
-        : compareSelect
-          ? [{ text: 'Compare · ←/→ side · ↑/↓ timeline · ' }, { text: 'Enter year', action: promptYear }]
-          : [{ text: '←/→ timeline · ↑/↓ point · ' }, { text: 'Enter jump', action: (g) => this.activateMapFocus(g) },
-            { text: ' · ' }, canCompareLink ? { text: 'Compare', key: 'map:compare-link', action: (g) => this.toggleMapCompare(g) } : { text: 'Compare' }],
-      x + 28,
-      y + 56
-    );
-
-    const graphX = x + 28;
-    const graphY = y + 100;
-    const footer = compareResult ? 300 : compareSelect ? 150 : 120;
-    const graphH = Math.min(560, Math.max(180, boxH - (graphY - y) - footer));
-    const graphW = boxW - 56;
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.fillRect(graphX, graphY, graphW, graphH);
-    ctx.strokeStyle = '#444';
-    ctx.strokeRect(graphX + 0.5, graphY + 0.5, graphW - 1, graphH - 1);
-
-    const layout = layoutTimelineMap(game, {
-      x: graphX + 10,
-      y: graphY + 8,
-      w: graphW - 20,
-      h: graphH - 16,
-    });
-    const model = layout.model || buildTimelineMapModel(game);
-    this.mapModel = model;
-    const timelines = model.timelines || [];
-    if (!compareSelect && !compareResult) {
-      // Keep jump list in sync while drawing (tree may have changed mid-pause)
-      if (timelines.length) {
-        this.mapTimelineIndex = Math.min(this.mapTimelineIndex, timelines.length - 1);
-        const tl = timelines[this.mapTimelineIndex];
-        this.mapJumpPoints = hallwayNodesForTimeline(game, tl?.tipId);
-        if (this.mapFocus === 'point' && this.mapJumpPoints.length) {
-          this.mapPointIndex = Math.min(this.mapPointIndex, this.mapJumpPoints.length - 1);
-        }
-      }
+    this.syncMapSelection(game);
+    const timelines = this.mapModel.timelines;
+    const left = x + 32, top = y + 82, width = boxW - 64;
+    ctx.textBaseline = 'top'; ctx.font = '15px "Press Start 2P", monospace'; ctx.fillStyle = '#b9b9c5';
+    if (this.mapMode === 'select') {
+      ctx.fillText(`Select ${this.selectedComparison.length ? 'the second' : 'the first'} timeline · arrows + Enter or click`, left, top);
+      const start = Math.floor(this.compareSelectionIndex / 9) * 9;
+      timelines.slice(start, start + 9).forEach((timeline, offset) => {
+        const index = start + offset, rowY = top + 62 + offset * 61;
+        const chosen = this.selectedComparison.includes(timeline.id);
+        const focused = this.compareSelectionIndex === index;
+        ctx.fillStyle = focused ? 'rgba(210,180,95,.24)' : 'rgba(130,150,180,.08)'; ctx.fillRect(left, rowY, width, 49);
+        ctx.fillStyle = chosen ? '#80dda9' : focused ? PALETTE.gold : '#ddd';
+        ctx.fillText(`${chosen ? '✓' : focused ? '▶' : ' '} Timeline ${timeline.number} · ${timeline.startYear}–${timeline.terminalYear} · ${timeline.forecast ? timeline.forecast.count.toLocaleString() + ' paths saved' : 'projection not saved'}`, left + 18, rowY + 14);
+        this._addHit({ key: `compare:${timeline.id}`, x: left, y: rowY, w: width, h: 49,
+          hover: () => { this.compareSelectionIndex = index; }, activate: g => this.selectComparisonTimeline(g, index) });
+      });
+      return;
     }
-    const selectedTl = timelines[this.mapTimelineIndex] || null;
-    const selectedJump =
-      this.mapFocus === 'point' ? this.mapJumpPoints[this.mapPointIndex] : null;
-
-    // Solid spines, dashed pre-fork past, horizontal forks.
-    ctx.save();
-    for (const seg of layout.segments || []) {
-      ctx.beginPath();
-      ctx.setLineDash(seg.kind === 'dashed' ? [8, 6] : []);
-      if (seg.kind === 'spine') {
-        const selected = selectedTl && seg.timeline === selectedTl.number;
-        if (selected) {
-          ctx.strokeStyle = '#e8c878';
-          ctx.lineWidth = 2;
-        } else if (seg.isCurrent) {
-          ctx.strokeStyle = '#c8a050';
-          ctx.lineWidth = 1.5;
-        } else {
-          ctx.strokeStyle = '#555';
-          ctx.lineWidth = 1;
-        }
-      } else if (seg.kind === 'dashed') {
-        ctx.strokeStyle = '#666';
-        ctx.lineWidth = 1;
+    if (this.mapMode === 'result') {
+      const selected = this.selectedComparison.map(id => timelines.find(t => t.id === id)).filter(Boolean);
+      if (selected.length !== 2 || selected.some(t => !t.forecast)) {
+        ctx.fillText('This timeline has no saved Monte Carlo ensemble.', left, top + 30);
+        ctx.fillText('Legacy saves preserve available history; an old forecast cannot be recovered.', left, top + 78);
+        ctx.fillText('Generate a new Hallway from a Decision Room to save a new projection.', left, top + 118);
       } else {
-        ctx.strokeStyle = '#887848';
-        ctx.lineWidth = 1.5;
+        ctx.font = '13px "Press Start 2P", monospace';
+        ctx.fillText('Solid: median · dashed: played scenario · bands: 10–90% / 25–75% · common calendar-year axes', left, top);
+        drawTimelineComparison(ctx, selected, { x: left, y: top + 32, w: width, h: boxH - 205 }, game.timeline.startYear,
+          game.portfolio.inflationAdjusted !== false ? 'realNetWorth' : 'netWorth');
       }
-      ctx.moveTo(seg.x1, seg.y1);
-      ctx.lineTo(seg.x2, seg.y2);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    ctx.font = '14px "Press Start 2P", monospace';
-    ctx.fillStyle = '#888';
-    for (const lab of layout.yearLabels || []) {
-      ctx.fillText(String(lab.year), lab.x, lab.y - 2);
-    }
-    const overview = !compareSelect && !compareResult;
-    for (const col of layout.columnLabels || []) {
-      const selected = selectedTl && col.number === selectedTl.number;
-      ctx.fillStyle = selected ? PALETTE.gold : '#888';
-      ctx.fillText(String(col.number), col.x - 2, col.y);
-      const ti = timelines.findIndex((t) => t.number === col.number);
-      if (overview && ti >= 0) {
-        const w = Math.max(28, ctx.measureText(String(col.number)).width + 16);
-        // Selecting a timeline is a cursor move (←/→), so hover only highlights the number.
-        this._addHit({ key: `map:col:${col.number}`, x: col.x - 10, y: col.y - 8, w, h: 30,
-          activate: (g) => { this.selectMapTimeline(g, ti); return undefined; } });
-      }
-    }
-    // Hallway jump targets on every timeline. Hover moves the selection (gold box)
-    // like ↑/↓ and ←/→; a click on the selected hallway jumps, as Enter does. A tap
-    // on an unselected one only selects it, so touch needs a second tap to jump.
-    if (overview && layout.xy) {
-      timelines.forEach((tl, ti) => {
-        hallwayNodesForTimeline(game, tl.tipId).forEach((node, pi) => {
-          const p = layout.xy(tl.lane, node.year);
-          const isSel = () => this.mapFocus === 'point' && this.mapTimelineIndex === ti && this.mapPointIndex === pi;
-          const select = (g) => {
-            this.mapTimelineIndex = ti;
-            this.mapFocus = 'point';
-            this.mapPointIndex = pi;
-            this.syncMapSelection(g);
-          };
-          this._addHit({ key: `map:node:${node.id}`, x: p.x - 14, y: p.y - 14, w: 28, h: 28,
-            hover: select,
-            activate: (g) => {
-              if (isSel()) return this.activateMapFocus(g);
-              select(g);
-              return undefined;
-            } });
-        });
-      });
-    }
-
-    for (const pt of layout.points || []) {
-      const r = pt.kind === 'C' ? 10 : 8;
-      if (pt.kind === 'A') ctx.fillStyle = PALETTE.gold;
-      else if (pt.kind === 'B') ctx.fillStyle = '#80c0e0';
-      else ctx.fillStyle = '#c04040';
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#aaa';
-      ctx.font = '14px "Press Start 2P", monospace';
-      const tag = pt.kind === 'B' ? pt.label : pt.kind;
-      ctx.fillText(tag, pt.x + 12, pt.y - 12);
-    }
-
-    if (!compareResult && layout.currentPos) {
-      const cp = layout.currentPos;
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(cp.x - 5, cp.y - 5, 10, 10);
-      ctx.fillStyle = '#fff';
-      ctx.font = '4px "Press Start 2P", monospace';
-      ctx.fillText('you', cp.x + 6, cp.y - 4);
-    }
-
-    // Selected jump-target year marker (gold box on graph)
-    if (!compareSelect && !compareResult && selectedJump && layout.xy && selectedTl) {
-      const sp = layout.xy(selectedTl.lane, selectedJump.year);
-      ctx.strokeStyle = PALETTE.gold;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(sp.x - 6, sp.y - 6, 12, 12);
-      ctx.lineWidth = 1;
-    }
-
-    ctx.fillStyle = '#666';
-    ctx.font = '14px "Press Start 2P", monospace';
-    ctx.fillText('A start · B branch · C age 100', x + 28, graphY + graphH + 8);
-
-    if (compareSelect) {
-      const branches = listCompareBranches(game);
-      let ly = graphY + graphH + 13;
-      ctx.font = '5px "Press Start 2P", monospace';
-      [this.mapCompareA, this.mapCompareB].forEach((branchIndex, side) => {
-        const branch = branches[branchIndex];
-        const timeline = timelines.find((t) => t.tipId === branch?.tipId);
-        const active = this.mapCompareActive === side;
-        ctx.fillStyle = active ? PALETTE.gold : PALETTE.uiText;
-        const label = `${active ? '▶' : ' '} ${side === 0 ? 'A' : 'B'}: Timeline ${timeline?.number ?? branchIndex + 1}${
-          branch?.isCurrent ? '*' : ''
-        }`;
-        ctx.fillText(label, x + 12, ly);
-        // Row = the side (←/→); a click picks the side and asks for the year (Enter).
-        this._addHit({ key: `map:side:${side}`, x: x + 8, y: ly - 2, w: Math.max(160, ctx.measureText(label).width + 8), h: 11,
-          hover: () => { this.mapCompareActive = side; },
-          activate: () => { this.mapCompareActive = side; void this.promptMapCompareYear(game); return undefined; } });
-        ly += 11;
-      });
+      ctx.font = '13px "Press Start 2P", monospace'; ctx.fillStyle = '#aaa';
+      this.drawLinks(ctx, [{ text: 'Enter: choose another pair', action: g => this.toggleMapCompare(g) }, { text: ' · ' },
+        { text: 'Esc: map', action: () => this.back() }], left, y + boxH - 46);
       return;
     }
-
-    if (compareResult) {
-      const branches = listCompareBranches(game);
-      const pair = [branches[this.mapCompareA], branches[this.mapCompareB]].filter(Boolean);
-      const snapshotY = graphY + graphH + 14;
-      const colW = Math.floor((boxW - 28) / 2);
-      pair.forEach((branch, i) => {
-        const cx = x + 12 + i * (colW + 4);
-        const snap = portfolioAtYearOnBranch(game, branch.tipId, this.compareYear);
-        this.drawSnapshotColumn(ctx, branch, snap, this.compareYear, cx, snapshotY, colW, y + boxH - snapshotY - 6, true);
-      });
-      return;
-    }
-
-    // Status line + optional Compare button (replaces scrolled Jump list)
-    let ly = graphY + graphH + 32;
-    ctx.font = '16px "Press Start 2P", monospace';
-    const status = this.mapStatusLine(game, selectedTl, selectedJump);
-    ctx.fillStyle = this.mapFocus === 'point' ? PALETTE.gold : PALETTE.uiText;
-    ctx.fillText(status, x + 12, ly);
-    ly += 28;
-
-    const canCompare = listCompareBranches(game).length >= 2;
-    if (canCompare) {
-      const focused = this.mapFocus === 'compare';
-      const btnX = x + 10;
-      const btnW = boxW - 20;
-      const btnH = 36;
-      this._addHit({ key: 'map:compare', x: btnX, y: ly - 2, w: btnW, h: btnH,
-        hover: () => { this.mapFocus = 'compare'; this.syncMapSelection(game); },
-        activate: (g) => { this.mapFocus = 'compare'; return this.activateMapFocus(g); } });
-      ctx.fillStyle = focused ? 'rgba(200,160,80,0.2)' : 'rgba(0,0,0,0.25)';
-      ctx.fillRect(btnX, ly - 2, btnW, btnH);
-      ctx.strokeStyle = focused ? PALETTE.gold : '#555';
-      ctx.lineWidth = focused ? 2 : 1;
-      ctx.strokeRect(btnX + 0.5, ly - 1.5, btnW - 1, btnH - 1);
-      ctx.lineWidth = 1;
-      ctx.fillStyle = focused ? PALETTE.gold : PALETTE.uiText;
-      ctx.font = '16px "Press Start 2P", monospace';
-      ctx.fillText(`${focused ? '▶' : ' '} Compare`, btnX + 12, ly + 10);
-    } else if (!this.mapJumpPoints.length) {
-      ctx.fillStyle = '#888';
-      ctx.fillText('No hallway nodes yet.', x + 12, ly);
-    }
+    ctx.fillText('←/→ timeline · ↑/↓ point · Enter: jump to its year in the saved Hallway', left, top);
+    drawTimelineMap(ctx, this.mapModel, { x: left, y: top + 45, w: width, h: boxH - 290 },
+      { timeline: this.mapTimelineIndex, point: this.mapPointIndex, focus: this.mapFocus }, hit => this._addHit(hit),
+      (kind, index, point = 0) => { this.selectMapTimeline(game, index); this.mapPointIndex = point; });
+    const selected = timelines[this.mapTimelineIndex];
+    const point = selected?.points[this.mapPointIndex];
+    ctx.font = '14px "Press Start 2P", monospace'; ctx.fillStyle = '#bbb';
+    const status = selected ? `Timeline ${selected.number} · ${point?.letter || 'A'}: ${point?.year || selected.startYear} (age ${point?.age ?? selected.startAge}) · ${selected.forecast ? 'original projection saved' : 'projection pending'}` : 'No timelines';
+    ctx.fillText(status, left, y + boxH - 120);
+    this.drawLinks(ctx, [
+      { text: 'Jump to selected point', key: 'map:jump', action: g => { this.mapFocus = 'point'; return this.activateMapFocus(g); } },
+      { text: ' · ' }, { text: 'Compare two timelines', key: 'map:compare', action: g => this.toggleMapCompare(g) },
+    ], left, y + boxH - 78);
+    ctx.fillStyle = '#888'; ctx.font = '12px "Press Start 2P", monospace';
+    ctx.fillText('A: start · letters: decision visits · last point: age 100 · * current · original projections stay unchanged', left, y + boxH - 40);
   }
 
-  mapStatusLine(game, selectedTl, selectedJump) {
-    if (this.mapFocus === 'compare') return 'Compare';
-    const n = selectedTl?.number ?? this.mapTimelineIndex + 1;
-    if (!selectedJump) {
-      return `Timeline ${n} · (no hallway)`;
+  async settingsAction(index, game) {
+    if (index === 0 && this.dialog && !this.dialog.active) {
+      await editInflationSettings(game.portfolio, this.dialog);
+      this.chartReal = game.portfolio.inflationAdjusted !== false;
+      setMoneyContext(game.portfolio);
+      game.settings = { ...game.settings, inflationAdjusted: game.portfolio.inflationAdjusted !== false };
+      autoSave(game, game.scene === 'room' ? 'begin' : 'end');
     }
-    const label = selectedJump.label || `Hallway after ${selectedJump.year}`;
-    return `Timeline ${n} · ${label} (age ${selectedJump.age})`;
+    if (index === 1) downloadPlan(game, { settings: { inflationAdjusted: game.portfolio.inflationAdjusted !== false } });
+    if (index === 2) { autoSave(game, game.scene === 'room' ? 'begin' : 'end'); await flushSaves(); }
+  }
+
+  drawSettings(ctx, game, x, y, boxW, boxH) {
+    ctx.font = '22px "Press Start 2P", monospace'; ctx.fillStyle = PALETTE.gold;
+    const left = x + 40, top = y + 110;
+    const label = inflationToggleLabel(game.portfolio);
+    this._addHit({ key: 'settings:inflation', x: left - 12, y: top - 14, w: boxW - 70, h: 80,
+      hover: () => { this.selected = 0; }, activate: g => { void this.settingsAction(0, g); } });
+    ctx.fillText(label, left, top);
+    ctx.font = '16px "Press Start 2P", monospace'; ctx.fillStyle = '#aaa';
+    ctx.fillText(moneyUnitSubtitle(game.portfolio), left, top + 52);
+    ctx.fillText('Changes display and entry units; economic balances and scenarios stay intact.', left, top + 92);
+    const status = getSaveStatus();
+    ctx.fillStyle = status.state === 'error' ? '#ff9999' : '#b3c8bb';
+    ctx.fillText('Save status: ' + status.message, left, top + 180);
+    ['Export complete plan', 'Save now'].forEach((label, i) => {
+      const index = i + 1, yy = top + 280 + i * 86;
+      ctx.fillStyle = this.selected === index ? PALETTE.gold : '#ddd';
+      ctx.fillText((this.selected === index ? '▶ ' : '') + label, left, yy);
+      this._addHit({ key: `settings:${index}`, x: left - 12, y: yy - 14, w: boxW - 70, h: 64,
+        hover: () => { this.selected = index; }, activate: g => { void this.settingsAction(index, g); } });
+    });
+    ctx.fillStyle = '#aaa';
+    ctx.fillText('Enter/A to change · Tab next view · Esc back', left, y + boxH - 52);
   }
 }
 
-
-function nearestHallwayIndex(hallways, year) {
-  if (!hallways?.length) return 0;
-  let best = 0;
-  let bestDist = Infinity;
-  for (let i = 0; i < hallways.length; i += 1) {
-    const d = Math.abs((hallways[i].year ?? 0) - year);
-    if (d < bestDist) {
-      bestDist = d;
-      best = i;
-    }
-  }
-  return best;
-}
-
-function snapshotLines(p, worth, snap) {
-  const age = snap.age ?? p.age;
-  const yearLabel = `Y${p.year ?? snap.year} · Age ${age}`;
-  const salaryLine = p.retired
-    ? 'Retired'
-    : `Salary ${money(p.salary)}`;
-  const loanTotal =
-    (p.otherDebt || 0) + (p.otherLoans || []).reduce((sum, l) => sum + (l.principal || 0), 0);
-  const homeN = (p.homes || []).length;
-  return [
-    { text: yearLabel },
-    { text: salaryLine },
-    { text: `Cash ${money(worth.cash ?? worth.bank)}` },
-    { text: `Save ${money(worth.savings)}` },
-    { text: `Stk ${money(worth.stocks)}` },
-    { text: `401k ${money(worth.k401Balance)}` },
-    { text: `Home×${homeN} Eq ${money(worth.homeEquity)}` },
-    { text: `Loans ${money(loanTotal)}` },
-    { text: `Net ${money(worth.netWorth)}`, heading: true },
-  ];
-}
-
-function clip(text, maxPx) {
-  // Press Start 2P ~5px/char at 5px font — rough fit for column width
-  const maxChars = Math.max(8, Math.floor(maxPx / 12));
-  if (text.length <= maxChars) return text;
-  return text.slice(0, maxChars - 1) + '…';
-}
 
 function money(value) {
   return formatMoneyDisplay(value);

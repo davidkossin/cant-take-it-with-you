@@ -3,17 +3,19 @@
  * Gameplay, reference paths and Monte Carlo share this pure, cents-based engine.
  */
 import { effectiveDifficulty } from './Difficulty.js';
-import { estimateAnnualTax, estimateCapitalGainsTax, employee401kDeferral, employer401kMatch } from './Tax.js';
+import { estimateAnnualTax, estimateCapitalGainsTax, projectedIncome } from './Tax.js';
 import { money, nonnegative, copy, stockBook, syncBook, ensureHoldings,
   liquidate, invest, incomeFor, addIncome, post, isLongTerm } from './Books.js';
 import { monthlyPayment, loanDue, payLoan } from './Loans.js';
-import { economicYear, holdingReturn, accountGross, availableStocks } from './Market.js';
-import { monthlyBenefit, benefitEarningsReduction, requiredDistribution, rothLimit } from './Retirement.js';
+import { economicYear, holdingReturn, accountGross, availableStocks, randomVariationEnabled } from './Market.js';
+import { requiredDistribution, rothLimit } from './Retirement.js';
+import { incomeSchedule, monthlyAmount } from './IncomeSchedule.js';
+import { ownerKey, ownerAge, ownerState, ownerWorking } from './Household.js';
 import { hashSeed, mulberry32 } from './rng.js';
 import { HOME_TYPES, CHILD_COST_BANDS, HELOC_CLTV, SB_LTV,
   HELOC_DEFAULT_RATE, SECURITIES_LOAN_DEFAULT_RATE } from '../config.js';
 
-export const ENGINE_VERSION = '2.1.0';
+export const ENGINE_VERSION = '2.2.0';
 /**
  * Funding rule: only Cash pays bills. The engine never moves savings, sells holdings or
  * withdraws retirement money on its own; the player decides (RMDs and the player's own
@@ -23,10 +25,21 @@ export const ENGINE_VERSION = '2.1.0';
 export const FUNDING_RULE = 'cash-only';
 export const NOT_ENOUGH_CASH = 'Not enough cash — sell or transfer first.';
 export const cloneState = copy;
+const SIMULATION_REPORT_FIELDS=['transactions','lastStatement','milestones','lastTransaction','lastWithdrawal'];
+const SIMULATION_ARRAY_FIELDS=['stocksHoldings','homes','otherLoans','kids'];
+const SIMULATION_OBJECT_FIELDS=['taxRecord','retirementWithdrawalPlan','spouseRetirementWithdrawalPlan','capitalLossCarry'];
+/** Compact projections clone only mutable model data, avoiding copies of report histories. */
+function simulationCopy(state) {
+  const s={...state};
+  for (const key of SIMULATION_REPORT_FIELDS) delete s[key];
+  for (const key of SIMULATION_ARRAY_FIELDS) if (Array.isArray(state[key])) s[key]=state[key].map(value=>({...value}));
+  for (const key of SIMULATION_OBJECT_FIELDS)
+    if (state[key]) s[key]={...state[key]};
+  return s;
+}
 export const syncStocksTotal = syncBook;
 const fmt = n => Math.round(n).toLocaleString('en-US');
 const monthGross = g => Math.max(0, g) ** (1 / 12);
-const monthlyAmount = (annual, month) => money(annual * month / 12) - money(annual * (month - 1) / 12);
 export function annualChildCost(age, difficulty = {}, inflator = 1) {
   if (age >= 18) return 0;
   return money((CHILD_COST_BANDS.find(b => age <= b.maxAge)?.annual ?? 0) * inflator);
@@ -35,16 +48,18 @@ export function annualChildCost(age, difficulty = {}, inflator = 1) {
 export function computeWorth(s) {
   const book = stockBook(s), cash = nonnegative(s.cash), savings = nonnegative(s.savings);
   const k401 = nonnegative(s.k401Balance), roth = nonnegative(s.rothBalance);
+  const spouseK401 = nonnegative(s.spouseK401Balance), spouseRoth = nonnegative(s.spouseRothBalance);
   const home = (s.homes || []).reduce((n,h) => n + nonnegative(h.value), 0);
   const mortgage = (s.homes || []).reduce((n,h) => n + nonnegative(h.mortgageOwed), 0);
   const other = (s.otherLoans || []).reduce((n,l) => n + nonnegative(l.principal), 0)
     + nonnegative(s.otherDebt) + nonnegative(s.taxPayable) + nonnegative(s.propertyTaxPayable);
   const totalTaxable = money(cash + savings + book.value), liquid = money(cash + savings + availableStocks(s));
-  const net = money(totalTaxable + k401 + roth + home - mortgage - other);
+  const net = money(totalTaxable + k401 + roth + spouseK401 + spouseRoth + home - mortgage - other);
   return { bank: Math.round(cash), portfolio: Math.round(net), netWorth: Math.round(net), exactNetWorth: net,
-    liquid, availableLiquid: money(cash + savings + availableStocks(s)), illiquid: money(home + k401 + roth + book.value - availableStocks(s)),
+    liquid, availableLiquid: money(cash + savings + availableStocks(s)), illiquid: money(home + k401 + roth + spouseK401 + spouseRoth + book.value - availableStocks(s)),
     homeEquity: money(home - mortgage), debts: money(mortgage + other), cash, savings, stocks: book.value,
-    stocksCostBasis: book.basis, k401Balance: money(k401), rothBalance: money(roth) };
+    stocksCostBasis: book.basis, k401Balance: money(k401), rothBalance: money(roth),
+    spouseK401Balance: money(spouseK401), spouseRothBalance: money(spouseRoth) };
 }
 export const liquidTotal = s => computeWorth(s).availableLiquid;
 export const annualAmortizingPayment = (p,r,t) => monthlyPayment(p,r,Math.max(0,Math.round(t*12))) * 12;
@@ -52,30 +67,29 @@ export const annualMortgagePayment = h => (h.monthlyPayment ?? monthlyPayment(h.
   h.remainingMonths ?? Math.round(h.remainingTerm*12))) * 12;
 export const annualLoanPayment = l => (l.monthlyPayment ?? monthlyPayment(l.principal,l.rate,
   l.remainingMonths ?? Math.round(l.remainingTerm*12))) * 12;
-function moveSavings(s, amount) {
-  const take = money(Math.min(nonnegative(s.savings),nonnegative(amount)));
-  s.savings = money(nonnegative(s.savings)-take); s.cash = money(nonnegative(s.cash)+take);
-  return take;
-}
 /** `early`: the player accepted the 10% early-withdrawal penalty for this withdrawal. */
-function traditionalWithdrawal(s,amount,age,forced=false,early=false) {
-  if (!forced && !early && age < 59.5 && !s.allowEarlyRetirementWithdrawals) return 0;
-  const take = money(Math.min(nonnegative(s.k401Balance),amount));
-  s.k401Balance = money(nonnegative(s.k401Balance)-take); s.cash = money(nonnegative(s.cash)+take);
+function traditionalWithdrawal(s,amount,age,forced=false,early=false,owner='primary') {
+  const p=ownerState(s,owner),key=ownerKey('k401Balance',owner);
+  if (age==null || (!forced && !early && age < 59.5 && !p.allowEarlyRetirementWithdrawals)) return 0;
+  s[ownerKey('rmdPriorYearBalance',owner)] ??= nonnegative(s[key]);
+  const take = money(Math.min(nonnegative(s[key]),amount));
+  s[key] = money(nonnegative(s[key])-take); s.cash = money(nonnegative(s.cash)+take);
   addIncome(s,'traditionalWithdrawals',take);
-  addIncome(s,'rmdEligibleWithdrawals',take);
-  if (age < 59.5 && !s.earlyWithdrawalPenaltyException) addIncome(s,'penalties',take*.10);
-  post(s,forced?'rmd':'traditional-withdrawal',{amount:take});
+  addIncome(s,owner==='spouse'?'spouseRmdEligibleWithdrawals':'rmdEligibleWithdrawals',take);
+  if (age < 59.5 && !p.earlyWithdrawalPenaltyException) addIncome(s,'penalties',take*.10);
+  post(s,forced?'rmd':'traditional-withdrawal',{amount:take,owner});
   return take;
 }
-function rothWithdrawal(s,amount,age) {
-  const qualified = age >= 59.5 && s.rothOpenedYear != null && s.year-s.rothOpenedYear >= 5;
-  const accessible = qualified ? nonnegative(s.rothBalance)
-    : Math.min(nonnegative(s.rothBalance),nonnegative(s.rothContributionBasis));
+function rothWithdrawal(s,amount,age,owner='primary') {
+  const p=ownerState(s,owner), balanceKey=ownerKey('rothBalance',owner),basisKey=ownerKey('rothContributionBasis',owner);
+  if (age==null) return 0;
+  const qualified = age >= 59.5 && p.rothOpenedYear != null && s.year-p.rothOpenedYear >= 5;
+  const accessible = qualified ? nonnegative(p.rothBalance)
+    : Math.min(nonnegative(p.rothBalance),nonnegative(p.rothContributionBasis));
   const take = money(Math.min(accessible,amount));
-  s.rothBalance = money(nonnegative(s.rothBalance)-take);
-  s.rothContributionBasis = money(Math.max(0,nonnegative(s.rothContributionBasis)-take));
-  s.cash = money(nonnegative(s.cash)+take); post(s,'roth-withdrawal',{amount:take,qualified});
+  s[balanceKey] = money(nonnegative(s[balanceKey])-take);
+  s[basisKey] = money(Math.max(0,nonnegative(s[basisKey])-take));
+  s.cash = money(nonnegative(s.cash)+take); post(s,'roth-withdrawal',{amount:take,qualified,owner});
   return take;
 }
 /**
@@ -85,8 +99,8 @@ function rothWithdrawal(s,amount,age) {
 export function raiseCash(s,amount) {
   return money(Math.min(nonnegative(amount),nonnegative(s.cash)));
 }
-function withdrawFrom(s,amount,age,account,early=false) {
-  return account==='roth' ? rothWithdrawal(s,amount,age) : traditionalWithdrawal(s,amount,age,false,early);
+function withdrawFrom(s,amount,age,account,early=false,owner='primary') {
+  return account==='roth' ? rothWithdrawal(s,amount,age,owner) : traditionalWithdrawal(s,amount,age,false,early,owner);
 }
 function payCost(s,amount,label,statement,{age=s.age,debt=false}={}) {
   const required = money(nonnegative(amount));
@@ -123,7 +137,14 @@ export function applySecuritiesMarginCall(s,events=[],statement=null) {
     const counted=statement?.marginShortfall || 0;
     if (statement && unpaid>counted) { statement.unfunded=money(statement.unfunded+unpaid-counted); statement.marginShortfall=unpaid; }
   }
-  if (!s._compact) events.push('Margin call: repaid $'+fmt(pay)+(unpaid>.01?'; not enough Cash for $'+fmt(unpaid):''));
+  if (!s._compact || s._recordEvents) {
+    const index=events.length;
+    events.push('Margin call: repaid $'+fmt(pay)+(unpaid>.01?'; not enough Cash for $'+fmt(unpaid):''));
+    if (statement) {
+      statement.eventDetails ||= [];
+      statement.eventDetails.push({index,kind:'margin-call',paid:pay,unpaid,priceIndex:s.priceIndex || 1,year:s.year});
+    }
+  }
   post(s,'margin-call',{repayment:pay,collateralSold:0,unpaid});
   return pay;
 }
@@ -158,9 +179,9 @@ function settleTax(s,difficulty,statement,age,events) {
 }
 export function projectOneYear(state,difficultyId,opts={}) {
   const difficulty=effectiveDifficulty(state,difficultyId || state.difficulty || 'standard');
-  const s=copy(state), events=[];
+  const s=opts.compact?simulationCopy(state):copy(state), events=[];
   s._compact=!!opts.compact;
-  if (opts.compact) { delete s.transactions; delete s.lastStatement; }
+  s._recordEvents=!!opts.recordEvents;
   ensureHoldings(s);
   const beginning=computeWorth(s), year=s.year, age=s.age;
   s.birthYear ??= year-Math.floor(age); s.priceIndex ??=1; s.childCostInflator ??=s.priceIndex;
@@ -169,61 +190,61 @@ export function projectOneYear(state,difficultyId,opts={}) {
     paidExpenses:0,taxPaid:0,unfunded:0,missedSpending:0,employeeContribution:0,employerContribution:0,
     rothContribution:0,assetGrowth:0,priceIndex:s.priceIndex,inflation:economy.inflation,
     equityReturn:economy.equity,bondReturn:economy.bond,pensionIncome:0,loanPrincipalPaid:0,unpaidLoanInterest:0};
-  const prior401=nonnegative(s.k401Balance);
-  const deferralAnnual=employee401kDeferral(s), matchAnnual=employer401kMatch(s,deferralAnnual);
-  const workMonths = s.employed && !s.retired ? Math.min(12,Math.max(0,Math.ceil(((s.retirementAge ?? 65)-age)*12))) : 0;
-  const spouseMonths = s.spouseEmployed !== false ? Math.min(12,Math.max(0,Math.ceil(((s.spouseRetirementAge ?? s.retirementAge ?? 65)-age)*12))) : 0;
-  const expectedCompensation=nonnegative(s.salary)*workMonths/12+nonnegative(s.spouseSalary)*spouseMonths/12;
-  const wageWithholding=estimateAnnualTax(s,difficulty,{year,wages:nonnegative(s.salary)*workMonths/12,
-    spouseWages:nonnegative(s.spouseSalary)*spouseMonths/12,deferral:deferralAnnual*workMonths/12}).total;
+  const prior401={primary:nonnegative(s.rmdPriorYearBalance,nonnegative(s.k401Balance)),
+    spouse:nonnegative(s.spouseRmdPriorYearBalance,nonnegative(s.spouseK401Balance))};
+  const openingPropertyTaxPayable=nonnegative(s.propertyTaxPayable);
+  const schedule=incomeSchedule(s,{economy});
+  for (const [owner,index] of Object.entries(schedule.claimPriceIndices)) s[ownerKey('socialSecurityClaimPriceIndex',owner)]=index;
+  const expectedCompensation=schedule.annual.wages+schedule.annual.spouseWages;
+  const wageWithholding=estimateAnnualTax(s,difficulty,{year,wages:schedule.annual.wages,
+    spouseWages:schedule.annual.spouseWages,deferral:schedule.annual.deferral,spouseDeferral:schedule.annual.spouseDeferral}).total;
   const factors=new Map(s.stocksHoldings.map(h=>[h.id,monthGross(
     (1+holdingReturn(h,economy,s,opts))*(1-nonnegative(s.investmentFee,economy.investmentFee)))]));
   const divYield=nonnegative(s.equityDividendYield,economy.equityDividendYield);
   const kGross=monthGross(accountGross(economy,s.k401Allocation,s.investmentFee ?? economy.investmentFee));
   const rGross=monthGross(accountGross(economy,s.rothAllocation,s.investmentFee ?? economy.investmentFee));
+  const spouseKGross=monthGross(accountGross(economy,s.spouseK401Allocation,s.investmentFee ?? economy.investmentFee));
+  const spouseRGross=monthGross(accountGross(economy,s.spouseRothAllocation,s.investmentFee ?? economy.investmentFee));
   const saveGross=monthGross(1+nonnegative(s.savingsRate,economy.savingsRate));
   const homeGross=monthGross(1+economy.homeReturn);
   const rng=mulberry32(hashSeed(opts.seed ?? s.simulationSeed ?? 20261004,opts.simulationIndex ?? 0,year,'life-events'));
   const shock=opts.shockAmount!=null?nonnegative(opts.shockAmount)
-    : !opts.deterministic && rng()<(s.shockChance ?? difficulty.shockChance ?? .04)
+    : randomVariationEnabled(opts) && rng()<(s.shockChance ?? difficulty.shockChance ?? .04)
       ? money((2000+rng()*(s.shockMax ?? difficulty.shockMax ?? 8000))*s.priceIndex):0;
   for (let month=1;month<=12;month++) {
     s._month=month;
     const currentAge=age+(month-1)/12;
     if (s.employed && !s.retired && currentAge>=(s.retirementAge ?? 65)) {
-      s.retired=true; s.employed=false; if (!s._compact) events.push('Retired');
+      s.retired=true; s.employed=false; if (!s._compact || s._recordEvents) events.push('Retired');
     }
-    let wages=0;
-    if (s.employed && !s.retired) {
-      wages=monthlyAmount(nonnegative(s.salary),month);
-      const deferral=Math.min(wages,Math.max(0,deferralAnnual-income.deferral),monthlyAmount(deferralAnnual,month)), match=monthlyAmount(matchAnnual,month);
-      s.cash=money(nonnegative(s.cash)+wages-deferral);
-      s.k401Balance=money(nonnegative(s.k401Balance)+deferral+match);
-      addIncome(s,'wages',wages); addIncome(s,'deferral',deferral);
-      statement.employeeContribution+=deferral; statement.employerContribution+=match;
+    const scheduled=schedule.months[month-1];
+    for (const owner of ['primary','spouse']) {
+      if (owner==='spouse' && !s.married) continue;
+      const m=scheduled[owner];
+      if (owner==='spouse' && s.spouseEmployed!==false && !s.spouseRetired && m.age!=null && m.age>=(s.spouseRetirementAge ?? 65)) {
+        s.spouseRetired=true;s.spouseEmployed=false;if (!s._compact || s._recordEvents) events.push((s.spouseName || 'Spouse')+' retired');
+      }
+      s.cash=money(nonnegative(s.cash)+m.wages-m.deferral);
+      const balanceKey=ownerKey('k401Balance',owner);
+      s[balanceKey]=money(nonnegative(s[balanceKey])+m.deferral+m.match);
+      addIncome(s,owner==='spouse'?'spouseWages':'wages',m.wages);
+      addIncome(s,owner==='spouse'?'spouseDeferral':'deferral',m.deferral);
+      statement.employeeContribution+=m.deferral;statement.employerContribution+=m.match;
+      const benefit=m.benefit || 0,pension=m.pension || 0;
+      s.cash=money(s.cash+benefit+pension);addIncome(s,'socialSecurity',benefit);addIncome(s,'traditionalWithdrawals',pension);
+      statement.pensionIncome=money(statement.pensionIncome+pension);
+      const plan=s[ownerKey('retirementWithdrawalPlan',owner)];
+      if (plan && nonnegative(plan.amount)>0) {
+        const got=withdrawFrom(s,monthlyAmount(nonnegative(plan.amount),month),m.age,plan.account,!!plan.early,owner);
+        statement.plannedWithdrawals=money((statement.plannedWithdrawals || 0)+got);
+      }
     }
-    const spouseWorking=s.spouseEmployed!==false && currentAge<(s.spouseRetirementAge ?? s.retirementAge ?? 65);
-    const spouseWages=spouseWorking?monthlyAmount(nonnegative(s.spouseSalary),month):0;
-    s.cash=money(nonnegative(s.cash)+spouseWages); addIncome(s,'spouseWages',spouseWages);
+    const wages=scheduled.primary.wages || 0,spouseWages=scheduled.spouse.wages || 0;
     // Monthly estimated W-2 withholding; final tax settlement credits every prepayment.
     const wageTax=expectedCompensation>0?money(wageWithholding*(wages+spouseWages)/expectedCompensation):0;
     if (wageTax>0) {
       const paid=raiseCash(s,wageTax);
       s.cash=money(s.cash-paid);income.taxPaid=money(income.taxPaid+paid);post(s,'wage-withholding',{amount:paid});
-    }
-    const expectedWages = s.employed && !s.retired ? nonnegative(s.salary) * Math.min(1,Math.max(0,(s.retirementAge ?? 65)-age)) : 0;
-    const benefit=Math.max(0,money(monthlyBenefit(s,currentAge,s.priceIndex)-benefitEarningsReduction(s,currentAge,expectedWages)));
-    s.cash=money(s.cash+benefit); addIncome(s,'socialSecurity',benefit);
-    const pension=monthlyAmount(nonnegative(s.annualPension)*(s.pensionCOLA?s.priceIndex:1),month);
-    if (currentAge>=(s.pensionStartAge ?? s.retirementAge ?? 65) && pension) {
-      s.cash=money(s.cash+pension); addIncome(s,'traditionalWithdrawals',pension);
-      statement.pensionIncome=money(statement.pensionIncome+pension);
-    }
-    // The player's standing retirement withdrawal (set in a Decision Room), paid monthly into Cash.
-    const plan=s.retirementWithdrawalPlan;
-    if (plan && nonnegative(plan.amount)>0) {
-      const got=withdrawFrom(s,monthlyAmount(nonnegative(plan.amount),month),currentAge,plan.account,!!plan.early);
-      statement.plannedWithdrawals=money((statement.plannedWithdrawals || 0)+got);
     }
     for (const h of s.stocksHoldings) {
       if (!h.value) continue;
@@ -239,7 +260,7 @@ export function projectOneYear(state,difficultyId,opts={}) {
     syncBook(s);
     const interest=money(nonnegative(s.savings)*(saveGross-1));
     s.savings=money(nonnegative(s.savings)+interest); addIncome(s,'interest',interest); statement.assetGrowth+=interest;
-    for (const [key,g] of [['k401Balance',kGross],['rothBalance',rGross]]) {
+    for (const [key,g] of [['k401Balance',kGross],['rothBalance',rGross],['spouseK401Balance',spouseKGross],['spouseRothBalance',spouseRGross]]) {
       const before=nonnegative(s[key]); s[key]=money(before*g); statement.assetGrowth+=s[key]-before;
     }
     let rentalProfit=0;
@@ -263,7 +284,7 @@ export function projectOneYear(state,difficultyId,opts={}) {
         const schedule=payLoan(home,paid,true); interestPaid=Math.min(paid,due.interest);
         addIncome(s,'mortgageInterest',interestPaid); statement.loanPrincipalPaid+=schedule.principal;
         statement.unpaidLoanInterest+=Math.max(0,due.interest-paid);
-        if (home.mortgageOwed<=.01 && !s._compact) events.push('Mortgage paid off: '+(home.label || home.type)+'.');
+        if (home.mortgageOwed<=.01 && (!s._compact || s._recordEvents)) events.push('Mortgage paid off: '+(home.label || home.type)+'.');
       }
       if (rental) rentalProfit+=Math.max(0,revenue-paidProperty-paidOperating-interestPaid-nonnegative(home.annualDepreciation)/12);
     }
@@ -284,38 +305,69 @@ export function projectOneYear(state,difficultyId,opts={}) {
     payCost(s,monthlyAmount(nonnegative(s.annualSpending),month),'living',statement,{age:currentAge});
     if (s.housing==='rent') payCost(s,nonnegative(s.monthlyRent),'rent',statement,{age:currentAge});
     if (s.annualHealthcare) payCost(s,monthlyAmount(nonnegative(s.annualHealthcare),month),'healthcare',statement,{age:currentAge});
+    for (const plan of s.childcarePlans || []) {
+      if (year<(plan.startYear ?? year) || year>=(plan.endYearExclusive ?? Infinity)) continue;
+      const amount=nonnegative(plan.annualCost)*s.priceIndex/(plan.entryPriceIndex ?? plan.enteredPriceIndex ?? s.priceIndex);
+      payCost(s,monthlyAmount(amount,month),'childcare',statement,{age:currentAge});
+    }
     for (const kid of s.kids || []) {
-      if (month===1 && kid.age===18 && kid.collegeEnabled!==false && !s._compact) events.push((kid.name || 'Child')+' goes to college');
+      if (month===1 && kid.age===18 && kid.collegeEnabled!==false && (!s._compact || s._recordEvents)) events.push((kid.name || 'Child')+' goes to college');
       const college=kid.age>=18 && kid.age<22 && kid.collegeEnabled!==false;
       const cost=college?nonnegative(kid.annualCollegeCost,nonnegative(s.annualCollegeCost,28000))*s.childCostInflator
-        : annualChildCost(kid.age,difficulty,s.childCostInflator);
+        : annualChildCost(kid.age,difficulty,s.priceIndex);
       payCost(s,monthlyAmount(cost,month),college?'college':'children',statement,{age:currentAge});
     }
     if (month===6 && shock) {
       payCost(s,shock,'unexpected',statement,{age:currentAge});
-      if (!s._compact) events.push('Unexpected expense: $'+fmt(shock));
+      if (!s._compact || s._recordEvents) {
+        const index=events.length;
+        events.push('Unexpected expense: $'+fmt(shock));
+        statement.eventDetails ||= [];
+        statement.eventDetails.push({index,kind:'unexpected-expense',amount:shock,priceIndex:s.priceIndex || 1,year});
+      }
     }
     applySecuritiesMarginCall(s,events,statement);
   }
   s.socialSecurity=income.socialSecurity;
-  const rmd=requiredDistribution(prior401,age,s.birthYear,
-    s.rmdStillWorkingException===true && s.employed && !s.retired && !s.fivePercentOwner);
-  if (rmd>(income.rmdEligibleWithdrawals || 0)) traditionalWithdrawal(s,rmd-(income.rmdEligibleWithdrawals || 0),age+11/12,true);
+  for (const owner of ['primary','spouse']) {
+    if (owner==='spouse' && !s.married) continue;
+    const p=ownerState(s,owner),personAge=ownerAge(s,owner);
+    if (personAge==null) continue;
+    const rmd=requiredDistribution(prior401[owner],personAge,p.birthYear ?? year-Math.floor(personAge),
+      p.rmdStillWorkingException===true && ownerWorking(s,personAge+11/12,owner) && !p.fivePercentOwner);
+    const withdrawn=nonnegative(income[owner==='spouse'?'spouseRmdEligibleWithdrawals':'rmdEligibleWithdrawals']);
+    if (rmd>withdrawn) traditionalWithdrawal(s,rmd-withdrawn,personAge+11/12,true,false,owner);
+  }
   if (s.propertyTaxPayable>0) {
-    const paid=payCost(s,s.propertyTaxPayable,'propertyTaxArrears',statement,{age:age+11/12,debt:true});
-    s.propertyTaxPayable=money(s.propertyTaxPayable-paid); statement.loanPrincipalPaid+=paid;
+    // Repaying an accrued liability is not a second expense or a second cash shortfall.
+    const arrears=nonnegative(s.propertyTaxPayable),paid=raiseCash(s,arrears);
+    s.cash=money(s.cash-paid);s.propertyTaxPayable=money(arrears-paid);
+    statement.paidExpenses=money(statement.paidExpenses+paid);statement.loanPrincipalPaid+=paid;
+    statement.propertyTaxArrearsPaid=paid;
+    // Old unpaid taxes are a current funding obligation; this year's accrual was already counted.
+    const oldUnpaid=money(Math.max(0,openingPropertyTaxPayable-paid));
+    if (oldUnpaid>.01) {
+      statement.unfunded=money(statement.unfunded+oldUnpaid);s.planFailed=true;s.firstFailureYear ??=year;
+    }
+    addIncome(s,'propertyTaxPaid',paid);post(s,'liability-payment',{category:'propertyTaxArrears',required:arrears,paid,remaining:s.propertyTaxPayable});
   }
   const preview=estimateAnnualTax(s,difficulty,income);
   // Year-end Roth funding from Cash only (after reserving tax due), legal compensation/MAGI caps,
   // and an explicit five-year clock. Optional: skipped quietly when Cash is short.
-  const cap=rothLimit(year,age,preview.meta.agi,s.married,income.wages+income.spouseWages,s.taxInflation ?? .025);
-  const roth=money(Math.min(nonnegative(s.rothAnnualContribution),cap,
-    Math.max(0,nonnegative(s.cash)-Math.max(0,preview.total+nonnegative(s.taxPayable)-income.taxPaid))));
-  if (s.hasRoth!==false && roth>0) {
-    s.cash=money(s.cash-roth);
-    s.rothBalance=money(nonnegative(s.rothBalance)+roth);
-    s.rothContributionBasis=money(nonnegative(s.rothContributionBasis)+roth); s.rothOpenedYear ??=year;
-    statement.rothContribution=roth; post(s,'roth-contribution',{amount:roth,eligibleLimit:cap});
+  let remainingCompensation=income.wages+income.spouseWages;
+  for (const owner of ['primary','spouse']) {
+    if (owner==='spouse' && !s.married) continue;
+    const p=ownerState(s,owner),personAge=ownerAge(s,owner);
+    if (personAge==null) continue;
+    const cap=rothLimit(year,personAge,preview.meta.agi,s.married,remainingCompensation,s.taxInflation ?? .025);
+    const roth=money(Math.min(nonnegative(p.rothAnnualContribution),cap,
+      Math.max(0,nonnegative(s.cash)-Math.max(0,preview.total+nonnegative(s.taxPayable)-income.taxPaid))));
+    if (p.hasRoth!==false && roth>0) {
+      s.cash=money(s.cash-roth);remainingCompensation=money(remainingCompensation-roth);
+      const balanceKey=ownerKey('rothBalance',owner),basisKey=ownerKey('rothContributionBasis',owner),openedKey=ownerKey('rothOpenedYear',owner);
+      s[balanceKey]=money(nonnegative(s[balanceKey])+roth);s[basisKey]=money(nonnegative(s[basisKey])+roth);s[openedKey] ??=year;
+      statement.rothContribution=money(statement.rothContribution+roth);post(s,'roth-contribution',{amount:roth,eligibleLimit:cap,owner});
+    }
   }
   const tax=settleTax(s,difficulty,statement,age+11/12,events);
   for (const key of ['assetGrowth','employeeContribution','employerContribution','loanPrincipalPaid','unpaidLoanInterest']) statement[key]=money(statement[key]);
@@ -329,9 +381,12 @@ export function projectOneYear(state,difficultyId,opts={}) {
   statement.reconciliation.difference=money(statement.ending.exactNetWorth-beginning.exactNetWorth
     -grossIncome-statement.employerContribution-statement.assetGrowth+consumption+tax.total-openingTaxPaid+statement.unpaidLoanInterest+(statement.unpaidPropertyTax || 0));
   s.year=year+1; s.age=money(age+1);
+  s.rmdPriorYearBalance=nonnegative(s.k401Balance);s.spouseRmdPriorYearBalance=nonnegative(s.spouseK401Balance);
+  s.priorYearWages=income.wages;s.spousePriorYearWages=income.spouseWages;
+  if (s.spouseAge!=null) s.spouseAge=money(s.spouseAge+1);
   for (const kid of s.kids || []) kid.age=money(nonnegative(kid.age)+1);
   if (s.employed && !s.retired) s.salary=money(nonnegative(s.salary)*(1+economy.salaryGrowth)); else s.salary=0;
-  if (s.spouseSalary && age<(s.spouseRetirementAge ?? s.retirementAge ?? 65)) s.spouseSalary=money(s.spouseSalary*(1+economy.salaryGrowth));
+  if (s.spouseSalary && s.spouseEmployed!==false && !s.spouseRetired) s.spouseSalary=money(s.spouseSalary*(1+economy.salaryGrowth));
   s.priceIndex*=1+economy.inflation;
   s.childCostInflator*=1+(s.educationInflation ?? economy.inflation);
   s.annualSpending=money(nonnegative(s.annualSpending)*(1+economy.inflation));
@@ -339,6 +394,8 @@ export function projectOneYear(state,difficultyId,opts={}) {
   s.annualHealthcare=money(nonnegative(s.annualHealthcare)*(1+(s.healthcareInflation ?? economy.inflation)));
   if (s.retirementWithdrawalPlan?.amount>0 && s.retirementWithdrawalPlan.inflationAdjusted!==false)
     s.retirementWithdrawalPlan.amount=money(s.retirementWithdrawalPlan.amount*(1+economy.inflation));
+  if (s.spouseRetirementWithdrawalPlan?.amount>0 && s.spouseRetirementWithdrawalPlan.inflationAdjusted!==false)
+    s.spouseRetirementWithdrawalPlan.amount=money(s.spouseRetirementWithdrawalPlan.amount*(1+economy.inflation));
   for (const h of s.homes || []) {
     if (h.annualPropertyTax!=null) h.annualPropertyTax=money(h.annualPropertyTax*(1+(h.propertyTaxGrowth ?? economy.inflation)));
     for (const key of ['annualMaintenance','annualInsurance','annualHOA']) if (h[key]!=null) h[key]=money(h[key]*(1+economy.inflation));
@@ -347,8 +404,8 @@ export function projectOneYear(state,difficultyId,opts={}) {
   s.spendingBreakdown={other:s.annualSpending}; s.otherLoans=(s.otherLoans || []).filter(l=>l.principal>.01);
   if (!opts.compact) s.lastStatement=statement;
   s.fundingStatus={success:statement.fundingSuccess,unfunded:statement.unfunded,firstFailureYear:s.firstFailureYear ?? null};
-  delete s._month; delete s._compact;
-  return {state:s,events,tax,worth:computeWorth(s),statement};
+  delete s._month; delete s._compact;delete s._recordEvents;
+  return {state:s,events,tax,worth:statement.ending,statement};
 }
 export function projectYears(baseline,years,difficultyId,opts={}) {
   let state=copy(baseline); const snapshots=[], options={...opts,startYear:opts.startYear ?? baseline.year};
@@ -365,7 +422,7 @@ export function findBankInsolvencyIndex(snapshots) {
     || snapshots[k].statement?.fundingSuccess===false || snapshots[k].state?.fundingStatus?.success===false) return k;
   return -1;
 }
-function rejected(state,reason) { const s=copy(state); s.lastTransaction={accepted:false,reason}; return s; }
+function rejected(state,reason,details={}) { const s=copy(state); s.lastTransaction={accepted:false,reason,...details}; return s; }
 function accepted(s,description) { s.lastTransaction={accepted:true,description}; return s; }
 /** Atomic purchase from Cash only. Nothing is sold or transferred to cover it. */
 function fundPurchase(state,cost) {
@@ -374,11 +431,13 @@ function fundPurchase(state,cost) {
   const s=copy(state); s.cash=money(nonnegative(s.cash)-due); return s;
 }
 const notEnoughCash=(state,cost)=>NOT_ENOUGH_CASH+'\nNeeds $'+fmt(nonnegative(cost))+'; Cash is $'+fmt(nonnegative(state.cash))+'.';
+const cashRejection=(state,cost)=>rejected(state,notEnoughCash(state,cost),{
+  reasonCode:'insufficient-cash',required:money(nonnegative(cost)),available:money(nonnegative(state.cash)),source:'cash'});
 export function buyHome(state,spec) {
   const value=nonnegative(spec.value),down=nonnegative(spec.downPayment);
   if (!(value>0) || down>value) return rejected(state,'Invalid home value or down payment.');
   const closing=nonnegative(spec.closingCosts,value*.02),s=fundPurchase(state,money(down+closing));
-  if (!s) return rejected(state,notEnoughCash(state,down+closing));
+  if (!s) return cashRejection(state,down+closing);
   const mortgage=money(value-down),months=Math.round(nonnegative(spec.term,30)*12),rate=nonnegative(spec.rate,.065);
   s.homes ||= []; s.homes.push({...spec,type:spec.type || 'primary',
     label:spec.label || HOME_TYPES[spec.type || 'primary']?.label || 'Home',value,costBasis:money(value+closing),
@@ -399,7 +458,7 @@ export function sellHome(state,index,opts={}) {
   const secured=lienIndices.reduce((n,i)=>n+s.otherLoans[i].principal,0)+h.mortgageOwed,net=money(proceeds-fee-secured);
   if (net<0) {
     const funded=fundPurchase(s,-net);
-    if (!funded) return rejected(state,notEnoughCash(state,-net));
+    if (!funded) return cashRejection(state,-net);
     s=funded;
   } else s.cash=money(nonnegative(s.cash)+net);
   const exclusion=h.type==='primary' && opts.exclusionEligible===true?(s.married?500000:250000):0;
@@ -415,9 +474,10 @@ export function sellHome(state,index,opts={}) {
 }
 export function buyStock(state,amount,opts={}) {
   const cost=money(nonnegative(amount));
-  if (!cost || cost>nonnegative(state.cash)+nonnegative(state.savings)) return rejected(state,'The full purchase amount must be available in cash or savings.');
-  const s=copy(state); moveSavings(s,Math.max(0,cost-nonnegative(s.cash)));
-  s.cash=money(s.cash-cost); invest(s,cost,opts); return accepted(s,'Investment purchased.');
+  if (!cost) return rejected(state,'Enter a positive purchase amount.');
+  const s=fundPurchase(state,cost);
+  if (!s) return cashRejection(state,cost);
+  invest(s,cost,opts); return accepted(s,'Investment purchased.');
 }
 export function sellStock(state,opts={},difficulty=null) {
   if ((state.stocksHoldings || []).some(h=>!h.illiquid && h.basisKnown===false && (!opts.holdingId || h.id===opts.holdingId)))
@@ -425,16 +485,17 @@ export function sellStock(state,opts={},difficulty=null) {
   const s=copy(state),held=availableStocks(s);
   const amount=opts.percent!=null?held*nonnegative(opts.percent)/100:nonnegative(opts.proceeds);
   const sale=liquidate(s,amount,{holdingId:opts.holdingId,date:opts.date});
-  const tax=estimateCapitalGainsTax({...sale,state,difficulty:difficulty || {}});
+  const tax=estimateCapitalGainsTax({...sale,state,afterState:s,difficulty:difficulty || {}});
   const withholding=money(Math.min(nonnegative(tax.total),s.cash));
   s.cash=money(s.cash-withholding); incomeFor(s).taxPaid=money(incomeFor(s).taxPaid+withholding);
   return {state:accepted(s,'Holdings sold.'),tax,netCash:money(sale.proceeds-withholding),...sale};
 }
 export const sellStockSimple=(s,amount)=>sellStock(s,{proceeds:amount}).state;
-export function setEmployment(state,mode) {
+export function setEmployment(state,mode,{owner='primary'}={}) {
   const s=copy(state);
-  if (mode==='leave' || mode==='retire') { s.employed=false; s.retired=mode==='retire'; s.salary=0; }
-  if (mode==='start') { s.retired=false; s.employed=nonnegative(s.salary)>0; }
+  const employed=ownerKey('employed',owner),retired=ownerKey('retired',owner),salary=ownerKey('salary',owner);
+  if (mode==='leave' || mode==='retire') { s[employed]=false; s[retired]=mode==='retire'; s[salary]=0; }
+  if (mode==='start') { s[retired]=false; s[employed]=nonnegative(s[salary])>0; }
   return s;
 }
 export function addKid(state,kid={}) {
@@ -445,7 +506,7 @@ export function largePurchase(state,amount,opts={}) {
   const price=money(nonnegative(amount)),down=opts.financed?Math.min(price,nonnegative(opts.downPayment)):price;
   if (!price) return rejected(state,'Enter a positive purchase amount.');
   const s=fundPurchase(state,down);
-  if (!s) return rejected(state,notEnoughCash(state,down));
+  if (!s) return cashRejection(state,down);
   const label=opts.label?.trim() || 'Large Purchase';
   if (opts.financed && price>down) {
     const months=Math.max(1,Math.round(nonnegative(opts.term,5)*12)),rate=nonnegative(opts.rate);
@@ -480,51 +541,92 @@ export function transferSavings(state,amount,direction='toCash') {
   const from=toSavings?'cash':'savings', to=toSavings?'savings':'cash';
   if (!(want>0)) return rejected(state,'Enter a positive amount.');
   if (want>nonnegative(state[from])+.001)
-    return rejected(state,'Only $'+fmt(nonnegative(state[from]))+' is in '+(toSavings?'Cash':'Savings')+'.');
+    return rejected(state,'Only $'+fmt(nonnegative(state[from]))+' is in '+(toSavings?'Cash':'Savings')+'.',{
+      reasonCode:'insufficient-account-balance',required:want,available:money(nonnegative(state[from])),source:from});
   const s=copy(state);
   s[from]=money(nonnegative(s[from])-want); s[to]=money(nonnegative(s[to])+want);
   post(s,'transfer',{from,to,amount:want});
   return accepted(s,'Moved $'+fmt(want)+' from '+(toSavings?'Cash to Savings':'Savings to Cash')+'.');
 }
 /** What the player can withdraw now from 'traditional' (401(k)) or 'roth' under the age/basis rules. */
-export function retirementAccess(state,account='traditional',{early=false}={}) {
-  const age=state.age;
+export function retirementAccess(state,account='traditional',{early=false,owner='primary'}={}) {
+  const p=ownerState(state,owner),age=ownerAge(state,owner);
+  if (age==null || (owner==='spouse' && !state.married)) return {available:0,gated:true,ageUnknown:age==null,penalty:false};
   if (account==='roth') {
-    const qualified=age>=59.5 && state.rothOpenedYear!=null && state.year-state.rothOpenedYear>=5;
-    return {available:money(qualified?nonnegative(state.rothBalance)
-      :Math.min(nonnegative(state.rothBalance),nonnegative(state.rothContributionBasis))),qualified,penalty:false};
+    const qualified=age>=59.5 && p.rothOpenedYear!=null && state.year-p.rothOpenedYear>=5;
+    return {available:money(qualified?nonnegative(p.rothBalance)
+      :Math.min(nonnegative(p.rothBalance),nonnegative(p.rothContributionBasis))),qualified,penalty:false};
   }
-  const gated=age<59.5 && !early && !state.allowEarlyRetirementWithdrawals;
-  return {available:gated?0:money(nonnegative(state.k401Balance)),gated,
-    penalty:age<59.5 && !state.earlyWithdrawalPenaltyException};
+  const gated=age<59.5 && !early && !p.allowEarlyRetirementWithdrawals;
+  return {available:gated?0:money(nonnegative(p.k401Balance)),gated,
+    penalty:age<59.5 && !p.earlyWithdrawalPenaltyException};
+}
+/** Bounded, cents-based tax gross-up. A preview never changes the input portfolio. */
+export function previewRetirementWithdrawal(state,{amount,netTarget,account='traditional',early=false,owner='primary',difficulty={}}={}) {
+  const access=retirementAccess(state,account,{early,owner});
+  const zeroTax={total:0,federal:0,state:0,niit:0,penalties:0};
+  const fail=(reason,details={})=>({accepted:false,reason,gross:0,amount:0,netCash:0,tax:zeroTax,available:access.available,targetMet:false,...details});
+  if (access.ageUnknown) return fail('Confirm the account owner’s age before withdrawing retirement money.');
+  if (access.gated) return fail('Before age 59½ a 401(k) withdrawal needs your OK to pay the 10% early-withdrawal penalty.');
+  const target=money(nonnegative(netTarget)),want=money(nonnegative(amount));
+  if (!(target>0) && !(want>0)) return fail('Enter a positive amount.');
+  const baseTax=estimateAnnualTax(state,difficulty,projectedIncome(state));
+  const evaluate=gross=>{
+    const candidate=simulationCopy(state);
+    candidate._compact=true;
+    withdrawFrom(candidate,gross,ownerAge(state,owner),account,early,owner);
+    const afterTax=estimateAnnualTax(candidate,difficulty,projectedIncome(candidate));
+    const tax={};
+    for (const key of Object.keys(zeroTax)) tax[key]=money(Math.max(0,afterTax[key]-baseTax[key]));
+    return {accepted:true,gross,amount:gross,netCash:money(gross-tax.total),tax,available:access.available,target:target || null,targetMet:true};
+  };
+  if (!target) {
+    if (want>access.available+.001) return fail('Only $'+fmt(access.available)+' can be withdrawn from this account now.',{
+      reasonCode:'insufficient-retirement-balance',required:want,source:account,owner});
+    return evaluate(want);
+  }
+  const max=evaluate(access.available);
+  if (max.netCash+.001<target) return {...max,accepted:false,targetMet:false,reason:'This account can provide at most $'+fmt(max.netCash)+' after estimated tax.',
+    reasonCode:'insufficient-retirement-net',required:target,maximumNetCash:max.netCash,source:account,owner};
+  let low=0,high=Math.round(access.available*100);
+  for (let i=0;i<64 && low<high;i++) {
+    const mid=Math.floor((low+high)/2),trial=evaluate(mid/100);
+    if (trial.netCash+.001>=target) high=mid;else low=mid+1;
+  }
+  const solved=evaluate(high/100);solved.targetMet=solved.netCash+.001>=target;return solved;
 }
 /**
  * Player action: one-time withdrawal into Cash. Traditional withdrawals are taxable income
  * (settled at year-end from Cash); before 59½ they need `early` (10% penalty accepted).
  * Roth uses contribution basis first; earnings need 59½ and the five-year clock.
  */
-export function withdrawRetirement(state,{amount,account='traditional',early=false}={}) {
-  const want=money(nonnegative(amount));
-  if (!(want>0)) return rejected(state,'Enter a positive amount.');
-  const access=retirementAccess(state,account,{early});
-  if (account!=='roth' && access.gated)
-    return rejected(state,'Before age 59½ a 401(k) withdrawal needs your OK to pay the 10% early-withdrawal penalty.');
-  if (want>access.available+.001)
-    return rejected(state,'Only $'+fmt(access.available)+' can be withdrawn from '+(account==='roth'?'the Roth':'the 401(k)')+' now.');
-  const s=copy(state), got=withdrawFrom(s,want,s.age,account,early);
+export function withdrawRetirement(state,{amount,netTarget,account='traditional',early=false,owner='primary',withholdTax=false,difficulty={}}={}) {
+  const preview=previewRetirementWithdrawal(state,{amount,netTarget,account,early,owner,difficulty});
+  if (!preview.accepted) return rejected(state,preview.reason,{
+    reasonCode:preview.reasonCode,required:preview.required,available:preview.available,
+    maximumNetCash:preview.maximumNetCash,source:account,owner});
+  const access=retirementAccess(state,account,{early,owner});
+  const s=copy(state),got=withdrawFrom(s,preview.gross,ownerAge(s,owner),account,early,owner);
   if (!(got>0)) return rejected(state,'Nothing could be withdrawn.');
-  return accepted(s,'Withdrew $'+fmt(got)+' from '+(account==='roth'?'the Roth':'the 401(k)')+' into Cash.'
-    +(account==='roth'?'':' It is taxed at year-end'+(access.penalty?' with a 10% early-withdrawal penalty':'')+'.'));
+  const reserve=netTarget!=null || withholdTax ? preview.tax.total : 0;
+  if (reserve>0) {
+    s.cash=money(s.cash-reserve);incomeFor(s).taxPaid=money(incomeFor(s).taxPaid+reserve);
+    post(s,'retirement-withholding',{amount:reserve,owner});
+  }
+  s.lastWithdrawal={owner,account,gross:got,netCash:money(got-reserve),estimatedTax:preview.tax.total,withheld:reserve};
+  return accepted(s,'Withdrew $'+fmt(got)+' from '+(account==='roth'?'the Roth':'the 401(k)')+'; $'+fmt(got-reserve)+' added to Cash.'
+    +(reserve>0?' Estimated tax of $'+fmt(reserve)+' prepaid and credited at year-end.':account==='roth'?'':' It is taxed at year-end'+(access.penalty?' with a 10% early-withdrawal penalty':'')+'.'));
 }
 /**
  * Player action: a standing yearly withdrawal (today's dollars, grows with inflation), paid into
  * Cash in monthly parts. Amount 0 cancels it. Traditional withdrawals wait for 59½ unless `early`.
  */
-export function setRetirementWithdrawalPlan(state,{amount,account='traditional',early=false}={}) {
+export function setRetirementWithdrawalPlan(state,{amount,account='traditional',early=false,owner='primary'}={}) {
   const s=copy(state), yearly=money(nonnegative(amount));
-  if (!(yearly>0)) { delete s.retirementWithdrawalPlan; return accepted(s,'Standing withdrawal cancelled.'); }
-  s.retirementWithdrawalPlan={amount:yearly,account:account==='roth'?'roth':'traditional',early:!!early,inflationAdjusted:true};
-  post(s,'standing-withdrawal',{...s.retirementWithdrawalPlan});
+  const key=ownerKey('retirementWithdrawalPlan',owner);
+  if (!(yearly>0)) { delete s[key]; return accepted(s,'Standing withdrawal cancelled.'); }
+  s[key]={amount:yearly,account:account==='roth'?'roth':'traditional',early:!!early,inflationAdjusted:true};
+  post(s,'standing-withdrawal',{...s[key],owner});
   return accepted(s,'Standing withdrawal set: $'+fmt(yearly)+' a year from '+(account==='roth'?'the Roth':'the 401(k)')+'.');
 }
 export const takeHeloc=(s,opts={})=>borrow(s,opts,'heloc');

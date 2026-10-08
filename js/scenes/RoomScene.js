@@ -1,4 +1,5 @@
 import { editPlanningInputs } from './PlanningInputs.js';
+import { editSpouseIdentity, editFamilyIncome, editRetirementAges, editRetirementAccounts, personName } from './FamilyInputs.js';
 import { ensureHoldings, syncBook, post } from '../finance/Books.js';
 import {
   FRAME_W,
@@ -41,13 +42,34 @@ import {
   transferSavings,
   withdrawRetirement,
   retirementAccess,
+  previewRetirementWithdrawal,
   setRetirementWithdrawalPlan,
 } from '../finance/Engine.js';
 import { getDifficulty } from '../finance/Difficulty.js';
 import { commitRoomDecisions, currentNode, westReturnHallway, jumpToHallwayNode } from '../state/GameState.js';
 import { autoSave } from '../state/SaveSystem.js';
 import { formatMoneyDisplay } from '../render/Dialog.js';
+import { setMoneyContext } from '../finance/DollarBasis.js';
+import { ownerAge, ownerKey } from '../finance/Household.js';
 import { log as debugLog } from '../debug/Logger.js';
+
+/** Numeric financial results are stored in nominal dollars, then rendered in the room's units. */
+export function transactionReason(transaction, portfolio) {
+  if (!transaction) return '';
+  const money = amount => formatMoneyDisplay(amount, portfolio);
+  switch (transaction.reasonCode) {
+    case 'insufficient-cash':
+      return `Not enough Cash.\nNeeds ${money(transaction.required)}; Cash is ${money(transaction.available)}.`;
+    case 'insufficient-account-balance':
+      return `Only ${money(transaction.available)} is in ${transaction.source === 'savings' ? 'Savings' : 'Cash'}.`;
+    case 'insufficient-retirement-balance':
+      return `Only ${money(transaction.available)} can be withdrawn from this account now.`;
+    case 'insufficient-retirement-net':
+      return `This account can provide at most ${money(transaction.maximumNetCash)} after estimated tax.`;
+    default:
+      return transaction.reason || '';
+  }
+}
 
 export class RoomScene {
   constructor() {
@@ -204,6 +226,9 @@ export class RoomScene {
 
   async handleTeller(game, dialog, action) {
     const p = game.portfolio;
+    // Every action captures the current room's units, including direct teller
+    // entry after a timeline jump before the next render refreshes the context.
+    setMoneyContext(p);
     const diff = getDifficulty(p.difficulty || 'standard');
 
     if (action === 'home') {
@@ -263,7 +288,7 @@ export class RoomScene {
           term: term ?? 30,
           label: HOME_TYPES[type]?.label,
         });
-        await dialog.show(game.portfolio.lastTransaction?.reason || 'Home purchased; 2% closing costs included.', { title: 'Buy Home' });
+        await dialog.show(transactionReason(game.portfolio.lastTransaction, game.portfolio) || 'Home purchased; 2% closing costs included.', { title: 'Buy Home' });
       } else if (mode === 'sell') {
         if (!p.homes?.length) {
           await dialog.show('No homes to sell.', { title: 'Sell Home' });
@@ -294,7 +319,7 @@ export class RoomScene {
         const exclusion = p.homes[idx].type === 'primary' ? await dialog.confirm('Eligible for the primary-home gain exclusion? Confirm ownership/use tests from tax records.', {title:'Home sale tax'}) : false;
         game.portfolio = sellHome(game.portfolio, idx, { exclusionEligible: exclusion === true });
         await dialog.show(
-          game.portfolio.lastTransaction?.reason || 'Sold after liens and 6% selling costs. Taxable gain enters this year’s tax record.',
+          transactionReason(game.portfolio.lastTransaction, game.portfolio) || 'Sold after liens and 6% selling costs. Taxable gain enters this year’s tax record.',
           { title: 'Sell Home' }
         );
       }
@@ -316,13 +341,20 @@ export class RoomScene {
         });
         if (amt == null) return;
         game.portfolio = buyStock(game.portfolio, Math.max(0, amt));
-        await dialog.show(game.portfolio.lastTransaction?.reason || 'Broad-market shares purchased; basis updated.', { title: 'Buy Stock' });
+        await dialog.show(transactionReason(game.portfolio.lastTransaction, game.portfolio) || 'Broad-market shares purchased; basis updated.', { title: 'Buy Stock' });
       } else if (mode === 'sell') {
         await this.handleSellStock(game, dialog, diff);
       }
     } else if (action === 'job') {
+      const owner = p.married ? await dialog.menu('Whose employment?', [
+        { label: personName(p), value: 'primary' },
+        { label: personName(p, 'spouse'), value: 'spouse' },
+        { label: 'Back', value: null },
+      ], { title: 'Job / Retire' }) : 'primary';
+      if (!owner) return;
+      const salaryKey = owner === 'spouse' ? 'spouseSalary' : 'salary';
       const mode = await dialog.menu(
-        'Career window',
+        `${personName(p, owner)} career window`,
         [
           { label: 'Leave job (salary → $0)', value: 'leave' },
           { label: 'Start / resume job', value: 'start' },
@@ -333,35 +365,40 @@ export class RoomScene {
       );
       if (!mode) return;
       if (mode === 'start') {
-        const sal = await dialog.prompt('New annual household gross salary ($)?', {
+        const sal = await dialog.prompt(`${personName(p, owner)} new annual gross salary`, {
           title: 'Start Job',
-          defaultValue: String(p.salary || 50000),
+          defaultValue: String(p[salaryKey] || 50000),
           type: 'money',
         });
         if (sal == null) return;
-        game.portfolio = setEmployment(game.portfolio, 'start');
-        game.portfolio.salary = Math.max(0, sal);
-        game.portfolio.employed = sal > 0;
-        game.portfolio.peakSalary = Math.max(game.portfolio.peakSalary || 0, sal);
+        let retirementAge = p[ownerKey('retirementAge', owner)] ?? 65;
+        const age = ownerAge(p, owner);
+        if (age != null && age >= retirementAge) {
+          while (true) {
+            const answer = await dialog.prompt(`${personName(p, owner)} planned retirement age for this job`, {
+              title: 'Start Job', type: 'number', defaultValue: String(Math.ceil(age + 1)),
+              subtitle: 'Choose a future age so the model includes this new salary.',
+            });
+            if (answer == null) return;
+            if (Number(answer) > age && Number(answer) <= 110) {
+              retirementAge = Number(answer);
+              break;
+            }
+            await dialog.show('Choose a retirement age later than your current age (up to 110).', { title: 'Start Job' });
+          }
+        }
+        game.portfolio = setEmployment(game.portfolio, 'start', { owner });
+        game.portfolio[ownerKey('retirementAge', owner)] = retirementAge;
+        game.portfolio[salaryKey] = Math.max(0, sal);
+        game.portfolio[owner === 'spouse' ? 'spouseEmployed' : 'employed'] = sal > 0;
+        const peakKey = owner === 'spouse' ? 'spousePeakSalary' : 'peakSalary';
+        game.portfolio[peakKey] = Math.max(game.portfolio[peakKey] || 0, sal);
       } else {
-        game.portfolio = setEmployment(game.portfolio, mode);
+        game.portfolio = setEmployment(game.portfolio, mode, { owner });
       }
       await dialog.show('Employment updated.', { title: 'Job / Retire' });
     } else if (action === 'kid') {
-      if ((p.kids || []).length >= 4) {
-        await dialog.show('Four kids is the max for this ledger.', { title: 'Have A Kid' });
-        return;
-      }
-      const name = await dialog.prompt("Child's name?", {
-        title: 'Have A Kid',
-        defaultValue: `Child ${(p.kids || []).length + 1}`,
-      });
-      if (name == null) return;
-      game.portfolio = addKid(game.portfolio, { name: name || 'Child', age: 0 });
-      await dialog.show(
-        `${name} joins the timeline at age 0. Annual costs follow the age schedule.`,
-        { title: 'Have A Kid' }
-      );
+      await this.handleFamily(game, dialog);
     } else if (action === 'purchase') {
       const itemName = await dialog.prompt('What are you buying? (name)', {
         title: 'Make Large Purchase',
@@ -388,7 +425,7 @@ export class RoomScene {
       if (!financed) {
         game.portfolio = largePurchase(game.portfolio, price, { label });
         await dialog.show(
-          game.portfolio.lastTransaction?.reason || `Purchased ${label} — paid in full from Cash.`,
+          transactionReason(game.portfolio.lastTransaction, game.portfolio) || `Purchased ${label} — paid in full from Cash.`,
           { title: 'Make Large Purchase' }
         );
         return;
@@ -425,7 +462,7 @@ export class RoomScene {
         label,
       });
       await dialog.show(
-        game.portfolio.lastTransaction?.reason || `Purchased ${label}.\n` +
+        transactionReason(game.portfolio.lastTransaction, game.portfolio) || `Purchased ${label}.\n` +
           `Down ${formatMoneyDisplay(downCap)}; financed ${formatMoneyDisplay(principal)} ` +
           `at ${ratePct}% for ${Math.max(1, Math.round(term ?? 5))} yr.`,
         { title: 'Make Large Purchase' }
@@ -439,6 +476,57 @@ export class RoomScene {
     }
   }
 
+  async handleFamily(game, dialog) {
+    const p = game.portfolio;
+    const choice = await dialog.menu('Family decisions', [
+      { label: 'Have a kid', value: 'kid' },
+      { label: p.married ? 'Spouse details' : 'Get married', value: 'marry' },
+      { label: 'Child Care', value: 'care' },
+      { label: 'Back', value: null },
+    ], { title: 'Family' });
+    if (choice === 'kid') {
+      if ((p.kids || []).length >= 4) {
+        await dialog.show('Four kids is the max for this ledger.', { title: 'Have a kid' });
+        return;
+      }
+      const name = await dialog.prompt("Child's name?", { title: 'Have a kid', defaultValue: `Child ${(p.kids || []).length + 1}` });
+      if (name == null) return;
+      game.portfolio = addKid(p, { name: name || 'Child', age: 0 });
+      await dialog.show(`${name || 'Child'} joins the timeline at age 0. Annual costs follow the age schedule.`, { title: 'Family' });
+    } else if (choice === 'marry') {
+      const draft = { ...p, married: true, filingStatus: 'married' };
+      if (!(await editSpouseIdentity(draft, dialog))) return;
+      if (!p.married) {
+        if (!(await editFamilyIncome(draft, dialog, { title: 'Family' }))) return;
+        if (!(await editRetirementAges(draft, dialog, { title: 'Family' }))) return;
+        if (!(await editRetirementAccounts(draft, dialog, { owner: 'spouse', title: 'Family' }))) return;
+      }
+      draft.lastTransaction = { accepted: true, description: `${personName(draft, 'spouse')} ${p.married ? 'details updated' : 'joins the household'}. Cash and Savings are joint accounts.` };
+      draft.milestones = [...(p.milestones || []), { year: p.year, age: p.age, kind: p.married ? 'spouseDetails' : 'marriage', message: draft.lastTransaction.description }];
+      game.portfolio = draft;
+      await dialog.show(draft.lastTransaction.description, { title: 'Family' });
+    } else if (choice === 'care') {
+      const type = await dialog.menu('Child Care', [
+        { label: 'Hire a Nanny', value: 'nanny' }, { label: 'Place in daycare', value: 'daycare' }, { label: 'Back', value: null },
+      ], { title: 'Family' });
+      if (!type) return;
+      const form = await dialog.form(type === 'nanny' ? 'Hire a Nanny' : 'Place in daycare', [
+        { key: 'annualCost', label: 'Annual household child care cost', type: 'money', prefix: '$', defaultValue: '18000' },
+        { key: 'years', label: 'Number of years, starting now', type: 'number', defaultValue: '3' },
+      ], { title: 'Child Care', portfolio: p, subtitle: 'Added to ordinary child costs; grows with inflation.' });
+      if (!form) return;
+      const annualCost = Math.max(0, Number(form.annualCost) || 0);
+      const years = Math.max(1, Math.min(100, Math.round(Number(form.years) || 1)));
+      const existing = p.childcarePlans || [];
+      const plan = { id: `${type}-${p.year}-${existing.length + 1}`, type, annualCost, startYear: p.year,
+        endYearExclusive: p.year + years, entryPriceIndex: p.priceIndex || 1 };
+      game.portfolio = { ...p, childcarePlans: [...existing, plan], lastTransaction: {
+        accepted: true, description: `${type === 'nanny' ? 'Nanny' : 'Daycare'}: ${formatMoneyDisplay(annualCost, p)}/year from ${p.year} through ${p.year + years - 1}.`,
+      } };
+      await dialog.show(game.portfolio.lastTransaction.description, { title: 'Child Care' });
+    }
+  }
+
   /**
    * Bank teller — the player's own ways to raise Cash (only Cash pays bills; nothing is
    * moved automatically): Savings ↔ Cash, one-time 401(k)/Roth withdrawals, and a standing
@@ -446,17 +534,18 @@ export class RoomScene {
    */
   async handleBank(game, dialog) {
     const title = 'Bank: Move Money';
-    const money = formatMoneyDisplay;
-    const report = async (heading) => {
+    const money = n => formatMoneyDisplay(n, game.portfolio);
+    const report = async (heading, description = null) => {
       const t = game.portfolio.lastTransaction || {};
-      await dialog.show(t.accepted === false ? t.reason : t.description || 'Done.', { title: heading });
+      await dialog.show(t.accepted === false ? transactionReason(t, game.portfolio) : description || t.description || 'Done.', { title: heading });
     };
     while (true) {
       const p = game.portfolio;
       const plan = p.retirementWithdrawalPlan;
       const choice = await dialog.menu(
         `Only Cash pays bills.\nCash ${money(p.cash || 0)} · Savings ${money(p.savings || 0)}\n` +
-          `401(k) ${money(p.k401Balance || 0)} · Roth ${money(p.rothBalance || 0)}`,
+          `${personName(p)} 401(k) ${money(p.k401Balance || 0)} · Roth ${money(p.rothBalance || 0)}` +
+          (p.married ? `\n${personName(p, 'spouse')} 401(k) ${money(p.spouseK401Balance || 0)} · Roth ${money(p.spouseRothBalance || 0)}` : ''),
         [
           { label: 'Move Savings to Cash', value: 'toCash' },
           { label: 'Move Cash to Savings', value: 'toSavings' },
@@ -464,7 +553,7 @@ export class RoomScene {
           {
             label: plan
               ? `Standing withdrawal: ${money(plan.amount)}/yr (${plan.account === 'roth' ? 'Roth' : '401(k)'})`
-              : 'Set a standing yearly withdrawal',
+              : p.spouseRetirementWithdrawalPlan ? 'Edit standing yearly withdrawals' : 'Set a standing yearly withdrawal',
             value: 'plan',
           },
           { label: 'Done', value: null },
@@ -485,7 +574,7 @@ export class RoomScene {
         );
         if (amount == null) continue;
         game.portfolio = transferSavings(p, amount, choice);
-        await report(title);
+        await report(title, `Moved ${money(amount)} from ${toCash ? 'Savings to Cash' : 'Cash to Savings'}.`);
       } else if (choice === 'withdraw') {
         await this.handleRetirementWithdrawal(game, dialog, report);
       } else if (choice === 'plan') {
@@ -494,91 +583,120 @@ export class RoomScene {
     }
   }
 
+  retirementAccountOptions(p) {
+    const options = [];
+    for (const owner of p.married ? ['primary', 'spouse'] : ['primary']) {
+      const prefix = owner === 'spouse' ? 'spouse:' : '';
+      const balance = owner === 'spouse' ? p.spouseK401Balance : p.k401Balance;
+      const rothBalance = owner === 'spouse' ? p.spouseRothBalance : p.rothBalance;
+      const rothAccess = retirementAccess(p, 'roth', { owner }).available;
+      options.push({ label: `${personName(p, owner)} 401(k) — ${formatMoneyDisplay(balance || 0, p)}`, value: prefix + 'traditional' });
+      options.push({ label: `${personName(p, owner)} Roth — ${formatMoneyDisplay(rothAccess, p)} available of ${formatMoneyDisplay(rothBalance || 0, p)}`, value: prefix + 'roth' });
+    }
+    return options;
+  }
+
   async handleRetirementWithdrawal(game, dialog, report) {
     const title = 'Withdraw to Cash';
     const p = game.portfolio;
-    const money = formatMoneyDisplay;
-    const rothAccess = retirementAccess(p, 'roth').available;
-    const account = await dialog.menu(
-      'Withdraw from which account?\n401(k) withdrawals are income taxed at year-end (paid from Cash).',
-      [
-        { label: `401(k) — ${money(p.k401Balance || 0)}`, value: 'traditional' },
-        { label: `Roth — ${money(rothAccess)} available of ${money(p.rothBalance || 0)}`, value: 'roth' },
-        { label: 'Cancel', value: null },
-      ],
-      { title }
-    );
-    if (!account) return;
+    const money = n => formatMoneyDisplay(n, p);
+    const selection = await dialog.menu('Withdraw from which person’s account?', [
+      ...this.retirementAccountOptions(p), { label: 'Cancel', value: null },
+    ], { title });
+    if (!selection) return;
+    const owner = selection.startsWith('spouse:') ? 'spouse' : 'primary';
+    const account = selection.replace('spouse:', '');
     let early = false;
-    if (account === 'traditional' && retirementAccess(p, 'traditional').gated) {
-      early = await dialog.confirm(
-        'You are under 59½. A 401(k) withdrawal now adds a 10% early-withdrawal penalty on top of income tax. Withdraw anyway?',
-        { title, yes: 'Accept penalty', no: 'Cancel' }
-      );
-      if (early !== true) return;
-    }
-    const available = retirementAccess(p, account, { early }).available;
-    if (!(available > 0)) {
-      await dialog.show(
-        account === 'roth'
-          ? 'No Roth money is available yet. Before 59½ and five years after opening, only your contributions can come out.'
-          : 'The 401(k) is empty.',
-        { title }
-      );
+    const access = retirementAccess(p, account, { owner });
+    if (access.ageUnknown) {
+      await dialog.show('Enter the account owner’s actual age in Family before withdrawing.', { title });
       return;
     }
-    const amount = await dialog.prompt(`Withdraw how much into Cash? (up to ${money(available)})`, {
-      title,
-      defaultValue: String(Math.round(Math.min(available, 10000))),
-      type: 'money',
-      prefix: '$',
+    if (account === 'traditional' && access.gated) {
+      early = await dialog.confirm(`${personName(p, owner)} is under 59½. A 401(k) withdrawal adds a 10% early-withdrawal penalty on top of income tax. Withdraw anyway?`,
+        { title, yes: 'Accept penalty', no: 'Cancel' });
+      if (early !== true) return;
+    }
+    const available = retirementAccess(p, account, { early, owner }).available;
+    if (!(available > 0)) {
+      await dialog.show(account === 'roth'
+        ? 'No Roth money is available. Before age 59½ and the five-year qualification, only verified contributions can come out.'
+        : 'The 401(k) is empty.', { title });
+      return;
+    }
+    const basis = await dialog.menu('Choose the withdrawal amount. Estimated additional tax is prepaid from the withdrawal and credited at year-end.', [
+      { label: 'Withdraw a gross amount', value: 'gross' },
+      { label: 'Provide a net Cash amount', value: 'net' },
+      { label: 'Back', value: null },
+    ], { title });
+    if (!basis) return;
+    const amount = await dialog.prompt(basis === 'net' ? 'How much spendable Cash do you need?' : `Gross withdrawal? (up to ${money(available)})`, {
+      title, portfolio: p, defaultValue: String(Math.round(Math.min(available, 10000))), type: 'money', prefix: '$',
     });
     if (amount == null) return;
-    game.portfolio = withdrawRetirement(p, { amount, account, early });
-    await report(title);
+    const opts = { account, owner, early, withholdTax: true, ...(basis === 'net' ? { netTarget: amount } : { amount }) };
+    const preview = previewRetirementWithdrawal(p, opts);
+    if (!preview.accepted) {
+      await dialog.show(transactionReason(preview, p), { title });
+      return;
+    }
+    const confirmed = await dialog.confirm(`Gross withdrawal: ${money(preview.gross)}
+Estimated additional tax: ${money(preview.tax.total)}
+Cash received: ${money(preview.netCash)}`, {
+      title, yes: 'Withdraw', no: 'Cancel',
+    });
+    if (!confirmed) return;
+    game.portfolio = withdrawRetirement(p, opts);
+    const withdrawal = game.portfolio.lastWithdrawal;
+    await report(title, withdrawal
+      ? `Withdrew ${money(withdrawal.gross)} from ${personName(p, owner)} ${account === 'roth' ? 'Roth' : '401(k)'}.\nCash received: ${money(withdrawal.netCash)}.\nEstimated tax prepaid: ${money(withdrawal.withheld)}; credited at year-end.`
+      : null);
   }
 
   async handleStandingWithdrawal(game, dialog, report) {
     const title = 'Standing withdrawal';
     const p = game.portfolio;
-    const money = formatMoneyDisplay;
-    const current = p.retirementWithdrawalPlan;
-    const account = await dialog.menu(
-      'A yearly amount you choose, paid into Cash in monthly parts every year from now on. ' +
-        'It grows with inflation like your spending; 401(k) amounts are taxed at year-end.',
-      [
-        { label: 'From the 401(k)', value: 'traditional' },
-        { label: 'From the Roth', value: 'roth' },
-        ...(current ? [{ label: `Stop the ${money(current.amount)}/yr withdrawal`, value: 'stop' }] : []),
-        { label: 'Back', value: null },
-      ],
-      { title }
-    );
-    if (!account) return;
+    const money = n => formatMoneyDisplay(n, p);
+    const selection = await dialog.menu('A yearly gross withdrawal you choose, paid into Cash monthly. It grows with inflation; additional taxes settle at year-end.', [
+      ...this.retirementAccountOptions(p),
+      ...(p.retirementWithdrawalPlan ? [{ label: `Stop ${personName(p)} withdrawal (${money(p.retirementWithdrawalPlan.amount)}/yr)`, value: 'stop' }] : []),
+      ...(p.spouseRetirementWithdrawalPlan ? [{ label: `Stop ${personName(p, 'spouse')} withdrawal (${money(p.spouseRetirementWithdrawalPlan.amount)}/yr)`, value: 'spouse:stop' }] : []),
+      { label: 'Back', value: null },
+    ], { title });
+    if (!selection) return;
+    const owner = selection.startsWith('spouse:') ? 'spouse' : 'primary';
+    const account = selection.replace('spouse:', '');
+    const current = owner === 'spouse' ? p.spouseRetirementWithdrawalPlan : p.retirementWithdrawalPlan;
     if (account === 'stop') {
-      game.portfolio = setRetirementWithdrawalPlan(p, { amount: 0 });
+      game.portfolio = setRetirementWithdrawalPlan(p, { amount: 0, owner });
       await report(title);
       return;
     }
-    let early = false;
-    if (account === 'traditional' && retirementAccess(p, 'traditional').gated) {
-      early = (await dialog.confirm(
-        'You are under 59½. Start now with a 10% early-withdrawal penalty, or wait until 59½?',
-        { title, yes: 'Start now (penalty)', no: 'Wait for 59½' }
-      )) === true;
+    const access = retirementAccess(p, account, { owner });
+    if (access.ageUnknown) {
+      await dialog.show('Enter the account owner’s actual age in Family before scheduling withdrawals.', { title });
+      return;
     }
-    const amount = await dialog.prompt('Withdraw how much each year? ($0 stops it)', {
-      title,
-      defaultValue: String(Math.round(current?.amount || p.annualSpending || 0)),
-      type: 'money',
-      prefix: '$',
+    let early = false;
+    if (account === 'traditional' && access.gated) {
+      const answer = await dialog.menu(`${personName(p, owner)} is under 59½. Start with a 10% early-withdrawal penalty, or wait?`, [
+        { label: 'Start now (penalty)', value: 'early' },
+        { label: 'Wait for age 59½', value: 'wait' },
+        { label: 'Cancel', value: null },
+      ], { title });
+      if (!answer) return;
+      early = answer === 'early';
+    }
+    const amount = await dialog.prompt('Gross withdrawal each year? ($0 stops it)', {
+      title, portfolio: p, defaultValue: String(Math.round(current?.amount || p.annualSpending || 0)), type: 'money', prefix: '$',
     });
     if (amount == null) return;
-    game.portfolio = setRetirementWithdrawalPlan(p, { amount, account, early });
-    if (account === 'traditional' && !early && retirementAccess(p, 'traditional').gated && amount > 0) {
-      game.portfolio.lastTransaction.description += ' It starts at age 59½.';
-    }
-    await report(title);
+    game.portfolio = setRetirementWithdrawalPlan(p, { amount, account, early, owner });
+    const waits = account === 'traditional' && !early && access.gated && amount > 0;
+    await report(title, amount > 0
+      ? `${personName(p, owner)} standing gross withdrawal: ${money(amount)}/year from the ${account === 'roth' ? 'Roth' : '401(k)'}.` +
+        (waits ? ' Starts at the account owner’s age 59½.' : '')
+      : 'Standing withdrawal cancelled.');
   }
 
   async handleBorrow(game, dialog) {
@@ -760,7 +878,7 @@ export class RoomScene {
           { label: 'Salary', value: 'salary' },
           { label: '401(k) / Roth contributions', value: 'retire' },
           { label: 'Retirement age', value: 'retireAge' },
-          { label: 'ZIP / filing status', value: 'tax' },
+          { label: 'ZIP / tax profile', value: 'tax' },
           { label: 'Difficulty rates', value: 'rates' },
           { label: 'Annual spending', value: 'spend' },
           { label: 'Housing / rent', value: 'housing' },
@@ -780,35 +898,30 @@ export class RoomScene {
         });
         if (v != null) p.savingsRate = Math.max(0, (v || 0) / 100);
       } else if (choice === 'salary') {
-        const v = await dialog.prompt('Annual household salary', {
-          title: 'Portfolio',
-          defaultValue: String(p.salary || 0),
-          type: 'money',
-          prefix: '$',
-        });
-        if (v != null) {
-          p.salary = Math.max(0, v);
-          p.employed = p.salary > 0 && !p.retired;
-          p.peakSalary = Math.max(p.peakSalary || 0, p.salary);
-        }
+        await editFamilyIncome(p, dialog, { title: 'Portfolio' });
       } else if (choice === 'retire') {
         const form = await dialog.form('Contributions (balances are locked during play)', [
-          { key: 'kRate', label: '401(k) contrib % of salary', type: 'percent', defaultValue: String(((p.k401ContribRate || 0) * 100).toFixed(2)) },
-          { key: 'rothC', label: 'Roth annual contribution (from Cash)', type: 'money', prefix: '$', defaultValue: String(p.rothAnnualContribution || 0) },
-        ], { title: 'Portfolio' });
+          { key: 'kRate', label: `${personName(p)} 401(k) contrib % of salary`, type: 'percent', defaultValue: String(((p.k401ContribRate || 0) * 100).toFixed(2)) },
+          { key: 'rothC', label: `${personName(p)} Roth annual contribution`, type: 'money', prefix: '$', defaultValue: String(p.rothAnnualContribution || 0) },
+          ...(p.married ? [
+            { key: 'spouseKRate', label: `${personName(p, 'spouse')} 401(k) contrib %`, type: 'percent', defaultValue: String((p.spouseK401ContribRate || 0) * 100) },
+            { key: 'spouseRothC', label: `${personName(p, 'spouse')} Roth annual contribution`, type: 'money', prefix: '$', defaultValue: String(p.spouseRothAnnualContribution || 0) },
+          ] : []),
+        ], { title: 'Portfolio', portfolio: p });
         if (form) {
           p.k401ContribRate = Math.max(0, Math.min(1, (form.kRate || 0) / 100));
           p.has401k = (p.k401Balance || 0) > 0 || p.k401ContribRate > 0;
           p.rothAnnualContribution = Math.max(0, form.rothC || 0);
           p.hasRoth = (p.rothBalance || 0) > 0 || p.rothAnnualContribution > 0;
+          if (p.married) {
+            p.spouseK401ContribRate = Math.max(0, Math.min(1, (form.spouseKRate || 0) / 100));
+            p.spouseRothAnnualContribution = Math.max(0, form.spouseRothC || 0);
+            p.spouseHas401k = (p.spouseK401Balance || 0) > 0 || p.spouseK401ContribRate > 0;
+            p.spouseHasRoth = (p.spouseRothBalance || 0) > 0 || p.spouseRothAnnualContribution > 0;
+          }
         }
       } else if (choice === 'retireAge') {
-        const v = await dialog.prompt('Retirement age', {
-          title: 'Portfolio',
-          defaultValue: String(p.retirementAge || 65),
-          type: 'number',
-        });
-        if (v != null) p.retirementAge = Math.max(40, Math.min(100, Math.round(v)));
+        await editRetirementAges(p, dialog, { title: 'Portfolio' });
       } else if (choice === 'tax') {
         const form = await dialog.form('Tax profile', [
           { key: 'zip', label: 'ZIP (blank = national avg)', type: 'text', defaultValue: p.zip || '' },
@@ -816,15 +929,7 @@ export class RoomScene {
         if (form) {
           p.zip = String(form.zip || '').replace(/\D/g, '').slice(0, 5);
         }
-        const filing = await dialog.menu('Marital Status', [
-          { label: 'Single', value: 'single' },
-          { label: 'Married Filing Jointly', value: 'married' },
-          { label: 'Cancel', value: null },
-        ], { title: 'Portfolio', selected: p.married ? 1 : 0 });
-        if (filing) {
-          p.filingStatus = filing;
-          p.married = filing === 'married';
-        }
+        await dialog.show(`Filing status: ${p.married ? 'Married Filing Jointly' : 'Single'}.\nUse the Family window to add a spouse and their financial details.`, { title: 'Portfolio' });
       } else if (choice === 'rates') {
         const o = p.rateOverrides || {};
         const form = await dialog.form(
@@ -917,7 +1022,7 @@ export class RoomScene {
 
     const result = sellStock(game.portfolio, { proceeds }, diff);
     if (result.state.lastTransaction?.accepted === false) {
-      await dialog.show(result.state.lastTransaction.reason, { title: 'Sell Stock' }); return;
+      await dialog.show(transactionReason(result.state.lastTransaction, p), { title: 'Sell Stock' }); return;
     }
     const okay = await dialog.confirm(
       'Sell ' + formatMoneyDisplay(result.proceeds) + '?\nBasis removed: ' + formatMoneyDisplay(result.basis) +
@@ -930,12 +1035,14 @@ export class RoomScene {
   render(ctx, game) {
     // Room is narrower than the 16:9 playfield. Center it; negative cam
     // insets the walls. Out-of-map tiles are solid, so the side void is not walkable.
-    const camX = this.world.width <= VIEW_W
+    const rawCamX = this.world.width <= VIEW_W
       ? (this.world.width - VIEW_W) / 2
       : Math.max(0, Math.min(this.world.width - VIEW_W, this.player.x + 6 - VIEW_W / 2));
-    const camY = this.world.height <= VIEW_H
+    const rawCamY = this.world.height <= VIEW_H
       ? (this.world.height - VIEW_H) / 2
       : Math.max(0, Math.min(this.world.height - VIEW_H, this.player.y - VIEW_H / 2));
+    const camX = Math.round(rawCamX * WORLD_SCALE) / WORLD_SCALE;
+    const camY = Math.round(rawCamY * WORLD_SCALE) / WORLD_SCALE;
 
     // Integer-scale the pixel world under the HUD. UI stays in frame pixels.
     ctx.save();

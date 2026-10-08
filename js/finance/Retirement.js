@@ -39,7 +39,8 @@ export function monthlyBenefit(state, age, priceIndex) {
     ? state.socialSecurityMonthlyAtFRA * claimFactor(claimAge, state.birthYear ?? state.year - Math.floor(state.age))
     : nonnegative(state.socialSecurityMonthly);
   if (state.socialSecurityInFutureDollars && state.socialSecurityClaimPriceIndex == null) state.socialSecurityClaimPriceIndex = priceIndex;
-  return money(amount * (state.socialSecurityInFutureDollars ? priceIndex / state.socialSecurityClaimPriceIndex : priceIndex));
+  const inputIndex = nonnegative(state.socialSecurityInputPriceIndex, 1) || 1;
+  return money(amount * (state.socialSecurityInFutureDollars ? priceIndex / state.socialSecurityClaimPriceIndex : priceIndex / inputIndex));
 }
 const DIVISORS = [27.4,26.5,25.5,24.6,23.7,22.9,22.0,21.1,20.2,19.4,18.5,17.7,16.8,
   16.0,15.2,14.4,13.7,12.9,12.2,11.5,10.8,10.1,9.5,8.9,8.4,7.8,7.3,6.8,6.4];
@@ -61,4 +62,15 @@ export function benefitEarningsReduction(state, age, expectedWages) {
   const threshold = (fraThisYear ? 65160 : 24480) * f;
   const wages = fraThisYear ? expectedWages * Math.max(0, fra - state.age) : expectedWages;
   return money(Math.max(0, wages - threshold) / (fraThisYear ? 3 : 2) / 12);
+}
+/** Annual withholding is allocated by IncomeSchedule to actual payable pre-FRA months. */
+export function annualBenefitEarningsWithholding(state, annualWages, wagesBeforeFRA) {
+  const age=state.age;
+  if (age==null) return 0;
+  const fra=fullRetirementAge(state.birthYear ?? state.year-Math.floor(age));
+  if (age>=fra) return 0;
+  const fraThisYear=age+1>fra;
+  const f=(1+(state.taxInflation ?? .025))**Math.max(0,state.year-2026);
+  const wages=fraThisYear?wagesBeforeFRA:annualWages;
+  return money(Math.max(0,wages-(fraThisYear?65160:24480)*f)/(fraThisYear?3:2));
 }

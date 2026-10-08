@@ -1,7 +1,22 @@
 import { FRAME_W, FRAME_H, PALETTE, KEYS } from '../config.js';
 import { drawWorthChart } from '../render/Charts.js';
+import { moneyUnitSubtitle } from '../finance/DollarBasis.js';
 
 const FONT = '"Press Start 2P", monospace';
+
+/** Historic amounts need each row's CPI, rather than the terminal-year CPI. */
+export function ledgerHistory(game) {
+  const adjusted = (game?.settings?.inflationAdjusted ?? game?.portfolio?.inflationAdjusted) !== false;
+  return (game?.worthHistory || []).map(row => {
+    const result = { ...row };
+    for (const key of ['netWorth', 'bank', 'salary']) {
+      if (row[key] == null) continue;
+      result[key] = adjusted && (!(row.priceIndex > 0) || row.legacy)
+        ? null : row[key] / (adjusted ? row.priceIndex : 1);
+    }
+    return result;
+  });
+}
 
 /**
  * Press Start 2P is one em per glyph. Cap `maxPx`, then shrink until the
@@ -201,10 +216,16 @@ export class EndingScene {
     ctx.fillStyle = PALETTE.gold;
     // Top of the glyphs, not the baseline, so the heading stays off the frame.
     ctx.fillText(title, FRAME_W / 2, 36);
+    ctx.font = `14px ${FONT}`;
+    const portfolio = this.game?.portfolio || {};
+    const adjusted = (this.game?.settings?.inflationAdjusted ?? portfolio.inflationAdjusted) !== false;
+    const units = moneyUnitSubtitle({ ...portfolio, inflationAdjusted: adjusted });
+    const legacy = adjusted && (this.game?.worthHistory || []).some(r => r.legacy || !(r.priceIndex > 0));
+    ctx.fillText(units + (legacy ? ' · Earlier rows lack verified inflation data' : ''), FRAME_W / 2, 74);
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
-    drawWorthChart(ctx, this.game?.worthHistory || [], {
+    drawWorthChart(ctx, ledgerHistory(this.game), {
       x: 80,
       y: 100,
       w: FRAME_W - 160,

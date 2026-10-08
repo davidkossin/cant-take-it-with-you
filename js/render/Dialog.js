@@ -5,6 +5,8 @@
 
 import { PALETTE, FRAME_W, FRAME_H, KEYS } from '../config.js';
 import { makeDialogChrome } from './Assets.js';
+import { captureMoneyContext, toDisplayMoney, fromDisplayMoney, moneyUnitSubtitle } from '../finance/DollarBasis.js';
+export { formatMoneyDisplay } from '../finance/DollarBasis.js';
 
 export function formatMoneyInput(raw) {
   const neg = String(raw).trim().startsWith('-');
@@ -21,12 +23,6 @@ export function formatMoneyInput(raw) {
 export function parseMoneyInput(raw) {
   const n = parseFloat(String(raw).replace(/,/g, ''));
   return Number.isFinite(n) ? n : 0;
-}
-
-export function formatMoneyDisplay(n) {
-  const v = Math.round(Number(n) || 0);
-  const sign = v < 0 ? '-' : '';
-  return sign + '$' + Math.abs(v).toLocaleString('en-US');
 }
 
 export function sanitizeNumberInput(raw) {
@@ -114,17 +110,22 @@ export class Dialog {
    * @param {string} [opts.prefix] — shown left of field (e.g. '$')
    * @param {string} [opts.subtitle]
    */
-  prompt(text, { title = '', defaultValue = '', type = 'text', prefix = '', subtitle = '' } = {}) {
+  prompt(text, { title = '', defaultValue = '', type = 'text', prefix = '', subtitle = '', portfolio,
+    amountScale = 1 } = {}) {
     return new Promise((resolve) => {
       this.active = true;
       this.mode = 'prompt';
       this.title = title;
-      this.subtitle = subtitle;
+      this._moneyContext = captureMoneyContext(portfolio);
+      this.subtitle = type === 'money' ? moneySubtitle(subtitle, this._moneyContext) : subtitle;
       this.lines = wrapText(text, 40);
       this.promptType = type;
       this.promptPrefix = prefix || (type === 'money' ? '$' : '');
       let initial = String(defaultValue ?? '');
-      if (type === 'money') initial = formatMoneyInput(initial);
+      this.promptAmountScale = amountScale;
+      this.promptInitialMoneyValue = parseMoneyInput(defaultValue);
+      if (type === 'money' && initial !== '') initial = displayMoneyInput(this.promptInitialMoneyValue, this._moneyContext, amountScale);
+      this.promptInitialDisplay = initial;
       this.promptValue = initial;
       this.options = [
         { label: 'Accept', value: '__accept' },
@@ -142,17 +143,20 @@ export class Dialog {
    * @param {string} text
    * @param {{key:string,label:string,type?:string,defaultValue?:string|number,prefix?:string,subtitle?:string}[]} fields
    */
-  form(text, fields, { title = '', subtitle = '' } = {}) {
+  form(text, fields, { title = '', subtitle = '', portfolio } = {}) {
     return new Promise((resolve) => {
       this.active = true;
       this.mode = 'form';
       this.title = title;
-      this.subtitle = subtitle;
+      this._moneyContext = captureMoneyContext(portfolio);
+      this.subtitle = (fields || []).some(f => f.type === 'money') ? moneySubtitle(subtitle, this._moneyContext) : subtitle;
       this.lines = wrapText(text || '', 40);
       this.fields = (fields || []).map((f) => {
         let v = String(f.defaultValue ?? '');
         const type = f.type || 'text';
-        if (type === 'money') v = formatMoneyInput(v);
+        const initialMoneyValue = parseMoneyInput(f.defaultValue);
+        const amountScale = f.amountScale ?? 1;
+        if (type === 'money' && v !== '') v = displayMoneyInput(initialMoneyValue, this._moneyContext, amountScale);
         return {
           key: f.key,
           label: f.label || f.key,
@@ -160,6 +164,9 @@ export class Dialog {
           value: v,
           prefix: f.prefix || (type === 'money' ? '$' : ''),
           subtitle: f.subtitle || '',
+          amountScale,
+          initialMoneyValue,
+          initialDisplay: v,
         };
       });
       this.fieldIndex = 0;
@@ -214,6 +221,10 @@ export class Dialog {
       promptValue: this.promptValue,
       promptType: this.promptType,
       promptPrefix: this.promptPrefix,
+      _moneyContext: this._moneyContext,
+      promptAmountScale: this.promptAmountScale,
+      promptInitialMoneyValue: this.promptInitialMoneyValue,
+      promptInitialDisplay: this.promptInitialDisplay,
       fields: this.fields,
       fieldIndex: this.fieldIndex,
       multiValues: this.multiValues,
@@ -370,7 +381,9 @@ export class Dialog {
 
   _parsePromptValue() {
     let v = this.promptValue;
-    if (this.promptType === 'money') v = parseMoneyInput(v);
+    if (this.promptType === 'money') v = v === this.promptInitialDisplay
+      ? this.promptInitialMoneyValue
+      : storedMoneyInput(v, this._moneyContext, this.promptAmountScale);
     else if (this.promptType === 'number' || this.promptType === 'percent') {
       const n = parseFloat(String(v).replace(/,/g, ''));
       v = Number.isFinite(n) ? n : 0;
@@ -380,7 +393,8 @@ export class Dialog {
 
   _parseFieldValue(f) {
     let v = f.value;
-    if (f.type === 'money') return parseMoneyInput(v);
+    if (f.type === 'money') return v === f.initialDisplay ? f.initialMoneyValue
+      : storedMoneyInput(v, this._moneyContext, f.amountScale);
     if (f.type === 'number' || f.type === 'percent') {
       const n = parseFloat(String(v).replace(/,/g, ''));
       return Number.isFinite(n) ? n : 0;
@@ -649,6 +663,24 @@ export class Dialog {
       ty += optH;
     });
   }
+}
+
+function displayMoneyInput(value, context, amountScale) {
+  return formatMoneyInput(toDisplayMoney(value, context, { amountScale }).toFixed(2));
+}
+
+function storedMoneyInput(value, context, amountScale) {
+  // Round only user edits. Untouched fields preserve their exact stored amount.
+  // Baseline SSA/education fields may require fractional base-year cents to
+  // represent the intended current nominal amount exactly.
+  const nominal = fromDisplayMoney(parseMoneyInput(value), context);
+  const rounded = Math.round((nominal + Number.EPSILON) * 100) / 100;
+  return fromDisplayMoney(rounded, {inflationAdjusted:false}, {amountScale});
+}
+
+function moneySubtitle(subtitle, context) {
+  const units = moneyUnitSubtitle(context);
+  return subtitle ? `${units} · ${subtitle}` : units;
 }
 
 function wrapText(text, maxChars) {

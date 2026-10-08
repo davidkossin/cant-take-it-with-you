@@ -14,6 +14,9 @@ import { PauseMenu } from './scenes/PauseMenu.js';
 import { VirtualPad } from './input/VirtualPad.js';
 import { installFullscreen, isOsFullscreen } from './input/Fullscreen.js';
 import { MobileTextInput } from './input/MobileTextInput.js';
+import { FrameClock } from './input/FrameClock.js';
+import { initializeSaves, getSaveStatus } from './state/SaveSystem.js';
+import { setMoneyContext } from './finance/DollarBasis.js';
 import {
   initDebugFromEnvironment,
   drawOverlay as drawDebugOverlay,
@@ -159,6 +162,24 @@ let mode = 'title';
 let game = null;
 let booting = true;
 let interacting = false;
+const frameClock = new FrameClock();
+
+function syncMoneyContext(forInput = false) {
+  if (!game) return;
+  const portfolio = !forInput && mode === 'hallway' && !pause.open && !dialog.active
+    ? hallway.visual?.state || game.portfolio : game.portfolio;
+  setMoneyContext({ ...portfolio, inflationAdjusted: (game.settings?.inflationAdjusted ?? game.portfolio.inflationAdjusted) !== false,
+    dollarBaseYear: game.portfolio.dollarBaseYear ?? game.timeline.startYear });
+}
+
+function suspendInput() {
+  room.player?.clearKeys();
+  hallway.player?.clearKeys();
+  virtualPad.clearHeldInput();
+  frameClock.reset();
+}
+window.addEventListener('blur', suspendInput);
+document.addEventListener('visibilitychange', suspendInput);
 
 function waitForConfirm() {
   return new Promise((resolve) => {
@@ -176,6 +197,7 @@ function waitForConfirm() {
 async function startTitle() {
   mode = 'title';
   game = null;
+  setMoneyContext(null);
   booting = true;
   pause.hide();
   await waitForConfirm();
@@ -259,6 +281,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (e.target !== canvas) return;
   const pt = canvasLogicalXY(e.clientX, e.clientY);
   if (!pt) return;
+  syncMoneyContext(true);
   if (dialog.active) {
     if (dialog.handlePointer(pt.x, pt.y)) {
       e.preventDefault();
@@ -291,6 +314,7 @@ canvas.addEventListener('pointerleave', () => {
 });
 
 window.addEventListener('keydown', async (e) => {
+  syncMoneyContext(true);
   if (dialog.active) {
     dialog.handleKeyDown(e);
     return;
@@ -389,23 +413,32 @@ function syncVirtualPad() {
   virtualPad.setLayout({ discrete, showRun: walking });
 }
 
-function loop() {
+function updateScene() {
+  if (mode === 'title') title.update();
+  else if (mode === 'room' && game && !pause.open) room.update(game, dialog);
+  else if (mode === 'hallway' && game && !pause.open) hallway.update(game, dialog);
+  else if (mode === 'ending') ending.update();
+}
+
+function loop(now) {
+  const frame = frameClock.advance(now);
+  for (let i = 0; i < frame.steps; i++) updateScene();
+  // Do not repaint duplicate frames on 120/144/240 Hz screens.
+  if (!frame.render) { requestAnimationFrame(loop); return; }
   syncVirtualPad();
+  syncMoneyContext();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#0a0810';
   ctx.fillRect(0, 0, FRAME_W, FRAME_H);
   ctx.imageSmoothingEnabled = false;
 
   if (mode === 'title') {
-    title.update();
     title.draw(ctx);
   } else if (mode === 'setup') {
     setup.draw(ctx);
   } else if (mode === 'room' && game) {
-    if (!pause.open) room.update(game, dialog);
     room.render(ctx, game);
   } else if (mode === 'hallway' && game) {
-    if (!pause.open) hallway.update(game, dialog);
     hallway.render(ctx, game);
     if (
       !pause.open &&
@@ -423,12 +456,24 @@ function loop() {
         });
     }
   } else if (mode === 'ending') {
-    ending.update();
     ending.render(ctx);
   }
 
   if (pause.open && game) pause.draw(ctx, game);
   dialog.draw(ctx);
+
+  const saveStatus = getSaveStatus();
+  if (saveStatus.state === 'error') {
+    ctx.save();
+    ctx.font = '14px "Press Start 2P", monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#381a20';
+    ctx.fillRect(12, FRAME_H - 44, 1180, 32);
+    ctx.fillStyle = '#ffd0b0';
+    ctx.fillText('Save unavailable — export a backup in Settings / Manage Saves', 24, FRAME_H - 36);
+    ctx.restore();
+  }
 
   // Build version — bottom-right, always visible for cache checks
   ctx.save();
@@ -445,8 +490,8 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-loop();
-startTitle().catch((err) => {
+requestAnimationFrame(loop);
+initializeSaves().then(() => startTitle()).catch((err) => {
   console.error(err);
   debugLog('error', { where: 'boot', message: String(err && err.message || err) });
   ctx.fillStyle = '#c04040';

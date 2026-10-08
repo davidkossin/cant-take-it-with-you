@@ -1,8 +1,9 @@
-import { editPlanningInputs } from './PlanningInputs.js';
+import { editPlanningInputs, editInflationSettings, inflationToggleLabel, setMoneyContext } from './PlanningInputs.js';
+import { editSpouseIdentity, editFamilyIncome, editRetirementAges, editRetirementAccounts, householdSalary, personName } from './FamilyInputs.js';
 /**
  * Contextual LTTP-styled setup questionnaires with Back on every step.
- * v0.6.0 flow: Name → Year → Age → Difficulty → ZIP → Finances → Retirement →
- * Investments → Homes → Family → Expenses → Portfolio overview.
+ * Name → Year → Age → Difficulty → Family → Settings → ZIP → Finances →
+ * Retirement → Investments → Homes → Expenses → Portfolio overview.
  */
 
 import { CURRENT_YEAR, HOME_TYPES, FRAME_W, FRAME_H, TILE, WORLD_SCALE, PALETTE } from '../config.js';
@@ -66,6 +67,9 @@ export class SetupScene {
     const mode = options.mode === 'profile' ? 'profile' : 'game';
     const allowCancelAtStart = true; // Back on name → confirm return to menu
     const s = createDefaultSetup();
+    s.householdVersion = 1;
+    s.salaryOwnershipConfirmed = true;
+    s.salaryOwnership = 'individual';
     let step = 0;
 
     const withBack = (opts) => [...opts, { label: '← Back', value: BACK }];
@@ -88,6 +92,7 @@ export class SetupScene {
 
     while (true) {
       let result;
+      setMoneyContext(s);
 
       // ── 0 Name ──────────────────────────────────────────────
       if (step === 0) {
@@ -119,6 +124,7 @@ export class SetupScene {
           continue;
         }
         s.year = Math.round(result);
+        s.dollarBaseYear = s.year;
         step++;
       }
 
@@ -161,7 +167,18 @@ export class SetupScene {
         }
         s.difficulty = result || 'standard';
         this.applyDifficultyDefaults(s);
-        step++;
+        step = 26;
+      }
+
+      else if (step === 3.5) {
+        result = await dialog.menu('Choose how money amounts are displayed and entered.', [
+          { label: inflationToggleLabel(s), value: 'inflation' },
+          { label: 'Continue', value: 'continue' },
+          { label: '← Back', value: BACK },
+        ], { title: 'Settings' });
+        if (result === 'inflation') { await editInflationSettings(s, dialog); continue; }
+        if (result === BACK) { step = 27; continue; }
+        step = 4;
       }
 
       // ── 4 ZIP ───────────────────────────────────────────────
@@ -172,7 +189,7 @@ export class SetupScene {
           defaultValue: s.zip || '',
         });
         if (result == null) {
-          step--;
+          step = 3.5;
           continue;
         }
         const digits = String(result).replace(/\D/g, '').slice(0, 5);
@@ -182,7 +199,7 @@ export class SetupScene {
 
       // ── 5 Starting Cash (checking) ──────────────────────────
       else if (step === 5) {
-        result = await dialog.prompt('Starting Cash in checking account', {
+        result = await dialog.prompt(`Starting ${s.married ? 'joint ' : ''}Cash in checking account`, {
           title: 'Finances',
           defaultValue: String(s.cash),
           type: 'money',
@@ -200,11 +217,11 @@ export class SetupScene {
       else if (step === 6) {
         const pctDefault = ((s.savingsRate || 0) * 100).toFixed(2).replace(/\.?0+$/, '') || '0';
         result = await dialog.form(
-          'Savings',
+          s.married ? 'Joint Savings' : 'Savings',
           [
             {
               key: 'savings',
-              label: 'Savings',
+              label: s.married ? 'Joint Savings' : 'Savings',
               type: 'money',
               prefix: '$',
               defaultValue: String(s.savings),
@@ -229,186 +246,35 @@ export class SetupScene {
 
       // ── 7 Salary ────────────────────────────────────────────
       else if (step === 7) {
-        result = await dialog.prompt('Annual household salary (before taxes)', {
-          title: 'Finances',
-          defaultValue: String(s.salary),
-          type: 'money',
-          prefix: '$',
-        });
-        if (result == null) {
+        if (!(await editFamilyIncome(s, dialog))) {
           step--;
           continue;
         }
-        s.salary = Math.max(0, result);
-        s.employed = s.salary > 0;
         step++;
       }
 
       // ── 8 Retirement age ────────────────────────────────────
       else if (step === 8) {
-        result = await dialog.prompt('Retirement age', {
-          title: 'Retirement',
-          defaultValue: String(s.retirementAge || 65),
-          type: 'number',
-        });
-        if (result == null) {
+        if (!(await editRetirementAges(s, dialog))) {
           step--;
           continue;
         }
-        s.retirementAge = Math.max(40, Math.min(100, Math.round(result || 65)));
         step++;
       }
 
-      // ── 9 Retirement accounts (checkboxes) ──────────────────
+      // Retirement accounts belong to each person, including separate balances and limits.
       else if (step === 9) {
-        const selected = [];
-        if (s.has401k) selected.push('k401');
-        if (s.hasRoth) selected.push('roth');
-        result = await dialog.multiSelect(
-          'Which retirement accounts do you have?',
-          [
-            { label: '401(k)', value: 'k401' },
-            { label: 'Roth IRA', value: 'roth' },
-          ],
-          { title: 'Retirement', selected }
-        );
-        if (result == null) {
-          step--;
-          continue;
-        }
-        s.has401k = result.includes('k401');
-        s.hasRoth = result.includes('roth');
-        if (!s.has401k) {
-          s.k401Balance = 0;
-          s.k401ContribRate = 0;
-          s.k401MatchRate = 0;
-          s.k401MatchOnFirst = 0;
-        }
-        if (!s.hasRoth) {
-          s.rothBalance = 0;
-          s.rothAnnualContribution = 0;
-        }
-        step = s.has401k ? 10 : s.hasRoth ? 13 : 14;
-      }
-
-      // ── 10 401(k) balance ───────────────────────────────────
-      else if (step === 10) {
-        result = await dialog.prompt('401(k) balance / amount', {
-          title: 'Retirement',
-          defaultValue: String(s.k401Balance || 0),
-          type: 'money',
-          prefix: '$',
-        });
-        if (result == null) {
-          step = 9;
-          continue;
-        }
-        s.k401Balance = Math.max(0, result);
-        // Also ask contribution % for ongoing deferrals (feeds tax model)
-        const pctDefault = ((s.k401ContribRate || 0.06) * 100).toFixed(2).replace(/\.?0+$/, '');
-        const contrib = await dialog.prompt('401(k) contribution (% of salary)', {
-          title: 'Retirement',
-          defaultValue: pctDefault,
-          type: 'percent',
-        });
-        if (contrib == null) {
-          step = 10;
-          continue;
-        }
-        s.k401ContribRate = Math.max(0, Math.min(1, contrib / 100));
-        step = 11;
-      }
-
-      // ── 11 Employer matching Yes/No ─────────────────────────
-      else if (step === 11) {
-        result = await dialog.menu(
-          'Employer matching?',
-          withBack([
-            { label: 'Yes', value: true },
-            { label: 'No', value: false },
-          ]),
-          { title: 'Retirement' }
-        );
-        if (result === BACK) {
-          step = 10;
-          continue;
-        }
-        if (!result) {
-          s.k401MatchRate = 0;
-          s.k401MatchOnFirst = 0;
-          step = s.hasRoth ? 13 : 14;
-        } else {
-          step = 12;
-        }
-      }
-
-      // ── 12 Match questions (one page) ───────────────────────
-      else if (step === 12) {
-        const matchPctDef = ((s.k401MatchRate || 1) * 100).toFixed(0);
-        const onFirstDef = ((s.k401MatchOnFirst || 0.03) * 100).toFixed(2).replace(/\.?0+$/, '');
-        result = await dialog.form(
-          'Employer match details',
-          [
-            {
-              key: 'matchRate',
-              label: 'Match % of your deferrals (e.g. 100)',
-              type: 'percent',
-              defaultValue: matchPctDef,
-            },
-            {
-              key: 'onFirst',
-              label: 'On first % of salary (e.g. 3)',
-              type: 'percent',
-              defaultValue: onFirstDef,
-            },
-          ],
-          { title: 'Retirement' }
-        );
-        if (result == null) {
-          step = 11;
-          continue;
-        }
-        s.k401MatchRate = Math.max(0, Math.min(1, (result.matchRate || 0) / 100));
-        s.k401MatchOnFirst = Math.max(0, Math.min(1, (result.onFirst || 0) / 100));
-        step = s.hasRoth ? 13 : 14;
-      }
-
-      // ── 13 Roth balance + contribution ──────────────────────
-      else if (step === 13) {
-        result = await dialog.form(
-          'Roth IRA',
-          [
-            {
-              key: 'balance',
-              label: 'Roth IRA balance',
-              type: 'money',
-              prefix: '$',
-              defaultValue: String(s.rothBalance || 0),
-            },
-            {
-              key: 'contrib',
-              label: 'Annual contribution',
-              type: 'money',
-              prefix: '$',
-              defaultValue: String(s.rothAnnualContribution || 0),
-            },
-          ],
-          { title: 'Retirement' }
-        );
-        if (result == null) {
-          if (s.has401k) step = 11;
-          else step = 9;
-          continue;
-        }
-        s.rothBalance = Math.max(0, result.balance || 0);
-        s.rothAnnualContribution = Math.max(0, result.contrib || 0);
+        const draft = { ...s };
+        if (!(await editRetirementAccounts(draft, dialog))) { step = 8; continue; }
+        if (s.married && !(await editRetirementAccounts(draft, dialog, { owner: 'spouse' }))) { continue; }
+        Object.assign(s, draft);
         step = 14;
       }
 
       // ── 14 Investments mode ─────────────────────────────────
       else if (step === 14) {
         result = await dialog.menu(
-          'How do you want to enter investments?',
+          'How do you want to enter household investments?',
           withBack([
             { label: 'Set Total Investments', value: 'total' },
             { label: 'Set Specific Stocks (advanced)', value: 'specific' },
@@ -416,9 +282,7 @@ export class SetupScene {
           { title: 'Investments' }
         );
         if (result === BACK) {
-          if (s.hasRoth) step = 13;
-          else if (s.has401k) step = 11;
-          else step = 9;
+          step = 9;
           continue;
         }
         s.stocksMode = result;
@@ -432,7 +296,7 @@ export class SetupScene {
 
       // ── 15 Total portfolio ──────────────────────────────────
       else if (step === 15) {
-        result = await dialog.prompt('Stock Portfolio Total', {
+        result = await dialog.prompt('Household Portfolio Total', {
           title: 'Investments',
           defaultValue: String(s.stocksTotal || 0),
           type: 'money',
@@ -710,7 +574,7 @@ export class SetupScene {
 
       // ── 21 Monthly rent ─────────────────────────────────────
       else if (step === 21) {
-        result = await dialog.prompt('Monthly rent', {
+        result = await dialog.prompt('Household monthly rent', {
           title: 'Homes',
           defaultValue: String(s.monthlyRent || 1500),
           type: 'money',
@@ -721,7 +585,7 @@ export class SetupScene {
           continue;
         }
         s.monthlyRent = Math.max(0, result);
-        step = 26;
+        step = 30;
       }
 
       // ── 22 How many homes ───────────────────────────────────
@@ -783,14 +647,14 @@ export class SetupScene {
         const fields = [
           {
             key: 'value',
-            label: 'Market value',
+            label: 'Household property market value',
             type: 'money',
             prefix: '$',
             defaultValue: '350000',
           },
           {
             key: 'owed',
-            label: 'Mortgage owed',
+            label: 'Household mortgage owed',
             type: 'money',
             prefix: '$',
             defaultValue: '280000',
@@ -849,7 +713,7 @@ export class SetupScene {
         });
         s._homeIdx++;
         if (s._homeIdx < s._homeCount) step = 23;
-        else step = 26;
+        else step = 30;
       }
 
       // ── 26 Marital status ───────────────────────────────────
@@ -862,17 +726,11 @@ export class SetupScene {
           ]),
           { title: 'Family' }
         );
-        if (result === BACK) {
-          if (s.housing === 'rent') step = 21;
-          else if (s._homeCount > 0) {
-            s._homeIdx = s._homeCount - 1;
-            s.homes.pop();
-            step = 23;
-          } else step = 20;
-          continue;
-        }
-        s.filingStatus = result;
-        s.married = result === 'married';
+        if (result === BACK) { step = 3; continue; }
+        const married = result === 'married';
+        const draft = { ...s, married, filingStatus: married ? 'married' : 'single' };
+        if (married && !(await editSpouseIdentity(draft, dialog))) continue;
+        Object.assign(s, draft);
         step = 27;
       }
 
@@ -896,7 +754,7 @@ export class SetupScene {
         s._kidCount = result || 0;
         s.kids = [];
         s._kidIdx = 0;
-        step = s._kidCount > 0 ? 28 : 30;
+        step = s._kidCount > 0 ? 28 : 3.5;
       }
 
       // ── 28 Child name ───────────────────────────────────────
@@ -938,16 +796,21 @@ export class SetupScene {
         });
         s._kidIdx++;
         if (s._kidIdx < s._kidCount) step = 28;
-        else step = 30;
+        else step = 3.5;
       }
 
       // Annual consumption is separate from taxes, housing, children and saving.
       else if (step === 30) {
         const tax = estimateAnnualTax({ ...s, employed: s.salary > 0 });
-        result = await dialog.prompt('Annual living costs (exclude rent, loans, taxes, children and contributions)', {
+        result = await dialog.prompt('Annual household living costs (exclude rent, loans, taxes, children and contributions)', {
           title: 'Living costs', type: 'money', prefix: '$', defaultValue: String(s.annualSpending ?? 35000),
         });
-        if (result == null) { step = 27; continue; }
+        if (result == null) {
+          if (s.housing === 'rent') step = 21;
+          else if ((s.homes || []).length) { s._homeIdx = s.homes.length - 1; s.homes.pop(); step = 23; }
+          else step = 20;
+          continue;
+        }
         s.annualSpending = Math.max(0, result); s.spendingBreakdown = { other: s.annualSpending };
         await dialog.show('Estimated income + payroll tax: ' + formatMoneyDisplay(tax.total) + '/yr.\nHousing, property costs, children and college are added separately.', { title: 'Budget' });
         step = 31;
@@ -996,7 +859,9 @@ function buildOverview(s) {
   lines.push(
     `  Savings: ${formatMoneyDisplay(s.savings)} @ ${((s.savingsRate || 0) * 100).toFixed(2)}%`
   );
-  lines.push(`  Salary: ${formatMoneyDisplay(s.salary)}`);
+  lines.push(`  ${personName(s)} salary: ${formatMoneyDisplay(s.salary)}`);
+  if (s.married) lines.push(`  ${personName(s, 'spouse')} salary: ${formatMoneyDisplay(s.spouseSalary)}`);
+  lines.push(`  Household salary: ${formatMoneyDisplay(householdSalary(s))}`);
   lines.push('');
   lines.push('Retirement:');
   lines.push(`  Retirement age: ${s.retirementAge || 65}`);
@@ -1010,6 +875,11 @@ function buildOverview(s) {
       `  Roth IRA: ${formatMoneyDisplay(s.rothBalance)} · contrib ${formatMoneyDisplay(s.rothAnnualContribution)}/yr`
     );
   } else lines.push('  Roth IRA: none');
+  if (s.married) {
+    lines.push(`  ${personName(s, 'spouse')} retirement age: ${s.spouseRetirementAge || 65}`);
+    lines.push(`  ${personName(s, 'spouse')} 401(k): ${s.spouseHas401k ? formatMoneyDisplay(s.spouseK401Balance) : 'none'}`);
+    lines.push(`  ${personName(s, 'spouse')} Roth IRA: ${s.spouseHasRoth ? formatMoneyDisplay(s.spouseRothBalance) : 'none'}`);
+  }
   lines.push('');
   lines.push('Investments:');
   if (s.stocksMode === 'specific' && (s.stocksHoldings || []).length) {
@@ -1038,6 +908,7 @@ function buildOverview(s) {
   lines.push('');
   lines.push('Family:');
   lines.push(`  ${s.filingStatus === 'married' ? 'Married Filing Jointly' : 'Single'}`);
+  if (s.married) lines.push(`  ${personName(s, 'spouse')}, age ${s.spouseAge ?? 'unknown'}`);
   if ((s.kids || []).length) {
     for (const k of s.kids) lines.push(`  ${k.name}, age ${k.age}`);
   } else lines.push('  Children: none');

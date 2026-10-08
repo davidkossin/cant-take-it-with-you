@@ -2,7 +2,7 @@
  * Tilemap helpers + Decision Room / Hallway builders.
  */
 
-import { TILE, VIEW_W, VIEW_H, PALETTE } from '../config.js';
+import { TILE, VIEW_W, VIEW_H, WORLD_SCALE } from '../config.js';
 import { makeLamp, makeBlueTorch } from './Assets.js';
 import { paintSurface, paintWallShadow, paintRug, paintDoor, paintDecor, paintTeller, paintEndWall, drawDeathsDoorLanterns, wallFace } from './hiTextures.js';
 
@@ -108,7 +108,7 @@ export function buildDecisionRoom(opts = {}) {
       y: (rows - 1) * TILE - 4,
       w: 32,
       h: 22,
-      label: 'Have A Kid',
+      label: 'Family',
       kind: 'teller',
       action: 'kid',
       wall: true,
@@ -410,28 +410,70 @@ function blitHi(ctx, img, x, y, w, h) {
   ctx.drawImage(img, x, y, w, h);
 }
 
-export function drawWorld(ctx, world, camX, camY, animTime = 0) {
-  ctx.save();
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
+// Cache terrain in small world-space chunks rather than a canvas the length of
+// the hallway. 24 RGBA chunks at the game's 4× scale use at most 24 MiB of
+// backing pixels, shared across every visited room and hallway.
+const STATIC_CHUNK_SIZE = 128;
+const MAX_STATIC_CHUNKS = 24;
+const staticWorlds = new WeakMap();
+const staticChunks = new Map();
+const timelineDoors = new WeakMap();
 
-  // Hallway corridor and the squarer Decision Room both sit in the wide
-  // frame. Void fills the non-playable margins.
-  if (world.theme === 'hallway' || world.theme === 'room') {
-    const voidTile = paintSurface('void', 0, 's');
-    const ox = ((camX % TILE) + TILE) % TILE;
-    const oy = ((camY % TILE) + TILE) % TILE;
-    for (let y = -TILE; y < VIEW_H + TILE; y += TILE) {
-      for (let x = -TILE; x < VIEW_W + TILE; x += TILE) {
-        blitHi(ctx, voidTile, x - ox, y - oy, TILE, TILE);
-      }
-    }
+function releaseStaticChunk(entry) {
+  staticChunks.delete(entry);
+  entry.state.chunks.delete(entry.key);
+  // Explicitly release backing storage, including OffscreenCanvas storage.
+  entry.canvas.width = 0;
+  entry.canvas.height = 0;
+}
+
+/** Call after editing an existing world's map in place. Built worlds are static. */
+export function invalidateWorldRenderCache(world) {
+  const state = staticWorlds.get(world);
+  if (state) for (const entry of Array.from(state.chunks.values())) releaseStaticChunk(entry);
+  staticWorlds.delete(world);
+  timelineDoors.delete(world);
+}
+
+function staticWorldState(world) {
+  // Replacing terrain, dimensions or overlay geometry invalidates automatically.
+  // renderRevision also gives editors an inexpensive in-place invalidation key.
+  const shape = `${world.cols}:${world.rows}:${world.theme}:${world.renderRevision ?? 0}:` +
+    `${world.rug?.x}:${world.rug?.y}:${world.rug?.w}:${world.rug?.h}:` +
+    `${world.endWall?.x}:${world.endWall?.y}:${world.endWall?.w}:${world.endWall?.h}:` +
+    `${world.endWall?.door?.x}:${world.endWall?.door?.y}:${world.endWall?.door?.w}:${world.endWall?.door?.h}`;
+  let state = staticWorlds.get(world);
+  if (!state || state.map !== world.map || state.shape !== shape) {
+    invalidateWorldRenderCache(world);
+    state = { map: world.map, shape, chunks: new Map() };
+    staticWorlds.set(world, state);
   }
+  return state;
+}
 
+function makeStaticCanvas() {
+  const side = STATIC_CHUNK_SIZE * WORLD_SCALE;
+  try {
+    let canvas;
+    if (typeof OffscreenCanvas !== 'undefined') canvas = new OffscreenCanvas(side, side);
+    else if (typeof document !== 'undefined') {
+      canvas = document.createElement('canvas');
+      canvas.width = side;
+      canvas.height = side;
+    }
+    const ctx = canvas?.getContext('2d');
+    return ctx ? { canvas, ctx } : null;
+  } catch {
+    // Browsers without a usable auxiliary canvas retain the direct renderer.
+    return null;
+  }
+}
+
+function drawStaticTerrain(ctx, world, camX, camY, viewW, viewH) {
   const startCol = Math.max(0, Math.floor(camX / TILE) - 1);
   const startRow = Math.max(0, Math.floor(camY / TILE) - 1);
-  const endCol = Math.min(world.cols, Math.ceil((camX + VIEW_W) / TILE) + 1);
-  const endRow = Math.min(world.rows, Math.ceil((camY + VIEW_H) / TILE) + 1);
+  const endCol = Math.min(world.cols, Math.ceil((camX + viewW) / TILE) + 1);
+  const endRow = Math.min(world.rows, Math.ceil((camY + viewH) / TILE) + 1);
 
   for (let y = startRow; y < endRow; y++) {
     for (let x = startCol; x < endCol; x++) {
@@ -466,12 +508,77 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
     const ew = world.endWall;
     const tex = paintEndWall(ew.w, ew.h, ew.door.x - ew.x, ew.door.y - ew.y, ew.door.w, ew.door.h);
     blitHi(ctx, tex, ew.x - camX, ew.y - camY, ew.w, ew.h);
-    drawDeathsDoorLanterns(ctx, ew.door, ew.y + ew.h, camX, camY, animTime);
   }
 
   if (world.theme === 'room' && world.rug) {
     const rug = paintRug(world.rug.w, world.rug.h);
     blitHi(ctx, rug, world.rug.x - camX - 2, world.rug.y - camY - 1, rug.lw, rug.lh);
+  }
+}
+
+function drawCachedTerrain(ctx, world, camX, camY) {
+  const state = staticWorldState(world);
+  const x0 = Math.floor(camX / STATIC_CHUNK_SIZE);
+  const y0 = Math.floor(camY / STATIC_CHUNK_SIZE);
+  const x1 = Math.ceil((camX + VIEW_W) / STATIC_CHUNK_SIZE);
+  const y1 = Math.ceil((camY + VIEW_H) / STATIC_CHUNK_SIZE);
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const key = `${x}:${y}`;
+      let entry = state.chunks.get(key);
+      if (!entry) {
+        const surface = makeStaticCanvas();
+        if (!surface) {
+          // Clip to this chunk if an auxiliary canvas becomes unavailable
+          // after earlier chunks were drawn; do not paint their shadows twice.
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x * STATIC_CHUNK_SIZE - camX, y * STATIC_CHUNK_SIZE - camY,
+            STATIC_CHUNK_SIZE, STATIC_CHUNK_SIZE);
+          ctx.clip();
+          drawStaticTerrain(ctx, world, camX, camY, VIEW_W, VIEW_H);
+          ctx.restore();
+          continue;
+        }
+        const sc = surface.ctx;
+        sc.setTransform(WORLD_SCALE, 0, 0, WORLD_SCALE, 0, 0);
+        sc.imageSmoothingEnabled = true;
+        sc.imageSmoothingQuality = 'high';
+        // Include the adjacent tile when painting shadows that cross a chunk
+        // boundary; the canvas itself clips both layers to the same edge.
+        drawStaticTerrain(sc, world, x * STATIC_CHUNK_SIZE, y * STATIC_CHUNK_SIZE,
+          STATIC_CHUNK_SIZE, STATIC_CHUNK_SIZE);
+        entry = { key, state, canvas: surface.canvas };
+        state.chunks.set(key, entry);
+      }
+      staticChunks.delete(entry);
+      staticChunks.set(entry, true);
+      while (staticChunks.size > MAX_STATIC_CHUNKS) {
+        releaseStaticChunk(staticChunks.keys().next().value);
+      }
+      blitHi(ctx, entry.canvas, x * STATIC_CHUNK_SIZE - camX,
+        y * STATIC_CHUNK_SIZE - camY, STATIC_CHUNK_SIZE, STATIC_CHUNK_SIZE);
+    }
+  }
+}
+
+export function drawWorld(ctx, world, camX, camY, animTime = 0) {
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  // The painted void tile is a uniform color, so one fill covers the margins.
+  if (world.theme === 'hallway' || world.theme === 'room') {
+    ctx.fillStyle = '#141c2c';
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  }
+  drawCachedTerrain(ctx, world, camX, camY);
+
+  if (world.theme === 'hallway' && world.endWall) {
+    const ew = world.endWall;
+    if (ew.y + ew.h - camY >= -32 && ew.y - camY <= VIEW_H + 32) {
+      drawDeathsDoorLanterns(ctx, ew.door, ew.y + ew.h, camX, camY, animTime);
+    }
   }
 
   if (world.theme === 'hallway') drawYearTimeline(ctx, world, camX, camY);
@@ -538,7 +645,18 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
  * exactly 11 short ticks sit between one year and the next.
  */
 function drawYearTimeline(ctx, world, camX, camY) {
-  const doors = (world.doors || []).slice().sort((a, b) => a.y - b.y);
+  let ordered = timelineDoors.get(world);
+  if (!ordered || ordered.source !== world.doors || ordered.length !== world.doors?.length ||
+      ordered.revision !== world.renderRevision) {
+    ordered = {
+      source: world.doors,
+      length: world.doors?.length,
+      revision: world.renderRevision,
+      doors: (world.doors || []).slice().sort((a, b) => a.y - b.y),
+    };
+    timelineDoors.set(world, ordered);
+  }
+  const doors = ordered.doors;
   if (!doors.length) return;
   const axisX = (world.walkLeft - 3) * TILE - camX;
   ctx.save();
@@ -548,20 +666,37 @@ function drawYearTimeline(ctx, world, camX, camY) {
   ctx.font = '5px "Press Start 2P", monospace';
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'right';
-  const yOf = (d) => d.y + d.h / 2 - camY;
+  const worldYOf = (d) => d.y + d.h / 2;
+  const yOf = (d) => worldYOf(d) - camY;
+  if (yOf(doors[0]) > VIEW_H || yOf(doors[doors.length - 1]) < 0) {
+    ctx.restore();
+    return;
+  }
   ctx.beginPath();
-  ctx.moveTo(axisX, yOf(doors[0]));
-  ctx.lineTo(axisX, yOf(doors[doors.length - 1]));
+  ctx.moveTo(axisX, Math.max(0, yOf(doors[0])));
+  ctx.lineTo(axisX, Math.min(VIEW_H, yOf(doors[doors.length - 1])));
   ctx.stroke();
-  for (let i = 0; i < doors.length; i++) {
+  // Find the first visible year in logarithmic time, retaining the preceding
+  // interval so its monthly marks can appear above the next year's label.
+  let lo = 0;
+  let hi = doors.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (worldYOf(doors[mid]) < camY) lo = mid + 1;
+    else hi = mid;
+  }
+  for (let i = Math.max(0, lo - 1); i < doors.length; i++) {
     const y = yOf(doors[i]);
-    ctx.fillRect(axisX - 8, y - 1, 8, 2);
-    ctx.fillText(String(doors[i].year), axisX - 10, y);
+    if (y > VIEW_H) break;
+    if (y >= 0) {
+      ctx.fillRect(axisX - 8, y - 1, 8, 2);
+      ctx.fillText(String(doors[i].year), axisX - 10, y);
+    }
     if (i + 1 >= doors.length) continue;
     const y2 = yOf(doors[i + 1]);
     for (let m = 1; m <= 11; m++) {
       const my = y + ((y2 - y) * m) / 12;
-      ctx.fillRect(axisX - 3, Math.round(my), 3, 1);
+      if (my >= 0 && my <= VIEW_H) ctx.fillRect(axisX - 3, Math.round(my), 3, 1);
     }
   }
   ctx.restore();
