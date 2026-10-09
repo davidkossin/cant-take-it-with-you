@@ -75,11 +75,6 @@ body {
   flex-shrink: 0;
 }
 
-.v2-link {
-  font-size: 10px;
-  opacity: 0.85;
-}
-
 .fs-btn {
   appearance: none;
   border: 2px solid rgba(212, 168, 75, 0.75);
@@ -159,10 +154,6 @@ body.is-max-fill .topbar-tools {
   top: max(6px, env(safe-area-inset-top, 0px));
   right: max(6px, env(safe-area-inset-right, 0px));
   z-index: 40;
-}
-
-body.is-max-fill .v2-link {
-  display: none;
 }
 
 .frame {

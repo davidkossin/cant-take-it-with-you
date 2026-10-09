@@ -12,7 +12,8 @@ import { requiredDistribution, rothLimit } from './Retirement.js';
 import { incomeSchedule, monthlyAmount } from './IncomeSchedule.js';
 import { ownerKey, ownerAge, ownerState, ownerWorking } from './Household.js';
 import { hashSeed, mulberry32 } from './rng.js';
-import { HOME_TYPES, CHILD_COST_BANDS, HELOC_CLTV, SB_LTV,
+import { annualChildCostForZip } from '../data/stateChildCosts.js';
+import { HOME_TYPES, HELOC_CLTV, SB_LTV,
   HELOC_DEFAULT_RATE, SECURITIES_LOAN_DEFAULT_RATE } from '../config.js';
 
 export const ENGINE_VERSION = '2.2.0';
@@ -40,9 +41,10 @@ function simulationCopy(state) {
 export const syncStocksTotal = syncBook;
 const fmt = n => Math.round(n).toLocaleString('en-US');
 const monthGross = g => Math.max(0, g) ** (1 / 12);
-export function annualChildCost(age, difficulty = {}, inflator = 1) {
+/** Ages 0–17: flat state average (from the player's ZIP; 50-state average if unknown), in today's dollars × inflator. */
+export function annualChildCost(age, difficulty = {}, inflator = 1, zip = '') {
   if (age >= 18) return 0;
-  return money((CHILD_COST_BANDS.find(b => age <= b.maxAge)?.annual ?? 0) * inflator);
+  return money(annualChildCostForZip(zip) * inflator);
 }
 /** A query must never repair or mutate holdings. */
 export function computeWorth(s) {
@@ -314,7 +316,7 @@ export function projectOneYear(state,difficultyId,opts={}) {
       if (month===1 && kid.age===18 && kid.collegeEnabled!==false && (!s._compact || s._recordEvents)) events.push((kid.name || 'Child')+' goes to college');
       const college=kid.age>=18 && kid.age<22 && kid.collegeEnabled!==false;
       const cost=college?nonnegative(kid.annualCollegeCost,nonnegative(s.annualCollegeCost,28000))*s.childCostInflator
-        : annualChildCost(kid.age,difficulty,s.priceIndex);
+        : annualChildCost(kid.age,difficulty,s.priceIndex,s.zip);
       payCost(s,monthlyAmount(cost,month),college?'college':'children',statement,{age:currentAge});
     }
     if (month===6 && shock) {

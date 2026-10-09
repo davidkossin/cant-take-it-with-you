@@ -2,7 +2,7 @@
 
 Game development version: **0.7.0**. Engine version: **2.2.0** (funding rule **cash-only**). Assumptions: **planning-2026-1**. Federal rule set: **irs-2026-1**. Original rule review October 4, 2026; cash-only funding and median-first-wall Hallway selection October 7, 2026. See [the planning update](planning-update.md) for household ownership, currency units, gross-up, timelines and persistence.
 
-This corrects the existing game’s financial system; it does not recreate the game. Room/teller decisions, the hallway, timeline forks, saves, profiles and ending remain in the root JavaScript application. The compiled Godot `v2/` export is separate and is not changed.
+This corrects the existing game’s financial system; it does not recreate the game. Room/teller decisions, the hallway, timeline forks, saves, profiles and ending remain in the root JavaScript application.
 
 The engine supports household planning scenarios within the coverage below. It does not claim feature parity with a commercial planner or comprehensive tax-return software. Every Monte Carlo path uses the same monthly accounting engine as gameplay. Unsupported cases are described in **Planning inputs → Model coverage** and **Charts → Coverage**.
 
@@ -61,7 +61,7 @@ Home purchase closing costs default to 2%; selling costs to 6%, both explicit mo
 
 Rental revenue is independent of whether the owner rents their own residence. Defaults include 5% vacancy, maintenance at 1% of market value and insurance at 0.3% unless explicit annual amounts are entered. Property tax uses an explicit annual amount or assessed value × rate. Annual property-tax dollar overrides grow at entered/default inflation. State-specific assessment caps are not modeled.
 
-Child cost bands are illustrative allowances inherited from gameplay, not a personalized family budget. College defaults to an illustrative **$28,000 per child per year at ages 18–21**, separate from living costs. Extra healthcare and college costs are editable; scholarships, 529 accounts, insurance benefit schedules and long-term-care events are not modeled automatically.
+Child costs at ages 0–17 are a flat state average annual cost of raising a child, chosen from the player's ZIP (`js/data/stateChildCosts.js`; 50-state average of $23,673 when the ZIP is blank, invalid, DC, a territory or military) and inflated with the price index; they are not a personalized family budget. College defaults to an illustrative **$28,000 per child per year at ages 18–21**, separate from living costs. Extra healthcare and college costs are editable; scholarships, 529 accounts, insurance benefit schedules and long-term-care events are not modeled automatically.
 
 ## Tax coverage
 

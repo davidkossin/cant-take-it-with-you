@@ -1,6 +1,6 @@
 # Planning update (unpublished)
 
-This updates the root JavaScript application. The Godot `v2/` application is unchanged.
+This updates the root JavaScript application.
 
 ## Apply the patch
 

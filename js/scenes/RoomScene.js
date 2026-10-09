@@ -1,6 +1,7 @@
 import { editPlanningInputs } from './PlanningInputs.js';
 import { editSpouseIdentity, editFamilyIncome, editRetirementAges, editRetirementAccounts, personName } from './FamilyInputs.js';
 import { ensureHoldings, syncBook, post } from '../finance/Books.js';
+import { childCostLabel } from '../data/stateChildCosts.js';
 import {
   FRAME_W,
   WORLD_SCALE,
@@ -537,7 +538,7 @@ export class RoomScene {
       const name = await dialog.prompt("Child's name?", { title: 'Have a kid', defaultValue: `Child ${(p.kids || []).length + 1}` });
       if (name == null) return;
       game.portfolio = addKid(p, { name: name || 'Child', age: 0 });
-      await dialog.show(`${name || 'Child'} joins the timeline at age 0. Annual costs follow the age schedule.`, { title: 'Family' });
+      await dialog.show(`${name || 'Child'} joins the timeline at age 0. Annual child costs use ${childCostLabel(p.zip)} until age 18.`, { title: 'Family' });
     } else if (choice === 'marry') {
       const draft = { ...p, married: true, filingStatus: 'married' };
       if (!(await editSpouseIdentity(draft, dialog))) return;

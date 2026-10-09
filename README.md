@@ -71,13 +71,14 @@ cant-take-it/
     data/
       tax-brackets.js
       state-from-zip.js
+      stateChildCosts.js  # state child costs (ages 0–17) by ZIP
 ```
 
 Vanilla ES modules + Canvas. No build step. GitHub Pages serves the folder as static files.
 
 ## Financial model v2
 
-The root JavaScript game uses the corrected monthly engine and Monte Carlo forecasts. See [the model specification and coverage](docs/financial-model-v2.md) for timing, assumptions, source rules and remaining limitations. The compiled Godot `v2/` export is a separate application.
+The root JavaScript game uses the corrected monthly engine and Monte Carlo forecasts. See [the model specification and coverage](docs/financial-model-v2.md) for timing, assumptions, source rules and remaining limitations.
 
 In **Pause → Charts**, the default view is a 1,000-path forecast. **Enter / mobile A** opens options for history, real dollars, liquid assets, 5,000 or 10,000 paths, coverage notes and CSV export. Left/right selects a year. Keyboard shortcuts: F history, R real dollars, L liquid assets, P path count, C coverage, E export.
 

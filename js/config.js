@@ -21,7 +21,7 @@ export const CANVAS_W = FRAME_W;
 export const CANVAS_H = FRAME_H;
 
 /** Bump on each published build so players can confirm cache. */
-export const GAME_VERSION = '0.7.3';
+export const GAME_VERSION = '0.7.4';
 
 export const PALETTE = {
   bg: '#1a1420',
@@ -158,13 +158,7 @@ export const DIFFICULTIES = {
   difficult: MARKET_DIFFICULTIES.grim,
 };
 
-/** USDA-style annual child cost bands (2020s USD, pre-pressure / pre-inflation). */
-export const CHILD_COST_BANDS = [
-  { maxAge: 5, annual: 13500 },
-  { maxAge: 12, annual: 14500 },
-  { maxAge: 17, annual: 16000 },
-  // 18+: college tuition via NATIONAL_AVG_COLLEGE_COST (not double-counted here)
-];
+/** Child costs ages 0–17 are state-based by ZIP: see js/data/stateChildCosts.js. 18+: college (below). */
 
 /**
  * College Board *Trends in College Pricing* 2024–25:

@@ -2,7 +2,7 @@
  * Authoritative game state + timeline branch nodes.
  */
 
-import { CURRENT_YEAR, MAX_AGE } from '../config.js';
+import { CURRENT_YEAR, MAX_AGE, HAIR_PALETTE, SHIRT_PALETTE } from '../config.js';
 import { cloneState, computeWorth } from '../finance/Engine.js';
 import { normalizePortfolio } from '../finance/Schema.js';
 import { ensureTimelineSystem, currentTimeline, recordTimelineDecision, createHallwayTimeline, eraseTimeline } from './TimelineSystem.js';
@@ -67,6 +67,11 @@ export function createDefaultSetup() {
   };
 }
 
+/** Random id from one of the 16-color picker palettes (HAIR_PALETTE / SHIRT_PALETTE). */
+function randomPaletteId(palette) {
+  return palette[Math.floor(Math.random() * palette.length)].id;
+}
+
 /**
  * Standard starter for New Game → Standard portfolio (skip the questionnaire).
  *
@@ -81,8 +86,22 @@ export function createDefaultSetup() {
  * arrives: the deterministic projection runs out of Cash in 2040 (age 44, wall at
  * Hallway year index 15); the 1,000-path median first wall is 2039 (age 43).
  * Any Cash from $154k to $159k gives index 15. Everything else about Starman is unchanged.
+ *
+ * Appearance: Starman's hair and shirt colors and his spouse's hair and shirt
+ * colors are picked at random from the 16-color palettes on every call (short
+ * hair for Starman, long hair for the spouse).
  */
 export function createStandardPortfolioSetup() {
+  // Starman's look is rolled fresh each time the preset is applied for a new
+  // game: random hair + shirt colors (independent picks from the 16-color
+  // palettes), short hair for Starman, long hair for his spouse. The picks are
+  // stored on the portfolio, so saves and reloads keep the same look.
+  const look = {
+    hairColor: randomPaletteId(HAIR_PALETTE),
+    shirtColor: randomPaletteId(SHIRT_PALETTE),
+    spouseHairColor: randomPaletteId(HAIR_PALETTE),
+    spouseShirtColor: randomPaletteId(SHIRT_PALETTE),
+  };
   const home = {
     type: 'primary',
     label: 'Primary Residence',
@@ -97,7 +116,7 @@ export function createStandardPortfolioSetup() {
   const spend = 48000;
   return {
     financeVersion: 2,
-    spouseName: 'Partner', spouseAge: 30, spouseHairColor: 'dark', spouseHairLength: 'short', spouseShirtColor: 'blue',
+    spouseName: 'Partner', spouseAge: 30, spouseHairColor: look.spouseHairColor, spouseHairLength: 'long', spouseShirtColor: look.spouseShirtColor,
     spouseRetirementAge: 65, spouseEmployed: true, spouseRetired: false,
     spouseSalary: 0,
     householdVersion: 1, salaryOwnership: 'individual', salaryOwnershipConfirmed: true,
@@ -108,9 +127,9 @@ export function createStandardPortfolioSetup() {
     playerName: 'Starman',
     year: CURRENT_YEAR,
     age: 30,
-    hairColor: 'dark',
+    hairColor: look.hairColor,
     hairLength: 'short',
-    shirtColor: 'blue',
+    shirtColor: look.shirtColor,
     cash: 155000,
     salary: 80000,
     savings: 35000,

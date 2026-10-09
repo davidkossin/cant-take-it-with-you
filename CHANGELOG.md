@@ -10,6 +10,18 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-10-08
+
+### Removed
+- Removed the V2 link from the top bar and other references to the Godot V2 prototype.
+
+### Changed
+- Starman now starts with random hair and shirt colors and short hair; his spouse gets random colors and long hair.
+- Child costs before college now use the state average annual cost of raising a child, based on the player's zip code (50-state average of $23,673/year if unknown).
+
+### Fixed
+- ZIP-to-state lookup corrected and shared by taxes and child costs: one table, built from GeoNames and Census ZIP data and the USPS 3-digit prefix list, now decides your state everywhere. Fixes ZIPs that were placed in the wrong state or none at all. For example, 005 is now New York, 055 Massachusetts, 201 Virginia, 398–399 Georgia, 733 and 885 Texas, 008 the U.S. Virgin Islands, 340 and 090–099/962–966 military, and 969 Guam. ZIP+4 is accepted for taxes, and prefixes that have no ZIP codes now count as unknown (national averages) instead of a neighboring state.
+
 ## [0.7.3] — 2026-10-08
 
 ### Added
