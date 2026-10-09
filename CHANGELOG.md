@@ -10,6 +10,17 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-10-09
+
+### Removed
+- Removed unused `js/config.js` constants (`NATIONAL_AVG_COLLEGE_COST`, `COLLEGE_AGE_MIN`/`COLLEGE_AGE_MAX`, `K401_EMPLOYEE_LIMIT`, `LTCG_FEDERAL_RATE`, `RETIREMENT_AGE`) left over from before college cost, contribution limits and capital-gains rates were computed dynamically in `js/finance`. Noted that `HOME_TYPES.taxRate` is informational only; `buyHome` always defaults new homes to 1.2% regardless of type.
+
+### Changed
+- Marked `docs/market-assumptions-0.6.0.md` as superseded/historical: it documented equity assumptions fit to actual 2016–2025 returns, since replaced by the illustrative long-horizon baseline in `docs/financial-model-v2.md`.
+
+### Fixed
+- A persistence test checked a storage-failure message against outdated wording ("JSON backup"); updated it to match the current message ("Use Save to File to keep a copy").
+
 ## [0.7.4] — 2026-10-08
 
 ### Removed
