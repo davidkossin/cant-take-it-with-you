@@ -158,19 +158,12 @@ export const DIFFICULTIES = {
   difficult: MARKET_DIFFICULTIES.grim,
 };
 
-/** Child costs ages 0–17 are state-based by ZIP: see js/data/stateChildCosts.js. 18+: college (below). */
-
 /**
- * College Board *Trends in College Pricing* 2024–25:
- * average published tuition & fees for full-time in-state undergraduates
- * at public four-year institutions ≈ $11,610 (sticker price; excludes room/board/aid).
- * Scaled in-engine by difficulty.expensePressure and inflated with childCostInflator.
+ * Child costs ages 0–17 are state-based by ZIP: see js/data/stateChildCosts.js. College
+ * (ages 18–21, Engine.js) defaults to state.annualCollegeCost, $28,000/year if unset.
  */
-export const NATIONAL_AVG_COLLEGE_COST = 11610;
-/** Inclusive undergrad window (typical 4 years). */
-export const COLLEGE_AGE_MIN = 18;
-export const COLLEGE_AGE_MAX = 21;
 
+/** `taxRate` is informational only; Engine.buyHome always defaults new homes to 1.2% regardless of type. */
 export const HOME_TYPES = {
   primary: { label: 'Primary Residence', taxRate: 0.012 },
   secondary: { label: 'Secondary / Vacation', taxRate: 0.014 },
@@ -181,15 +174,6 @@ export const SAVE_KEY = 'ycitwy_saves_v2';
 /** Player profiles (setup answers) — separate from game saves. */
 export const PROFILE_KEY = 'ycitwy_profiles_v1';
 export const MAX_AGE = 100;
-export const RETIREMENT_AGE = 65;
-/** Simplified long-term federal capital gains rate (illustrative). */
-export const LTCG_FEDERAL_RATE = 0.15;
-
-/**
- * IRS elective deferral limit (employee 401(k) contributions), tax year 2025.
- * Catch-up contributions for age 50+ are not modeled in this pass.
- */
-export const K401_EMPLOYEE_LIMIT = 23500;
 
 /**
  * HELOC combined LTV (CLTV) underwriting rule of thumb: max (new+existing) HELOC

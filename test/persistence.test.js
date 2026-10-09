@@ -137,7 +137,7 @@ test('unavailable or blocked storage never throws through autosave', async () =>
   let entry;
   assert.doesNotThrow(() => { entry = session.autoSave(game); });
   const result = await session.flushSaves();
-  assert.equal(result.state, 'error'); assert.match(result.message, /JSON backup/);
+  assert.equal(result.state, 'error'); assert.match(result.message, /Save to File/);
   assert.equal(session.loadSave(entry.id).portfolio.cash, game.portfolio.cash);
 });
 

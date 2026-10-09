@@ -1,6 +1,11 @@
-# Market assumptions (v0.6.0)
+# Market assumptions (v0.6.0) — superseded
 
-See header comment in `js/finance/marketAssumptions.js` for full citations.
+**Historical only.** These were the Standard-difficulty defaults through v0.6.0: equity
+return/volatility fit to actual 2016–2025 S&P 500 total returns. [financial-model-v2.md](financial-model-v2.md)
+replaced them with the current illustrative long-horizon assumptions (6.5% equity return /
+18% volatility, etc. — see `js/finance/marketAssumptions.js`), because fitting to one unusually
+strong decade is not a reasonable forward-looking planning assumption. Kept here only as a
+record of the prior numbers; it does not describe current behavior.
 
 ## Window
 Calendar years **2016–2025** (10 fully sourced years).
