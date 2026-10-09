@@ -414,14 +414,14 @@ export class SetupScene {
           if (look.ok && look.price > 0) {
             price = look.price;
             onlineNote = `Online (${look.source})`;
-            // The quote itself only sets today's price. When price history is available,
-            // its annualized mean/volatility prefill the editable fields below as a
-            // starting estimate — not a guarantee — and the player's confirmed values
-            // (whether left as-is or changed) are what the projection actually uses.
+            // The quote sets today's price only. Fetched history is shown for reference
+            // below, never used to set the growth/volatility defaults: a stock's trailing
+            // return is a poor predictor of its future return, especially after a strong
+            // run (e.g. 2016-2025), and defaults are sticky even when marked editable.
             if (Number.isFinite(look.growth) && Number.isFinite(look.volatility) && look.historyYears >= 2) {
-              growthPct = +(look.growth * 100).toFixed(2);
-              volPct = +(look.volatility * 100).toFixed(2);
-              historyNote = `Estimated from ${look.historyYears} yrs of price history — not a guarantee of future returns; edit freely.`;
+              historyNote = `Reference only, not used below: ${look.historyYears}-yr history shows `
+                + `${(look.growth * 100).toFixed(1)}% growth, ${(look.volatility * 100).toFixed(1)}% volatility. `
+                + 'Past performance is not predictive, especially for individual stocks.';
             }
           } else {
             await dialog.show(
@@ -516,7 +516,7 @@ export class SetupScene {
               label: 'Growth % per year',
               type: 'percent',
               defaultValue: String(growthPct),
-              subtitle: historyNote || 'No price history; using difficulty averages.',
+              subtitle: historyNote || 'Defaults to the difficulty’s equity assumption.',
             },
             {
               key: 'vol',
