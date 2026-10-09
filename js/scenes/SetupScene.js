@@ -407,13 +407,22 @@ export class SetupScene {
         let growthPct = parseFloat(defGrowth) || 0;
         let volPct = parseFloat(defVol) || 0;
         let onlineNote = '';
+        let historyNote = '';
 
         if (s._online) {
           const look = await lookupOnline(ticker);
           if (look.ok && look.price > 0) {
             price = look.price;
-            // Quotes set today's valuation. Past returns never overwrite planning assumptions.
             onlineNote = `Online (${look.source})`;
+            // The quote itself only sets today's price. When price history is available,
+            // its annualized mean/volatility prefill the editable fields below as a
+            // starting estimate — not a guarantee — and the player's confirmed values
+            // (whether left as-is or changed) are what the projection actually uses.
+            if (Number.isFinite(look.growth) && Number.isFinite(look.volatility) && look.historyYears >= 2) {
+              growthPct = +(look.growth * 100).toFixed(2);
+              volPct = +(look.volatility * 100).toFixed(2);
+              historyNote = `Estimated from ${look.historyYears} yrs of price history — not a guarantee of future returns; edit freely.`;
+            }
           } else {
             await dialog.show(
               look.error || 'Lookup failed. Enter price manually — growth/vol use difficulty averages.',
@@ -438,7 +447,7 @@ export class SetupScene {
           price = Math.max(0, priceRes);
         } else {
           await dialog.show(
-            `${ticker} @ ${formatMoneyDisplay(price)}${onlineNote ? '\n' + onlineNote : ''}`,
+            `${ticker} @ ${formatMoneyDisplay(price)}${onlineNote ? '\n' + onlineNote : ''}${historyNote ? '\n' + historyNote : ''}`,
             { title: 'Investments' }
           );
         }
@@ -507,6 +516,7 @@ export class SetupScene {
               label: 'Growth % per year',
               type: 'percent',
               defaultValue: String(growthPct),
+              subtitle: historyNote || 'No price history; using difficulty averages.',
             },
             {
               key: 'vol',

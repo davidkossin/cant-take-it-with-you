@@ -10,6 +10,9 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+### Changed
+- Custom Setup's online stock lookup now prefills the "Expected return model" growth/volatility fields from that ticker's own price history (annualized mean/sample stdev), when at least 2 years of history is available, instead of always falling back to the difficulty's generic equity assumptions. The fields stay fully editable and are labeled as a historical estimate, not a guarantee; nothing is applied automatically — the player's confirmed values are what the projection uses. Without usable history, the difficulty-average defaults are shown as before.
+
 ## [0.7.5] — 2026-10-09
 
 ### Removed
