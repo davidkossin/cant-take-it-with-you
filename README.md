@@ -2,7 +2,7 @@
 
 A 16-bit, top-down life & finance RPG (A Link to the Past vibe) playable in the browser.
 
-**Live:** [https://davidkossin.github.io/cant-take-it-with-you/](https://davidkossin.github.io/cant-take-it-with-you/) · [https://dkossin.com/cant-take-it/](https://dkossin.com/cant-take-it/)
+**Live:** [https://davidkossin.github.io/cant-take-it-with-you/](https://davidkossin.github.io/cant-take-it-with-you/) · [https://dkossin.com/cant-take-it-with-you/](https://dkossin.com/cant-take-it-with-you/)
 
 ## How to play
 
