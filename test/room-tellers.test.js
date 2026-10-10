@@ -319,6 +319,35 @@ test('Sell a Home: an unverified cost basis points to Portfolio instead of a dea
   assert.match(shown.text, /verified purchase cost/);
 });
 
+test('Refinance a Mortgage: a new rate/term replaces the old ones without changing principal owed, and Back steps back one question at a time', async () => {
+  const game = { portfolio: homeFixture({ cash: 50000 }) };
+  const dialog = new ScriptedDialog([
+    0,      // which mortgage
+    null,   // new rate -> Back to mortgage choice
+    0,      // mortgage choice re-asked
+    4.5,    // new rate
+    null,   // new term -> Back to the rate question
+    4.5,    // rate re-asked
+    20,     // new term
+    true,   // confirm
+  ]);
+  await new RoomScene().handleRefinanceHome(game, dialog, STANDARD);
+  const home = game.portfolio.homes[0];
+  assert.equal(home.mortgageOwed, 100000); // unchanged -- rate-and-term only, no cash out
+  assert.equal(home.rate, .045);
+  assert.equal(home.remainingTerm, 20);
+  assert.equal(game.portfolio.cash, 48000); // 50000 - 2000 (2% closing costs on the 100000 owed)
+});
+
+test('Refinance a Mortgage: with no mortgaged property, there is nothing to refinance', async () => {
+  const game = { portfolio: household({ homes: [
+    { type: 'primary', label: 'Paid Off', value: 300000, mortgageOwed: 0, basisKnown: true, costBasis: 300000 },
+  ] }) };
+  const dialog = new ScriptedDialog([]);
+  await new RoomScene().handleRefinanceHome(game, dialog, STANDARD);
+  assert.equal(dialog.calls[0].text, 'No mortgaged property to refinance.');
+});
+
 test('Start/End a Lease: keeps housing status consistent with whether a primary home is owned', async () => {
   const renter = { portfolio: household({}) }; // housing 'own', no homes -- can start a lease
   await new RoomScene().handleLease(renter, new ScriptedDialog([1800]));

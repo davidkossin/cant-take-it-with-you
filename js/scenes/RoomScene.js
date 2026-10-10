@@ -31,6 +31,7 @@ import {
 import {
   buyHome,
   sellHome,
+  refinanceHome,
   buyStock,
   sellStock,
   setEmployment,
@@ -1211,6 +1212,7 @@ Cash received: ${money(preview.netCash)}`, {
         [
           { label: 'Buy a home', value: 'buy' },
           { label: 'Sell a home', value: 'sell' },
+          { label: 'Refinance a Mortgage', value: 'refinance' },
           { label: p.housing === 'rent' ? 'End a Lease' : 'Start a Lease', value: 'lease' },
           { label: 'Find a Tenant', value: 'tenant' },
           { label: 'Done', value: null },
@@ -1220,6 +1222,7 @@ Cash received: ${money(preview.netCash)}`, {
       if (!choice) return;
       if (choice === 'buy') await this.handleBuyHome(game, dialog, diff);
       else if (choice === 'sell') await this.handleSellHome(game, dialog);
+      else if (choice === 'refinance') await this.handleRefinanceHome(game, dialog, diff);
       else if (choice === 'lease') await this.handleLease(game, dialog);
       else if (choice === 'tenant') await this.handleFindTenant(game, dialog);
     }
@@ -1357,6 +1360,65 @@ Cash received: ${money(preview.netCash)}`, {
         if (!confirmed) return;
         game.portfolio = result;
         await dialog.show('Sold after liens and 6% selling costs. Taxable gain enters this year’s tax record.', { title });
+        return;
+      }
+    }
+  }
+
+  /** Refinance a Mortgage — rate-and-term only: a new rate/term on the existing balance, not a cash-out loan. */
+  async handleRefinanceHome(game, dialog, diff) {
+    const title = 'Refinance a Mortgage';
+    const mortgaged = (game.portfolio.homes || []).filter(h => (h.mortgageOwed || 0) > 0);
+    if (!mortgaged.length) {
+      await dialog.show('No mortgaged property to refinance.', { title });
+      return;
+    }
+    let step = 0, index = null, ratePct = +((diff.mortgageRate || .065) * 100).toFixed(2), term = 30;
+    while (true) {
+      const p = game.portfolio, home = index != null ? p.homes[index] : null;
+      if (step === 0) {
+        const result = await dialog.menu('Refinance which mortgage?', [
+          ...mortgaged.map(h => ({
+            label: `${h.label || h.type} — ${formatMoneyDisplay(h.mortgageOwed, p)} owed`, value: p.homes.indexOf(h),
+            subtext: `${((h.rate || 0) * 100).toFixed(2)}% · ${Math.round(h.remainingTerm || 30)} yr left`,
+          })),
+          { label: 'Cancel', value: null },
+        ], { title });
+        if (result == null) return;
+        index = result;
+        step = 1;
+      } else if (step === 1) {
+        const result = await dialog.prompt(`New rate (%)? Currently ${((home.rate || 0) * 100).toFixed(2)}%`, {
+          title, defaultValue: String(ratePct), type: 'percent',
+        });
+        if (result == null) { step = 0; continue; }
+        ratePct = result;
+        step = 2;
+      } else if (step === 2) {
+        const result = await dialog.prompt(`New term (years)? Currently ${Math.round(home.remainingTerm || 30)} yr left`, {
+          title, defaultValue: String(term), type: 'number',
+        });
+        if (result == null) { step = 1; continue; }
+        term = Math.max(1, Math.round(result || 30));
+        step = 3;
+      } else if (step === 3) {
+        const rate = Math.max(0, (ratePct || 0) / 100), closing = Math.round((home.mortgageOwed || 0) * .02);
+        const monthly = monthlyPayment(home.mortgageOwed, rate, term * 12);
+        const confirmed = await dialog.confirm(
+          `Refinance ${home.label || home.type}'s ${formatMoneyDisplay(home.mortgageOwed, p)} mortgage?\n` +
+          `New rate ${ratePct}% for ${term} yr (~${formatMoneyDisplay(Math.round(monthly), p)}/mo)\n` +
+          `Closing costs (2%): ${formatMoneyDisplay(closing, p)} from Cash`,
+          { title, yes: 'Refinance', no: 'Cancel', distinctCancel: true }
+        );
+        if (confirmed == null) { step = 2; continue; }
+        if (!confirmed) return;
+        const result = refinanceHome(p, index, { rate, term });
+        if (result.lastTransaction?.accepted === false) {
+          await dialog.show(transactionReason(result.lastTransaction, p), { title });
+          return;
+        }
+        game.portfolio = result;
+        await dialog.show(`Refinanced at ${ratePct}% for ${term} yr; closing costs paid from Cash.`, { title });
         return;
       }
     }

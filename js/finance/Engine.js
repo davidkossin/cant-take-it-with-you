@@ -493,6 +493,19 @@ export function sellHome(state,index,opts={}) {
   post(s,'sell-home',{proceeds,sellingCosts:fee,liens:secured,gain,netCash:net});
   return accepted(s,'Property sold. Gain is included in this tax year.');
 }
+/** Rate-and-term refinance: replaces the mortgage's rate/term; does not change the principal owed. */
+export function refinanceHome(state,index,spec={}) {
+  const home=state.homes?.[index];
+  if (!home) return rejected(state,'Home does not exist.');
+  if (!(nonnegative(home.mortgageOwed)>0)) return rejected(state,'This home has no mortgage to refinance.');
+  const closing=nonnegative(spec.closingCosts,home.mortgageOwed*.02),s=fundPurchase(state,closing);
+  if (!s) return cashRejection(state,closing);
+  const h=s.homes[index],rate=nonnegative(spec.rate,.065),months=Math.round(nonnegative(spec.term,30)*12);
+  h.rate=rate; h.remainingMonths=months; h.remainingTerm=months/12;
+  h.monthlyPayment=monthlyPayment(h.mortgageOwed,rate,months);
+  post(s,'refinance-home',{homeIndex:index,closingCosts:closing,rate,term:months/12,mortgageOwed:h.mortgageOwed});
+  return accepted(s,'Mortgage refinanced; closing costs paid from Cash.');
+}
 export function buyStock(state,amount,opts={}) {
   const cost=money(nonnegative(amount));
   if (!cost) return rejected(state,'Enter a positive purchase amount.');

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { household } from './fixtures.js';
-import { projectOneYear, projectYears, sellStock, buyHome, largePurchase, takeSecuritiesLoan,
+import { projectOneYear, projectYears, sellStock, buyHome, refinanceHome, largePurchase, takeSecuritiesLoan,
   computeWorth, applySecuritiesMarginCall, findBankInsolvencyIndex, raiseCash, transferSavings,
   withdrawRetirement, retirementAccess, setRetirementWithdrawalPlan, setStockSalePlan, setSavingsTransferPlan,
   NOT_ENOUGH_CASH, FUNDING_RULE } from '../js/finance/Engine.js';
@@ -221,6 +221,18 @@ test('home purchase closing costs and borrowing obey balance sheet conservation'
   const home2=buyHome(rich,{value:300000,downPayment:60000,rate:0,term:30});
   assert.equal(home2.lastTransaction.accepted,false);assert.ok(home2.lastTransaction.reason.startsWith(NOT_ENOUGH_CASH));
   assert.equal(home2.stocksTotal,100000);assert.equal(home2.savings,100000);assert.equal(home2.homes.length,0);
+});
+test('refinanceHome changes only rate/term/payment, never the principal owed, and is a rate-and-term refinance (no cash out)',()=>{
+  const p=household({cash:10000,homes:[{type:'primary',label:'Home',value:400000,mortgageOwed:200000,
+    rate:.07,remainingMonths:300,remainingTerm:25,monthlyPayment:0,basisKnown:true,costBasis:400000}]});
+  const refinanced=refinanceHome(p,0,{rate:.05,term:30});
+  assert.equal(refinanced.lastTransaction.accepted,true);
+  const home=refinanced.homes[0];
+  assert.equal(home.mortgageOwed,200000);assert.equal(home.rate,.05);assert.equal(home.remainingTerm,30);
+  assert.equal(refinanced.cash,10000-4000); // 2% of the 200000 owed, paid from Cash
+  close(computeWorth(refinanced).netWorth,computeWorth(p).netWorth-4000); // only the closing cost leaves net worth
+  const noMortgage=refinanceHome(household({homes:[{type:'primary',value:300000,mortgageOwed:0}]}),0,{rate:.05,term:30});
+  assert.equal(noMortgage.lastTransaction.accepted,false);
 });
 test('a margin call is repaid from Cash only; no forced sale, and an unpaid excess is a glass wall',()=>{
   const loan=()=>[{type:'securities',principal:60000,rate:0,remainingTerm:10}];
