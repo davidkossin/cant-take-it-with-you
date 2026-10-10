@@ -426,3 +426,26 @@ test('Remove a Spouse / divorce: declining at the intro question leaves the hous
   assert.equal(game.portfolio.married, true);
   assert.equal(game.portfolio.spouseName, 'Sam');
 });
+
+test('Portfolio: the main menu is a true asset overview organized by category (Cash & Savings, Investments, Retirement, Real Estate, Debts, Net Worth)', async () => {
+  const game = { portfolio: household({
+    cash: 10000, savings: 20000, stocksTotal: 30000, stocksCostBasis: 15000, k401Balance: 40000, rothBalance: 5000,
+    homes: [{ type: 'primary', label: 'Home', value: 300000, mortgageOwed: 100000, basisKnown: true, costBasis: 300000 }],
+  }) };
+  const dialog = new ScriptedDialog([null]); // Done immediately
+  await new RoomScene().handlePortfolioEditor(game, dialog, STANDARD);
+  const overview = dialog.calls.find(c => c.kind === 'menu').text;
+  assert.match(overview, /Cash & Savings.*\$30,000/);
+  assert.match(overview, /Investments.*\$30,000.*cost basis \$15,000/);
+  assert.match(overview, /Retirement.*\$45,000/);
+  assert.match(overview, /Real Estate.*equity \$200,000/);
+  assert.match(overview, /Debts.*\$100,000/);
+  assert.match(overview, /Net Worth/);
+});
+
+test('Portfolio: Adjust Simulation Rates (renamed from Difficulty rates) still applies rate overrides', async () => {
+  const game = { portfolio: household({ rateOverrides: undefined }) };
+  const dialog = new ScriptedDialog(['rates', { inf: 4, eq: 8, vol: 20, mort: 7 }, null]);
+  await new RoomScene().handlePortfolioEditor(game, dialog, STANDARD);
+  assert.deepEqual(game.portfolio.rateOverrides, { inflation: .04, equityReturn: .08, equityVolatility: .2, mortgageRate: .07 });
+});

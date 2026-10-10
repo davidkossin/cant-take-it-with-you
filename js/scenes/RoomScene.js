@@ -1091,35 +1091,45 @@ Cash received: ${money(preview.netCash)}`, {
    * Decision Room actions (Bank, Stock Broker, Manage Property, Borrow / Loan, purchases).
    */
   async handlePortfolioEditor(game, dialog, diff) {
-    const p = game.portfolio;
+    const title = 'Portfolio';
     while (true) {
+      const p = game.portfolio, money = n => formatMoneyDisplay(n, p), worth = computeWorth(p);
+      const retirement = worth.k401Balance + worth.rothBalance + worth.spouseK401Balance + worth.spouseRothBalance;
+      const overview = [
+        `**Cash & Savings** ${money(worth.cash + worth.savings)} _(Cash ${money(worth.cash)} · Savings ${money(worth.savings)})_`,
+        `**Investments** ${money(worth.stocks)} _(cost basis ${money(worth.stocksCostBasis)})_`,
+        `**Retirement** ${money(retirement)}`,
+        p.housing === 'rent' ? `**Housing** renting ${money((p.monthlyRent || 0) * 12)}/yr` : `**Real Estate** equity ${money(worth.homeEquity)}`,
+        `**Debts** ${money(worth.debts)}`,
+        `**Net Worth** ${money(worth.netWorth)}`,
+      ].join('\n');
       const choice = await dialog.menu(
-        'Edit income, spending and setup.\nBalances change only through Decision Room actions.',
+        overview,
         [
           { label: 'Savings interest rate', value: 'savings' },
           { label: 'Salary', value: 'salary' },
           { label: '401(k) / Roth contributions', value: 'retire' },
           { label: 'Retirement age', value: 'retireAge' },
           { label: 'ZIP / tax profile', value: 'tax' },
-          { label: 'Difficulty rates', value: 'rates' },
+          { label: 'Adjust Simulation Rates', value: 'rates' },
           { label: 'Annual spending', value: 'spend' },
           { label: 'Planning inputs / benefits', value: 'planning' },
           { label: 'Done', value: null },
         ],
-        { title: 'Portfolio' }
+        { title }
       );
       if (!choice) return;
       if (choice === 'planning') { await editPlanningInputs(p, dialog, { lockBalances: true }); }
       else if (choice === 'savings') {
         const pct = ((p.savingsRate || 0) * 100).toFixed(2).replace(/\.?0+$/, '');
-        const v = await dialog.prompt(`Savings interest rate (balance ${formatMoneyDisplay(p.savings || 0)})`, {
-          title: 'Portfolio',
+        const v = await dialog.prompt(`Savings interest rate (balance ${money(p.savings || 0)})`, {
+          title,
           defaultValue: pct,
           type: 'percent',
         });
         if (v != null) p.savingsRate = Math.max(0, (v || 0) / 100);
       } else if (choice === 'salary') {
-        await editFamilyIncome(p, dialog, { title: 'Portfolio' });
+        await editFamilyIncome(p, dialog, { title });
       } else if (choice === 'retire') {
         const form = await dialog.form('Contributions (balances are locked during play)', [
           { key: 'kRate', label: `${personName(p)} 401(k) contrib % of salary`, type: 'percent', defaultValue: String(((p.k401ContribRate || 0) * 100).toFixed(2)) },
@@ -1128,7 +1138,7 @@ Cash received: ${money(preview.netCash)}`, {
             { key: 'spouseKRate', label: `${personName(p, 'spouse')} 401(k) contrib %`, type: 'percent', defaultValue: String((p.spouseK401ContribRate || 0) * 100) },
             { key: 'spouseRothC', label: `${personName(p, 'spouse')} Roth annual contribution`, type: 'money', prefix: '$', defaultValue: String(p.spouseRothAnnualContribution || 0) },
           ] : []),
-        ], { title: 'Portfolio', portfolio: p });
+        ], { title, portfolio: p });
         if (form) {
           p.k401ContribRate = Math.max(0, Math.min(1, (form.kRate || 0) / 100));
           p.has401k = (p.k401Balance || 0) > 0 || p.k401ContribRate > 0;
@@ -1142,15 +1152,15 @@ Cash received: ${money(preview.netCash)}`, {
           }
         }
       } else if (choice === 'retireAge') {
-        await editRetirementAges(p, dialog, { title: 'Portfolio' });
+        await editRetirementAges(p, dialog, { title });
       } else if (choice === 'tax') {
         const form = await dialog.form('Tax profile', [
           { key: 'zip', label: 'ZIP (blank = national avg)', type: 'text', defaultValue: p.zip || '' },
-        ], { title: 'Portfolio' });
+        ], { title });
         if (form) {
           p.zip = String(form.zip || '').replace(/\D/g, '').slice(0, 5);
         }
-        await dialog.show(`Filing status: ${p.married ? 'Married Filing Jointly' : 'Single'}.\nUse the Family window to add a spouse and their financial details.`, { title: 'Portfolio' });
+        await dialog.show(`Filing status: ${p.married ? 'Married Filing Jointly' : 'Single'}.\nUse Family Planning to add or remove a spouse.`, { title });
       } else if (choice === 'rates') {
         const o = p.rateOverrides || {};
         const form = await dialog.form(
@@ -1161,7 +1171,7 @@ Cash received: ${money(preview.netCash)}`, {
             { key: 'vol', label: 'Equity volatility %', type: 'percent', defaultValue: String(((o.equityVolatility ?? diff.equityVolatility) * 100).toFixed(2)) },
             { key: 'mort', label: 'Mortgage rate %', type: 'percent', defaultValue: String(((o.mortgageRate ?? diff.mortgageRate) * 100).toFixed(2)) },
           ],
-          { title: 'Portfolio' }
+          { title }
         );
         if (form) {
           p.rateOverrides = {
@@ -1174,7 +1184,7 @@ Cash received: ${money(preview.netCash)}`, {
         }
       } else if (choice === 'spend') {
         const v = await dialog.prompt('Annual living costs (exclude housing, taxes, children, contributions)', {
-          title: 'Portfolio',
+          title,
           defaultValue: String(p.annualSpending || 0),
           type: 'money',
           prefix: '$',
