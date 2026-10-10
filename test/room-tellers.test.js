@@ -90,6 +90,37 @@ test('Borrow / Loan: backing out of the HELOC home-choice returns to the HELOC/s
   assert.equal(game.portfolio.cash, 15000); // +5000 loan proceeds
 });
 
+test('Bank: setting and stopping a standing Savings-to-Cash transfer from the annual withdraw/transfer screen', async () => {
+  const game = { portfolio: household({ cash: 1000, savings: 50000 }) };
+  const dialog = new ScriptedDialog(['plan', 'savings:toCash', 6000, null]);
+  await new RoomScene().handleBank(game, dialog);
+  assert.deepEqual(game.portfolio.savingsTransferPlan, { amount: 6000, direction: 'toCash', inflationAdjusted: true });
+
+  const dialog2 = new ScriptedDialog(['plan', 'savings:stop', null]);
+  await new RoomScene().handleBank(game, dialog2);
+  assert.equal(game.portfolio.savingsTransferPlan, undefined);
+});
+
+test('Withdraw from Retirement Fund: declining the early-withdrawal penalty returns to account choice, and Escape at the summary returns to the amount', async () => {
+  const game = { portfolio: household({ age: 40, cash: 0, k401Balance: 50000,
+    rothBalance: 20000, rothContributionBasis: 20000, rothOpenedYear: 2010 }) };
+  const dialog = new ScriptedDialog([
+    'withdraw',
+    'traditional',  // pick the 401(k) -- gated, under 59.5
+    false,          // decline the penalty -> back to account choice
+    'roth',         // pick Roth instead -- not gated
+    'gross', 5000,
+    null,           // Escape at the summary -> back to the amount
+    5000,
+    true,           // Withdraw
+    null,           // back in Bank's main menu -> Done
+  ]);
+  await new RoomScene().handleBank(game, dialog);
+  assert.equal(game.portfolio.k401Balance, 50000); // untouched -- the 401(k) path was declined
+  assert.equal(game.portfolio.rothBalance, 15000); // 20000 - 5000
+  assert.equal(game.portfolio.lastWithdrawal.account, 'roth');
+});
+
 test('Borrow / Loan: Escape at the HELOC summary goes back to the term question; explicit Cancel exits cleanly', async () => {
   const game = { portfolio: borrowerFixture() };
   const dialog = new ScriptedDialog([

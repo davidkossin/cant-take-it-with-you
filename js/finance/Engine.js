@@ -28,7 +28,7 @@ export const NOT_ENOUGH_CASH = 'Not enough cash — sell or transfer first.';
 export const cloneState = copy;
 const SIMULATION_REPORT_FIELDS=['transactions','lastStatement','milestones','lastTransaction','lastWithdrawal'];
 const SIMULATION_ARRAY_FIELDS=['stocksHoldings','homes','otherLoans','kids'];
-const SIMULATION_OBJECT_FIELDS=['taxRecord','retirementWithdrawalPlan','spouseRetirementWithdrawalPlan','capitalLossCarry','stockSalePlan'];
+const SIMULATION_OBJECT_FIELDS=['taxRecord','retirementWithdrawalPlan','spouseRetirementWithdrawalPlan','capitalLossCarry','stockSalePlan','savingsTransferPlan'];
 /** Compact projections clone only mutable model data, avoiding copies of report histories. */
 function simulationCopy(state) {
   const s={...state};
@@ -247,6 +247,15 @@ export function projectOneYear(state,difficultyId,opts={}) {
       const sale=liquidate(s,monthlyAmount(nonnegative(s.stockSalePlan.amount),month),{holdingId:s.stockSalePlan.holdingId || null});
       statement.plannedStockSales=money((statement.plannedStockSales || 0)+sale.proceeds);
     }
+    // Standing Savings<->Cash transfer: also the player's own instruction. Quietly caps at
+    // whatever the source side actually has; unlike a required cost this is never a funding failure.
+    if (s.savingsTransferPlan && nonnegative(s.savingsTransferPlan.amount)>0) {
+      const toCash=s.savingsTransferPlan.direction!=='toSavings';
+      const from=toCash?'savings':'cash',to=toCash?'cash':'savings';
+      const moved=money(Math.min(monthlyAmount(nonnegative(s.savingsTransferPlan.amount),month),nonnegative(s[from])));
+      s[from]=money(nonnegative(s[from])-moved);s[to]=money(nonnegative(s[to])+moved);
+      statement.plannedSavingsTransfer=money((statement.plannedSavingsTransfer || 0)+moved);
+    }
     const wages=scheduled.primary.wages || 0,spouseWages=scheduled.spouse.wages || 0;
     // Monthly estimated W-2 withholding; final tax settlement credits every prepayment.
     const wageTax=expectedCompensation>0?money(wageWithholding*(wages+spouseWages)/expectedCompensation):0;
@@ -406,6 +415,8 @@ export function projectOneYear(state,difficultyId,opts={}) {
     s.spouseRetirementWithdrawalPlan.amount=money(s.spouseRetirementWithdrawalPlan.amount*(1+economy.inflation));
   if (s.stockSalePlan?.amount>0 && s.stockSalePlan.inflationAdjusted!==false)
     s.stockSalePlan.amount=money(s.stockSalePlan.amount*(1+economy.inflation));
+  if (s.savingsTransferPlan?.amount>0 && s.savingsTransferPlan.inflationAdjusted!==false)
+    s.savingsTransferPlan.amount=money(s.savingsTransferPlan.amount*(1+economy.inflation));
   for (const h of s.homes || []) {
     if (h.annualPropertyTax!=null) h.annualPropertyTax=money(h.annualPropertyTax*(1+(h.propertyTaxGrowth ?? economy.inflation)));
     for (const key of ['annualMaintenance','annualInsurance','annualHOA']) if (h[key]!=null) h[key]=money(h[key]*(1+economy.inflation));
@@ -654,6 +665,19 @@ export function setStockSalePlan(state,{amount,holdingId=null}={}) {
   s.stockSalePlan={amount:yearly,holdingId:holdingId || null,inflationAdjusted:true};
   post(s,'standing-stock-sale-plan',{...s.stockSalePlan});
   return accepted(s,'Standing stock sale set: $'+fmt(yearly)+' a year, sold into Cash.');
+}
+/**
+ * Player action: a standing yearly transfer between Savings and Cash (today's dollars, grows
+ * with inflation), moved in equal monthly parts. Quietly caps at whatever the source side has
+ * that month -- a shortfall here is not a funding failure, the same as the player's own one-time
+ * transferSavings. Amount 0 cancels it.
+ */
+export function setSavingsTransferPlan(state,{amount,direction='toCash'}={}) {
+  const s=copy(state), yearly=money(nonnegative(amount)), toSavings=direction==='toSavings';
+  if (!(yearly>0)) { delete s.savingsTransferPlan; return accepted(s,'Standing transfer cancelled.'); }
+  s.savingsTransferPlan={amount:yearly,direction:toSavings?'toSavings':'toCash',inflationAdjusted:true};
+  post(s,'standing-savings-transfer-plan',{...s.savingsTransferPlan});
+  return accepted(s,'Standing transfer set: $'+fmt(yearly)+' a year from '+(toSavings?'Cash to Savings':'Savings to Cash')+'.');
 }
 export const takeHeloc=(s,opts={})=>borrow(s,opts,'heloc');
 export const takeSecuritiesLoan=(s,opts={})=>borrow(s,opts,'securities');

@@ -46,6 +46,7 @@ import {
   retirementAccess,
   previewRetirementWithdrawal,
   setRetirementWithdrawalPlan,
+  setSavingsTransferPlan,
 } from '../finance/Engine.js';
 import { getDifficulty } from '../finance/Difficulty.js';
 import { commitRoomDecisions, currentNode, westReturnHallway, jumpToHallwayNode } from '../state/GameState.js';
@@ -574,11 +575,11 @@ export class RoomScene {
 
   /**
    * Bank teller — the player's own ways to raise Cash (only Cash pays bills; nothing is
-   * moved automatically): Savings ↔ Cash, one-time 401(k)/Roth withdrawals, and a standing
-   * yearly withdrawal the engine pays into Cash each month.
+   * moved automatically): Savings ↔ Cash, one-time 401(k)/Roth withdrawals, and standing
+   * yearly instructions (withdrawal or Savings↔Cash transfer) the engine carries out monthly.
    */
   async handleBank(game, dialog) {
-    const title = 'Bank: Move Money';
+    const title = 'Bank';
     const money = n => formatMoneyDisplay(n, game.portfolio);
     const report = async (heading, description = null) => {
       const t = game.portfolio.lastTransaction || {};
@@ -586,21 +587,21 @@ export class RoomScene {
     };
     while (true) {
       const p = game.portfolio;
-      const plan = p.retirementWithdrawalPlan;
+      const standing = [];
+      if (p.retirementWithdrawalPlan) standing.push(`${personName(p)} withdrawal ${money(p.retirementWithdrawalPlan.amount)}/yr (${p.retirementWithdrawalPlan.account === 'roth' ? 'Roth' : '401(k)'})`);
+      if (p.spouseRetirementWithdrawalPlan) standing.push(`${personName(p, 'spouse')} withdrawal ${money(p.spouseRetirementWithdrawalPlan.amount)}/yr (${p.spouseRetirementWithdrawalPlan.account === 'roth' ? 'Roth' : '401(k)'})`);
+      if (p.savingsTransferPlan) standing.push(`Transfer ${money(p.savingsTransferPlan.amount)}/yr (${p.savingsTransferPlan.direction === 'toSavings' ? 'Cash→Savings' : 'Savings→Cash'})`);
       const choice = await dialog.menu(
-        `Only Cash pays bills.\nCash ${money(p.cash || 0)} · Savings ${money(p.savings || 0)}\n` +
-          `${personName(p)} 401(k) ${money(p.k401Balance || 0)} · Roth ${money(p.rothBalance || 0)}` +
-          (p.married ? `\n${personName(p, 'spouse')} 401(k) ${money(p.spouseK401Balance || 0)} · Roth ${money(p.spouseRothBalance || 0)}` : ''),
+        `**"Cash" is used for paying all expenses.** Always be sure to have enough Cash on hand.\n` +
+          `**Cash** ${money(p.cash || 0)} · **Savings** ${money(p.savings || 0)}\n` +
+          `**${personName(p)} 401(k)** ${money(p.k401Balance || 0)} · **Roth** ${money(p.rothBalance || 0)}` +
+          (p.married ? `\n**${personName(p, 'spouse')} 401(k)** ${money(p.spouseK401Balance || 0)} · **Roth** ${money(p.spouseRothBalance || 0)}` : '') +
+          (standing.length ? `\n_Standing:_ ${standing.join('; ')}` : ''),
         [
-          { label: 'Move Savings to Cash', value: 'toCash' },
-          { label: 'Move Cash to Savings', value: 'toSavings' },
-          { label: 'Withdraw from 401(k) / Roth', value: 'withdraw' },
-          {
-            label: plan
-              ? `Standing withdrawal: ${money(plan.amount)}/yr (${plan.account === 'roth' ? 'Roth' : '401(k)'})`
-              : p.spouseRetirementWithdrawalPlan ? 'Edit standing yearly withdrawals' : 'Set a standing yearly withdrawal',
-            value: 'plan',
-          },
+          { label: 'Transfer Cash to Savings', value: 'toSavings' },
+          { label: 'Transfer Savings to Cash', value: 'toCash' },
+          { label: 'Withdraw from Retirement Fund', value: 'withdraw' },
+          { label: 'Set an annual withdraw/transfer', value: 'plan' },
           { label: 'Done', value: null },
         ],
         { title }
@@ -641,107 +642,156 @@ export class RoomScene {
     return options;
   }
 
+  /** Withdraw from Retirement Fund — a step index so Back returns to the previous question. */
   async handleRetirementWithdrawal(game, dialog, report) {
-    const title = 'Withdraw to Cash';
-    const p = game.portfolio;
-    const money = n => formatMoneyDisplay(n, p);
-    const selection = await dialog.menu('Withdraw from which person’s account?', [
-      ...this.retirementAccountOptions(p), { label: 'Cancel', value: null },
-    ], { title });
-    if (!selection) return;
-    const owner = selection.startsWith('spouse:') ? 'spouse' : 'primary';
-    const account = selection.replace('spouse:', '');
-    let early = false;
-    const access = retirementAccess(p, account, { owner });
-    if (access.ageUnknown) {
-      await dialog.show('Enter the account owner’s actual age in Family before withdrawing.', { title });
-      return;
-    }
-    if (account === 'traditional' && access.gated) {
-      early = await dialog.confirm(`${personName(p, owner)} is under 59½. A 401(k) withdrawal adds a 10% early-withdrawal penalty on top of income tax. Withdraw anyway?`,
-        { title, yes: 'Accept penalty', no: 'Cancel' });
-      if (early !== true) return;
-    }
-    const available = retirementAccess(p, account, { early, owner }).available;
-    if (!(available > 0)) {
-      await dialog.show(account === 'roth'
-        ? 'No Roth money is available. Before age 59½ and the five-year qualification, only verified contributions can come out.'
-        : 'The 401(k) is empty.', { title });
-      return;
-    }
-    const basis = await dialog.menu('Choose the withdrawal amount. Estimated additional tax is prepaid from the withdrawal and credited at year-end.', [
-      { label: 'Withdraw a gross amount', value: 'gross' },
-      { label: 'Provide a net Cash amount', value: 'net' },
-      { label: 'Back', value: null },
-    ], { title });
-    if (!basis) return;
-    const amount = await dialog.prompt(basis === 'net' ? 'How much spendable Cash do you need?' : `Gross withdrawal? (up to ${money(available)})`, {
-      title, portfolio: p, defaultValue: String(Math.round(Math.min(available, 10000))), type: 'money', prefix: '$',
-    });
-    if (amount == null) return;
-    const opts = { account, owner, early, withholdTax: true, ...(basis === 'net' ? { netTarget: amount } : { amount }) };
-    const preview = previewRetirementWithdrawal(p, opts);
-    if (!preview.accepted) {
-      await dialog.show(transactionReason(preview, p), { title });
-      return;
-    }
-    const confirmed = await dialog.confirm(`Gross withdrawal: ${money(preview.gross)}
+    const title = 'Withdraw from Retirement Fund';
+    let step = 0, owner = 'primary', account = 'traditional', early = false, basis = 'gross', amount = 10000;
+    while (true) {
+      const p = game.portfolio, money = n => formatMoneyDisplay(n, p);
+      if (step === 0) {
+        const selection = await dialog.menu('Withdraw from which person’s account?', [
+          ...this.retirementAccountOptions(p), { label: 'Cancel', value: null },
+        ], { title });
+        if (!selection) return;
+        owner = selection.startsWith('spouse:') ? 'spouse' : 'primary';
+        account = selection.replace('spouse:', '');
+        early = false;
+        const access = retirementAccess(p, account, { owner });
+        if (access.ageUnknown) {
+          await dialog.show('Enter the account owner’s actual age in Family before withdrawing.', { title });
+          continue;
+        }
+        if (account === 'traditional' && access.gated) { step = 1; continue; }
+        if (!(access.available > 0)) {
+          await dialog.show(account === 'roth'
+            ? 'No Roth money is available. Before age 59½ and the five-year qualification, only verified contributions can come out.'
+            : 'The 401(k) is empty.', { title });
+          continue;
+        }
+        step = 2;
+      } else if (step === 1) {
+        const result = await dialog.confirm(`${personName(p, owner)} is under 59½. A 401(k) withdrawal adds a 10% early-withdrawal penalty on top of income tax. Withdraw anyway?`,
+          { title, yes: 'Accept penalty', no: 'Cancel' });
+        if (!result) { step = 0; continue; } // declined, or Escape -- pick a different account
+        early = true;
+        if (!(retirementAccess(p, account, { early, owner }).available > 0)) {
+          await dialog.show('The 401(k) is empty.', { title });
+          step = 0; continue;
+        }
+        step = 2;
+      } else if (step === 2) {
+        const result = await dialog.menu('Choose the withdrawal amount. Estimated additional tax is prepaid from the withdrawal and credited at year-end.', [
+          { label: 'Withdraw a gross amount', value: 'gross' },
+          { label: 'Provide a net Cash amount', value: 'net' },
+          { label: 'Back', value: null },
+        ], { title });
+        if (!result) { step = (account === 'traditional' && retirementAccess(p, account, { owner }).gated) ? 1 : 0; continue; }
+        basis = result;
+        step = 3;
+      } else if (step === 3) {
+        const available = retirementAccess(p, account, { early, owner }).available;
+        const result = await dialog.prompt(basis === 'net' ? 'How much spendable Cash do you need?' : `Gross withdrawal? (up to ${money(available)})`, {
+          title, portfolio: p, defaultValue: String(Math.round(Math.min(available, amount))), type: 'money', prefix: '$',
+        });
+        if (result == null) { step = 2; continue; }
+        amount = result;
+        step = 4;
+      } else if (step === 4) {
+        const opts = { account, owner, early, withholdTax: true, ...(basis === 'net' ? { netTarget: amount } : { amount }) };
+        const preview = previewRetirementWithdrawal(p, opts);
+        if (!preview.accepted) {
+          await dialog.show(transactionReason(preview, p), { title });
+          step = 3; continue;
+        }
+        const confirmed = await dialog.confirm(`Gross withdrawal: ${money(preview.gross)}
 Estimated additional tax: ${money(preview.tax.total)}
 Cash received: ${money(preview.netCash)}`, {
-      title, yes: 'Withdraw', no: 'Cancel',
-    });
-    if (!confirmed) return;
-    game.portfolio = withdrawRetirement(p, opts);
-    const withdrawal = game.portfolio.lastWithdrawal;
-    await report(title, withdrawal
-      ? `Withdrew ${money(withdrawal.gross)} from ${personName(p, owner)} ${account === 'roth' ? 'Roth' : '401(k)'}.\nCash received: ${money(withdrawal.netCash)}.\nEstimated tax prepaid: ${money(withdrawal.withheld)}; credited at year-end.`
-      : null);
+          title, yes: 'Withdraw', no: 'Cancel', distinctCancel: true,
+        });
+        if (confirmed == null) { step = 3; continue; }
+        if (!confirmed) return;
+        game.portfolio = withdrawRetirement(p, opts);
+        const withdrawal = game.portfolio.lastWithdrawal;
+        await report(title, withdrawal
+          ? `Withdrew ${money(withdrawal.gross)} from ${personName(p, owner)} ${account === 'roth' ? 'Roth' : '401(k)'}.\nCash received: ${money(withdrawal.netCash)}.\nEstimated tax prepaid: ${money(withdrawal.withheld)}; credited at year-end.`
+          : null);
+        return;
+      }
+    }
   }
 
+  /** Set an annual withdraw/transfer — retirement withdrawal plans or a standing Savings<->Cash transfer. */
   async handleStandingWithdrawal(game, dialog, report) {
-    const title = 'Standing withdrawal';
-    const p = game.portfolio;
-    const money = n => formatMoneyDisplay(n, p);
-    const selection = await dialog.menu('A yearly gross withdrawal you choose, paid into Cash monthly. It grows with inflation; additional taxes settle at year-end.', [
-      ...this.retirementAccountOptions(p),
-      ...(p.retirementWithdrawalPlan ? [{ label: `Stop ${personName(p)} withdrawal (${money(p.retirementWithdrawalPlan.amount)}/yr)`, value: 'stop' }] : []),
-      ...(p.spouseRetirementWithdrawalPlan ? [{ label: `Stop ${personName(p, 'spouse')} withdrawal (${money(p.spouseRetirementWithdrawalPlan.amount)}/yr)`, value: 'spouse:stop' }] : []),
-      { label: 'Back', value: null },
-    ], { title });
-    if (!selection) return;
-    const owner = selection.startsWith('spouse:') ? 'spouse' : 'primary';
-    const account = selection.replace('spouse:', '');
-    const current = owner === 'spouse' ? p.spouseRetirementWithdrawalPlan : p.retirementWithdrawalPlan;
-    if (account === 'stop') {
-      game.portfolio = setRetirementWithdrawalPlan(p, { amount: 0, owner });
-      await report(title);
-      return;
+    const title = 'Set an annual withdraw/transfer';
+    let step = 0, owner = 'primary', account = 'traditional', early = false, amount = 0, direction = 'toCash';
+    while (true) {
+      const p = game.portfolio, money = n => formatMoneyDisplay(n, p);
+      if (step === 0) {
+        const selection = await dialog.menu(
+          'A yearly amount you choose, paid automatically each month. It grows with inflation; retirement withdrawals settle additional tax at year-end.',
+          [
+            ...this.retirementAccountOptions(p),
+            { label: 'Standing Savings → Cash transfer', value: 'savings:toCash' },
+            { label: 'Standing Cash → Savings transfer', value: 'savings:toSavings' },
+            ...(p.retirementWithdrawalPlan ? [{ label: `Stop ${personName(p)} withdrawal (${money(p.retirementWithdrawalPlan.amount)}/yr)`, value: 'stop' }] : []),
+            ...(p.spouseRetirementWithdrawalPlan ? [{ label: `Stop ${personName(p, 'spouse')} withdrawal (${money(p.spouseRetirementWithdrawalPlan.amount)}/yr)`, value: 'spouse:stop' }] : []),
+            ...(p.savingsTransferPlan ? [{ label: `Stop standing transfer (${money(p.savingsTransferPlan.amount)}/yr)`, value: 'savings:stop' }] : []),
+            { label: 'Back', value: null },
+          ], { title });
+        if (!selection) return;
+        if (selection === 'stop') { game.portfolio = setRetirementWithdrawalPlan(p, { amount: 0, owner: 'primary' }); await report(title); return; }
+        if (selection === 'spouse:stop') { game.portfolio = setRetirementWithdrawalPlan(p, { amount: 0, owner: 'spouse' }); await report(title); return; }
+        if (selection === 'savings:stop') { game.portfolio = setSavingsTransferPlan(p, { amount: 0 }); await report(title); return; }
+        if (selection === 'savings:toCash' || selection === 'savings:toSavings') {
+          direction = selection.replace('savings:', '');
+          amount = p.savingsTransferPlan?.amount || 0;
+          step = 10; continue;
+        }
+        owner = selection.startsWith('spouse:') ? 'spouse' : 'primary';
+        account = selection.replace('spouse:', '');
+        const current = owner === 'spouse' ? p.spouseRetirementWithdrawalPlan : p.retirementWithdrawalPlan;
+        amount = current?.amount || p.annualSpending || 0;
+        const access = retirementAccess(p, account, { owner });
+        if (access.ageUnknown) {
+          await dialog.show('Enter the account owner’s actual age in Family before scheduling withdrawals.', { title });
+          continue;
+        }
+        early = false;
+        step = (account === 'traditional' && access.gated) ? 1 : 2;
+      } else if (step === 1) {
+        const answer = await dialog.menu(`${personName(p, owner)} is under 59½. Start with a 10% early-withdrawal penalty, or wait?`, [
+          { label: 'Start now (penalty)', value: 'early' },
+          { label: 'Wait for age 59½', value: 'wait' },
+          { label: 'Back', value: null },
+        ], { title });
+        if (!answer) { step = 0; continue; }
+        early = answer === 'early';
+        step = 2;
+      } else if (step === 2) {
+        const result = await dialog.prompt('Gross withdrawal each year? ($0 stops it)', {
+          title, portfolio: p, defaultValue: String(Math.round(amount)), type: 'money', prefix: '$',
+        });
+        if (result == null) { step = (account === 'traditional' && retirementAccess(p, account, { owner }).gated) ? 1 : 0; continue; }
+        const access = retirementAccess(p, account, { owner });
+        game.portfolio = setRetirementWithdrawalPlan(p, { amount: result, account, early, owner });
+        const waits = account === 'traditional' && !early && access.gated && result > 0;
+        await report(title, result > 0
+          ? `${personName(p, owner)} standing gross withdrawal: ${money(result)}/year from the ${account === 'roth' ? 'Roth' : '401(k)'}.` +
+            (waits ? ' Starts at the account owner’s age 59½.' : '')
+          : 'Standing withdrawal cancelled.');
+        return;
+      } else if (step === 10) {
+        const result = await dialog.prompt(`Standing ${direction === 'toCash' ? 'Savings → Cash' : 'Cash → Savings'} transfer each year? ($0 stops it)`, {
+          title, portfolio: p, defaultValue: String(Math.round(amount)), type: 'money', prefix: '$',
+        });
+        if (result == null) { step = 0; continue; }
+        game.portfolio = setSavingsTransferPlan(p, { amount: result, direction });
+        await report(title, result > 0
+          ? `Standing transfer: ${money(result)}/year from ${direction === 'toCash' ? 'Savings to Cash' : 'Cash to Savings'}.`
+          : 'Standing transfer cancelled.');
+        return;
+      }
     }
-    const access = retirementAccess(p, account, { owner });
-    if (access.ageUnknown) {
-      await dialog.show('Enter the account owner’s actual age in Family before scheduling withdrawals.', { title });
-      return;
-    }
-    let early = false;
-    if (account === 'traditional' && access.gated) {
-      const answer = await dialog.menu(`${personName(p, owner)} is under 59½. Start with a 10% early-withdrawal penalty, or wait?`, [
-        { label: 'Start now (penalty)', value: 'early' },
-        { label: 'Wait for age 59½', value: 'wait' },
-        { label: 'Cancel', value: null },
-      ], { title });
-      if (!answer) return;
-      early = answer === 'early';
-    }
-    const amount = await dialog.prompt('Gross withdrawal each year? ($0 stops it)', {
-      title, portfolio: p, defaultValue: String(Math.round(current?.amount || p.annualSpending || 0)), type: 'money', prefix: '$',
-    });
-    if (amount == null) return;
-    game.portfolio = setRetirementWithdrawalPlan(p, { amount, account, early, owner });
-    const waits = account === 'traditional' && !early && access.gated && amount > 0;
-    await report(title, amount > 0
-      ? `${personName(p, owner)} standing gross withdrawal: ${money(amount)}/year from the ${account === 'roth' ? 'Roth' : '401(k)'}.` +
-        (waits ? ' Starts at the account owner’s age 59½.' : '')
-      : 'Standing withdrawal cancelled.');
   }
 
   /** Borrow / Loan — asset-backed only. Picks a kind, then re-shows this menu if that sub-flow backs out of its first question. */

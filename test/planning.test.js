@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { household } from './fixtures.js';
 import { projectOneYear, projectYears, sellStock, buyHome, largePurchase, takeSecuritiesLoan,
   computeWorth, applySecuritiesMarginCall, findBankInsolvencyIndex, raiseCash, transferSavings,
-  withdrawRetirement, retirementAccess, setRetirementWithdrawalPlan, setStockSalePlan,
+  withdrawRetirement, retirementAccess, setRetirementWithdrawalPlan, setStockSalePlan, setSavingsTransferPlan,
   NOT_ENOUGH_CASH, FUNDING_RULE } from '../js/finance/Engine.js';
 import { estimateAnnualTax, capitalNet, taxableSocialSecurity, payrollTax } from '../js/finance/Tax.js';
 import { monthlyPayment, loanDue, payLoan } from '../js/finance/Loans.js';
@@ -148,6 +148,17 @@ test('a standing stock-sale plan is rejected from holdings with unverified basis
   const r=setStockSalePlan(p,{amount:1000,holdingId:'a'});
   assert.equal(r.lastTransaction.accepted,false);
   assert.equal(r.stockSalePlan,undefined);
+});
+test('a standing savings transfer moves monthly amounts either direction, caps at what the source has, and grows with inflation',()=>{
+  const toCash=setSavingsTransferPlan(household({cash:0,savings:50000,savingsRate:0}),{amount:24000,direction:'toCash'});
+  assert.deepEqual(toCash.savingsTransferPlan,{amount:24000,direction:'toCash',inflationAdjusted:true});
+  const a=projectOneYear(toCash,'standard',{deterministic:true});
+  close(a.statement.plannedSavingsTransfer,24000);close(a.state.cash,24000);close(a.state.savings,26000);
+  const toSavings=setSavingsTransferPlan(household({cash:50000,savings:0,savingsRate:0}),{amount:1000000,direction:'toSavings'});
+  const b=projectOneYear(toSavings,'standard',{deterministic:true});
+  close(b.state.savings,50000);close(b.state.cash,0); // capped at what Cash actually had; not a funding failure
+  assert.equal(b.statement.fundingSuccess,true);
+  assert.equal(setSavingsTransferPlan(toCash,{amount:0}).savingsTransferPlan,undefined);
 });
 test('Roth basis can fund early spending only when the player withdraws it; unknown earnings cannot',()=>{
   const p=household({age:45,cash:0,rothBalance:20000,rothContributionBasis:12000,rothOpenedYear:2020,annualSpending:12000});
