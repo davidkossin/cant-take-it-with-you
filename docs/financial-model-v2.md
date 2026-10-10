@@ -1,6 +1,6 @@
 # Financial model v2 — existing JavaScript game
 
-Game development version: **0.7.5**. Engine version: **2.3.0** (funding rule **cash-only**). Assumptions: **planning-2026-3**. Federal rule set: **irs-2026-1**. Original rule review October 4, 2026; cash-only funding and median-first-wall Hallway selection October 7, 2026; standing stock-sale plan added October 10, 2026. See [the planning update](planning-update.md) for household ownership, currency units, gross-up, timelines and persistence.
+Game development version: **0.7.6**. Engine version: **2.3.0** (funding rule **cash-only**). Assumptions: **planning-2026-3**. Federal rule set: **irs-2026-1**. Original rule review October 4, 2026; cash-only funding and median-first-wall Hallway selection October 7, 2026; standing stock-sale plan added October 10, 2026. See [the planning update](planning-update.md) for household ownership, currency units, gross-up, timelines and persistence.
 
 This corrects the existing game’s financial system; it does not recreate the game. Room/teller decisions, the hallway, timeline forks, saves, profiles and ending remain in the root JavaScript application.
 
