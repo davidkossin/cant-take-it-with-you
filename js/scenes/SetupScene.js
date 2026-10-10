@@ -407,13 +407,22 @@ export class SetupScene {
         let growthPct = parseFloat(defGrowth) || 0;
         let volPct = parseFloat(defVol) || 0;
         let onlineNote = '';
+        let historyNote = '';
 
         if (s._online) {
           const look = await lookupOnline(ticker);
           if (look.ok && look.price > 0) {
             price = look.price;
-            // Quotes set today's valuation. Past returns never overwrite planning assumptions.
             onlineNote = `Online (${look.source})`;
+            // The quote sets today's price only. Fetched history is shown for reference
+            // below, never used to set the growth/volatility defaults: a stock's trailing
+            // return is a poor predictor of its future return, especially after a strong
+            // run (e.g. 2016-2025), and defaults are sticky even when marked editable.
+            if (Number.isFinite(look.growth) && Number.isFinite(look.volatility) && look.historyYears >= 2) {
+              historyNote = `Reference only, not used below: ${look.historyYears}-yr history shows `
+                + `${(look.growth * 100).toFixed(1)}% growth, ${(look.volatility * 100).toFixed(1)}% volatility. `
+                + 'Past performance is not predictive, especially for individual stocks.';
+            }
           } else {
             await dialog.show(
               look.error || 'Lookup failed. Enter price manually — growth/vol use difficulty averages.',
@@ -438,7 +447,7 @@ export class SetupScene {
           price = Math.max(0, priceRes);
         } else {
           await dialog.show(
-            `${ticker} @ ${formatMoneyDisplay(price)}${onlineNote ? '\n' + onlineNote : ''}`,
+            `${ticker} @ ${formatMoneyDisplay(price)}${onlineNote ? '\n' + onlineNote : ''}${historyNote ? '\n' + historyNote : ''}`,
             { title: 'Investments' }
           );
         }
@@ -507,6 +516,7 @@ export class SetupScene {
               label: 'Growth % per year',
               type: 'percent',
               defaultValue: String(growthPct),
+              subtitle: historyNote || 'Defaults to the difficulty’s equity assumption.',
             },
             {
               key: 'vol',
@@ -683,6 +693,12 @@ export class SetupScene {
           .replace(/\.?0+$/, '');
         const fields = [
           {
+            key: 'name',
+            label: 'Name this property',
+            type: 'text',
+            defaultValue: HOME_TYPES[s._homeType]?.label || `Home ${i + 1}`,
+          },
+          {
             key: 'value',
             label: 'Household property market value',
             type: 'money',
@@ -739,7 +755,7 @@ export class SetupScene {
         s.homes.push({
           basisKnown: false,
           type: s._homeType,
-          label: HOME_TYPES[s._homeType]?.label || 'Home',
+          label: String(result.name || '').trim().slice(0, 28) || HOME_TYPES[s._homeType]?.label || `Home ${i + 1}`,
           value,
           mortgageOwed: Math.max(0, result.owed || 0),
           rate,

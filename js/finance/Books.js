@@ -103,7 +103,7 @@ export function liquidate(state, amount, { holdingId = null, date = `${state.yea
   return result;
 }
 export function invest(state, amount, { ticker = 'MARKET', holdingId = null, price = 100,
-  assetClass = 'equity', acquiredDate = `${state.year}-01-01` } = {}) {
+  assetClass = 'equity', acquiredDate = `${state.year}-01-01`, growth = null, volatility = null } = {}) {
   ensureHoldings(state);
   let h = holdingId && state.stocksHoldings.find(x => x.id === holdingId);
   // A purchase is a new lot; don't rewrite acquisition dates on old shares.
@@ -113,6 +113,8 @@ export function invest(state, amount, { ticker = 'MARKET', holdingId = null, pri
       acquiredDate, basisKnown: true };
     state.stocksHoldings.push(h);
   }
+  if (growth != null) h.growth = growth;
+  if (volatility != null) h.volatility = volatility;
   h.value = money(h.value + amount);
   h.costBasis = money(h.costBasis + amount);
   h.shares += amount / (h.price || 100);

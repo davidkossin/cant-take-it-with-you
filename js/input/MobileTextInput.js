@@ -116,7 +116,7 @@ export class MobileTextInput {
         rect: d.getFormFieldRect?.(i) || null,
         last: i >= d.fields.length - 1,
         get: () => String(f.value ?? ''),
-        set: (v) => { f.value = v; },
+        set: (v) => { d.setFieldValue(i, v); },
       };
     }
     return null;

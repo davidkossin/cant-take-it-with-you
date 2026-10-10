@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { household } from './fixtures.js';
-import { projectOneYear, projectYears, sellStock, buyHome, largePurchase, takeSecuritiesLoan,
+import { projectOneYear, projectYears, sellStock, buyHome, refinanceHome, largePurchase, takeSecuritiesLoan,
   computeWorth, applySecuritiesMarginCall, findBankInsolvencyIndex, raiseCash, transferSavings,
-  withdrawRetirement, retirementAccess, setRetirementWithdrawalPlan, NOT_ENOUGH_CASH, FUNDING_RULE } from '../js/finance/Engine.js';
+  withdrawRetirement, retirementAccess, setRetirementWithdrawalPlan, setStockSalePlan, setSavingsTransferPlan,
+  NOT_ENOUGH_CASH, FUNDING_RULE } from '../js/finance/Engine.js';
 import { estimateAnnualTax, capitalNet, taxableSocialSecurity, payrollTax } from '../js/finance/Tax.js';
 import { monthlyPayment, loanDue, payLoan } from '../js/finance/Loans.js';
 import { contributionLimits, rothLimit, claimFactor, requiredDistribution, benefitEarningsReduction } from '../js/finance/Retirement.js';
@@ -111,6 +112,54 @@ test('a standing yearly withdrawal is the player\'s instruction: paid monthly in
   assert.equal(waiting.state.k401Balance,100000);assert.equal(waiting.statement.fundingSuccess,false);
   assert.equal(setRetirementWithdrawalPlan(planned,{amount:0}).retirementWithdrawalPlan,undefined);
 });
+test('a standing stock-sale plan is the player\'s instruction: paid monthly into Cash, taxed as capital gains, never automatic',()=>{
+  const p=household({cash:0,stocksTotal:100000,stocksCostBasis:50000,annualSpending:30000});
+  const none=projectOneYear(p,'standard',{deterministic:true});
+  assert.equal(none.statement.fundingSuccess,false);
+  const planned=setStockSalePlan(p,{amount:40000});
+  assert.deepEqual(planned.stockSalePlan,{amount:40000,holdingId:null,inflationAdjusted:true});
+  const r=projectOneYear(planned,'standard',{deterministic:true});
+  assert.equal(r.statement.fundingSuccess,true);
+  close(r.statement.plannedStockSales,40000);
+  close(r.state.stocksTotal,60000);
+  close(r.statement.income.longGains,20000); // half the sale is a realized long-term gain
+  close(r.statement.reconciliation.difference,0);
+  assert.equal(setStockSalePlan(planned,{amount:0}).stockSalePlan,undefined);
+});
+test('a standing stock-sale plan grows with inflation and is never mutated by a mere tax preview',()=>{
+  const p=setStockSalePlan(household({stocksTotal:100000,stocksCostBasis:50000}),{amount:10000});
+  estimateAnnualTax(p);estimateAnnualTax(p);estimateAnnualTax(p);
+  assert.equal(p.stockSalePlan.amount,10000);
+  const r=projectOneYear({...p,rateOverrides:{...p.rateOverrides,inflation:.1}},'standard',{deterministic:true});
+  close(r.state.stockSalePlan.amount,11000);
+});
+test('a standing stock-sale plan can target one holding instead of selling proportionally',()=>{
+  const p=household({stocksHoldings:[
+    {id:'a',ticker:'AAA',value:50000,costBasis:25000,shares:500,price:100,acquiredDate:'2020-01-01',growth:0,volatility:0},
+    {id:'b',ticker:'BBB',value:50000,costBasis:25000,shares:500,price:100,acquiredDate:'2020-01-01',growth:0,volatility:0},
+  ]});
+  const planned=setStockSalePlan(p,{amount:12000,holdingId:'a'});
+  const r=projectOneYear(planned,'standard',{deterministic:true});
+  const a=r.state.stocksHoldings.find(h=>h.id==='a'),b=r.state.stocksHoldings.find(h=>h.id==='b');
+  close(a.value,38000);close(b.value,50000);
+});
+test('a standing stock-sale plan is rejected from holdings with unverified basis',()=>{
+  const p=household({stocksHoldings:[{id:'a',ticker:'AAA',value:50000,costBasis:25000,basisKnown:false}]});
+  const r=setStockSalePlan(p,{amount:1000,holdingId:'a'});
+  assert.equal(r.lastTransaction.accepted,false);
+  assert.equal(r.stockSalePlan,undefined);
+});
+test('a standing savings transfer moves monthly amounts either direction, caps at what the source has, and grows with inflation',()=>{
+  const toCash=setSavingsTransferPlan(household({cash:0,savings:50000,savingsRate:0}),{amount:24000,direction:'toCash'});
+  assert.deepEqual(toCash.savingsTransferPlan,{amount:24000,direction:'toCash',inflationAdjusted:true});
+  const a=projectOneYear(toCash,'standard',{deterministic:true});
+  close(a.statement.plannedSavingsTransfer,24000);close(a.state.cash,24000);close(a.state.savings,26000);
+  const toSavings=setSavingsTransferPlan(household({cash:50000,savings:0,savingsRate:0}),{amount:1000000,direction:'toSavings'});
+  const b=projectOneYear(toSavings,'standard',{deterministic:true});
+  close(b.state.savings,50000);close(b.state.cash,0); // capped at what Cash actually had; not a funding failure
+  assert.equal(b.statement.fundingSuccess,true);
+  assert.equal(setSavingsTransferPlan(toCash,{amount:0}).savingsTransferPlan,undefined);
+});
 test('Roth basis can fund early spending only when the player withdraws it; unknown earnings cannot',()=>{
   const p=household({age:45,cash:0,rothBalance:20000,rothContributionBasis:12000,rothOpenedYear:2020,annualSpending:12000});
   assert.equal(projectOneYear(p,'standard',{deterministic:true}).statement.fundingSuccess,false);
@@ -146,6 +195,19 @@ test('nothing is sold automatically; a player sale consumes lots and settles gai
   assert.equal(annual.statement.income.longGains,20000);assert.ok(annual.statement.income.taxPaid>=sale.tax.total);
   close(annual.statement.reconciliation.difference,0);
 });
+test('sellStock priceOverrideRatio rescales the cash and gain credited, never the fraction of shares/basis removed',()=>{
+  const p=household({cash:0,stocksTotal:10000,stocksCostBasis:5000,
+    stocksHoldings:[{ticker:'AAPL',value:10000,costBasis:5000,shares:100,price:100,holdingPeriod:'long'}]});
+  // Selling 50% of the holding at the tracked $100 price, then crediting cash as if executed at $120:
+  // half the shares/basis still leave (the player chose "50%"), but the cash and gain scale with price.
+  const sale=sellStock(p,{proceeds:5000,holdingId:'AAPL',priceOverrideRatio:1.2});
+  assert.equal(sale.basis,2500);assert.equal(sale.proceeds,6000);
+  assert.equal(sale.gains,3500);assert.equal(sale.longGains,3500);assert.equal(sale.shortGains,0);
+  const holding=sale.state.stocksHoldings.find(h=>h.ticker==='AAPL');
+  assert.equal(holding.value,5000);assert.equal(holding.costBasis,2500);
+  const unscaled=sellStock(p,{proceeds:5000,holdingId:'AAPL'});
+  assert.equal(unscaled.proceeds,5000);assert.equal(unscaled.gains,2500);
+});
 test('home purchase closing costs and borrowing obey balance sheet conservation',()=>{
   const p=household({cash:100000,stocksTotal:100000,stocksCostBasis:100000});
   const home=buyHome(p,{value:300000,downPayment:60000,rate:0,term:30});
@@ -159,6 +221,18 @@ test('home purchase closing costs and borrowing obey balance sheet conservation'
   const home2=buyHome(rich,{value:300000,downPayment:60000,rate:0,term:30});
   assert.equal(home2.lastTransaction.accepted,false);assert.ok(home2.lastTransaction.reason.startsWith(NOT_ENOUGH_CASH));
   assert.equal(home2.stocksTotal,100000);assert.equal(home2.savings,100000);assert.equal(home2.homes.length,0);
+});
+test('refinanceHome changes only rate/term/payment, never the principal owed, and is a rate-and-term refinance (no cash out)',()=>{
+  const p=household({cash:10000,homes:[{type:'primary',label:'Home',value:400000,mortgageOwed:200000,
+    rate:.07,remainingMonths:300,remainingTerm:25,monthlyPayment:0,basisKnown:true,costBasis:400000}]});
+  const refinanced=refinanceHome(p,0,{rate:.05,term:30});
+  assert.equal(refinanced.lastTransaction.accepted,true);
+  const home=refinanced.homes[0];
+  assert.equal(home.mortgageOwed,200000);assert.equal(home.rate,.05);assert.equal(home.remainingTerm,30);
+  assert.equal(refinanced.cash,10000-4000); // 2% of the 200000 owed, paid from Cash
+  close(computeWorth(refinanced).netWorth,computeWorth(p).netWorth-4000); // only the closing cost leaves net worth
+  const noMortgage=refinanceHome(household({homes:[{type:'primary',value:300000,mortgageOwed:0}]}),0,{rate:.05,term:30});
+  assert.equal(noMortgage.lastTransaction.accepted,false);
 });
 test('a margin call is repaid from Cash only; no forced sale, and an unpaid excess is a glass wall',()=>{
   const loan=()=>[{type:'securities',principal:60000,rate:0,remainingTerm:10}];

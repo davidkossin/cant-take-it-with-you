@@ -102,7 +102,7 @@ test('glass wall, Bank teller and Charts headline describe cash-only funding', (
   const bank = buildDecisionRoom().interactables.find(o => o.action === 'bank');
   assert.equal(bank.kind, 'teller');
   assert.equal(bank.wallSide, 'north');
-  assert.equal(bank.label, 'Bank: Move Money');
+  assert.equal(bank.label, 'Bank');
   assert.equal(firstWallHeadline({ p10: { year: 2036, age: 40 }, p50: { year: 2039, age: 43 }, p90: null }),
     'First glass wall · median 2039 (age 43) · P10–P90 2036–none');
   assert.equal(firstWallHeadline({ p10: null, p50: null, p90: null }),

@@ -1,12 +1,15 @@
 import { hashSeed, mulberry32 } from './rng.js';
 import { stockBook, money, nonnegative } from './Books.js';
 
-export const ASSUMPTION_VERSION = 'planning-2026-2';
+export const ASSUMPTION_VERSION = 'planning-2026-3';
 // Transparent illustrative long-horizon assumptions, not a market forecast or price-history extrapolation.
+// homeRealGrowth/homeVolatility: FHFA All-Transactions HPI and S&P/Case-Shiller U.S. National Home
+// Price Index, ~1975-2025 (~50yr), nominal CAGR ~4.9-5.0%, real (CPI-deflated) ~1.0-1.5%; national annual
+// volatility has no single clean citation, ~4-6% is a reasonable analyst estimate. See financial-model-v2.md.
 export const PLANNING_ASSUMPTIONS = { equityReturn: .065, equityVolatility: .18,
   bondReturn: .035, bondVolatility: .06, inflation: .025, inflationVolatility: .01,
   savingsRate: .025, mortgageRate: .065, salaryGrowth: .03, equityDividendYield: .015,
-  investmentFee: .002, homeRealGrowth: .005, homeVolatility: .06 };
+  investmentFee: .002, homeRealGrowth: .0125, homeVolatility: .05 };
 
 export function normal(rng) {
   return Math.sqrt(-2 * Math.log(Math.max(Number.MIN_VALUE, rng()))) * Math.cos(2 * Math.PI * rng());

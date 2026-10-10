@@ -77,6 +77,9 @@ export function normalizePortfolio(input, { legacy = input.financeVersion !== 2 
     }
   }
   ensureHoldings(s);
+  // Legacy saves never recorded a game-start stock baseline; fall back to the value as of this
+  // migration so the Stock Broker's "since start" change has something honest to compare against.
+  s.initialStocksTotal ??= s.stocksTotal;
   for (const h of s.stocksHoldings) {
     if (h.value > 0 && h.acquiredDate == null) warn('Holding dates are unknown; existing lots provisionally use long-term treatment.');
     if (!h.basisKnown) warn('Investment tax basis is missing; forecast tax uses provisional basis.');
