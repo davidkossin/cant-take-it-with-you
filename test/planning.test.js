@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { household } from './fixtures.js';
 import { projectOneYear, projectYears, sellStock, buyHome, largePurchase, takeSecuritiesLoan,
   computeWorth, applySecuritiesMarginCall, findBankInsolvencyIndex, raiseCash, transferSavings,
-  withdrawRetirement, retirementAccess, setRetirementWithdrawalPlan, NOT_ENOUGH_CASH, FUNDING_RULE } from '../js/finance/Engine.js';
+  withdrawRetirement, retirementAccess, setRetirementWithdrawalPlan, setStockSalePlan,
+  NOT_ENOUGH_CASH, FUNDING_RULE } from '../js/finance/Engine.js';
 import { estimateAnnualTax, capitalNet, taxableSocialSecurity, payrollTax } from '../js/finance/Tax.js';
 import { monthlyPayment, loanDue, payLoan } from '../js/finance/Loans.js';
 import { contributionLimits, rothLimit, claimFactor, requiredDistribution, benefitEarningsReduction } from '../js/finance/Retirement.js';
@@ -110,6 +111,43 @@ test('a standing yearly withdrawal is the player\'s instruction: paid monthly in
   const waiting=projectOneYear(setRetirementWithdrawalPlan({...p,age:50},{amount:40000}),'standard',{deterministic:true});
   assert.equal(waiting.state.k401Balance,100000);assert.equal(waiting.statement.fundingSuccess,false);
   assert.equal(setRetirementWithdrawalPlan(planned,{amount:0}).retirementWithdrawalPlan,undefined);
+});
+test('a standing stock-sale plan is the player\'s instruction: paid monthly into Cash, taxed as capital gains, never automatic',()=>{
+  const p=household({cash:0,stocksTotal:100000,stocksCostBasis:50000,annualSpending:30000});
+  const none=projectOneYear(p,'standard',{deterministic:true});
+  assert.equal(none.statement.fundingSuccess,false);
+  const planned=setStockSalePlan(p,{amount:40000});
+  assert.deepEqual(planned.stockSalePlan,{amount:40000,holdingId:null,inflationAdjusted:true});
+  const r=projectOneYear(planned,'standard',{deterministic:true});
+  assert.equal(r.statement.fundingSuccess,true);
+  close(r.statement.plannedStockSales,40000);
+  close(r.state.stocksTotal,60000);
+  close(r.statement.income.longGains,20000); // half the sale is a realized long-term gain
+  close(r.statement.reconciliation.difference,0);
+  assert.equal(setStockSalePlan(planned,{amount:0}).stockSalePlan,undefined);
+});
+test('a standing stock-sale plan grows with inflation and is never mutated by a mere tax preview',()=>{
+  const p=setStockSalePlan(household({stocksTotal:100000,stocksCostBasis:50000}),{amount:10000});
+  estimateAnnualTax(p);estimateAnnualTax(p);estimateAnnualTax(p);
+  assert.equal(p.stockSalePlan.amount,10000);
+  const r=projectOneYear({...p,rateOverrides:{...p.rateOverrides,inflation:.1}},'standard',{deterministic:true});
+  close(r.state.stockSalePlan.amount,11000);
+});
+test('a standing stock-sale plan can target one holding instead of selling proportionally',()=>{
+  const p=household({stocksHoldings:[
+    {id:'a',ticker:'AAA',value:50000,costBasis:25000,shares:500,price:100,acquiredDate:'2020-01-01',growth:0,volatility:0},
+    {id:'b',ticker:'BBB',value:50000,costBasis:25000,shares:500,price:100,acquiredDate:'2020-01-01',growth:0,volatility:0},
+  ]});
+  const planned=setStockSalePlan(p,{amount:12000,holdingId:'a'});
+  const r=projectOneYear(planned,'standard',{deterministic:true});
+  const a=r.state.stocksHoldings.find(h=>h.id==='a'),b=r.state.stocksHoldings.find(h=>h.id==='b');
+  close(a.value,38000);close(b.value,50000);
+});
+test('a standing stock-sale plan is rejected from holdings with unverified basis',()=>{
+  const p=household({stocksHoldings:[{id:'a',ticker:'AAA',value:50000,costBasis:25000,basisKnown:false}]});
+  const r=setStockSalePlan(p,{amount:1000,holdingId:'a'});
+  assert.equal(r.lastTransaction.accepted,false);
+  assert.equal(r.stockSalePlan,undefined);
 });
 test('Roth basis can fund early spending only when the player withdraws it; unknown earnings cannot',()=>{
   const p=household({age:45,cash:0,rothBalance:20000,rothContributionBasis:12000,rothOpenedYear:2020,annualSpending:12000});

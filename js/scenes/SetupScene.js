@@ -693,6 +693,12 @@ export class SetupScene {
           .replace(/\.?0+$/, '');
         const fields = [
           {
+            key: 'name',
+            label: 'Name this property',
+            type: 'text',
+            defaultValue: HOME_TYPES[s._homeType]?.label || `Home ${i + 1}`,
+          },
+          {
             key: 'value',
             label: 'Household property market value',
             type: 'money',
@@ -749,7 +755,7 @@ export class SetupScene {
         s.homes.push({
           basisKnown: false,
           type: s._homeType,
-          label: HOME_TYPES[s._homeType]?.label || 'Home',
+          label: String(result.name || '').trim().slice(0, 28) || HOME_TYPES[s._homeType]?.label || `Home ${i + 1}`,
           value,
           mortgageOwed: Math.max(0, result.owed || 0),
           rate,

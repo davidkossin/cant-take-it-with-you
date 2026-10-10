@@ -16,7 +16,7 @@ import { annualChildCostForZip } from '../data/stateChildCosts.js';
 import { HOME_TYPES, HELOC_CLTV, SB_LTV,
   HELOC_DEFAULT_RATE, SECURITIES_LOAN_DEFAULT_RATE } from '../config.js';
 
-export const ENGINE_VERSION = '2.2.0';
+export const ENGINE_VERSION = '2.3.0';
 /**
  * Funding rule: only Cash pays bills. The engine never moves savings, sells holdings or
  * withdraws retirement money on its own; the player decides (RMDs and the player's own
@@ -28,7 +28,7 @@ export const NOT_ENOUGH_CASH = 'Not enough cash — sell or transfer first.';
 export const cloneState = copy;
 const SIMULATION_REPORT_FIELDS=['transactions','lastStatement','milestones','lastTransaction','lastWithdrawal'];
 const SIMULATION_ARRAY_FIELDS=['stocksHoldings','homes','otherLoans','kids'];
-const SIMULATION_OBJECT_FIELDS=['taxRecord','retirementWithdrawalPlan','spouseRetirementWithdrawalPlan','capitalLossCarry'];
+const SIMULATION_OBJECT_FIELDS=['taxRecord','retirementWithdrawalPlan','spouseRetirementWithdrawalPlan','capitalLossCarry','stockSalePlan'];
 /** Compact projections clone only mutable model data, avoiding copies of report histories. */
 function simulationCopy(state) {
   const s={...state};
@@ -241,6 +241,12 @@ export function projectOneYear(state,difficultyId,opts={}) {
         statement.plannedWithdrawals=money((statement.plannedWithdrawals || 0)+got);
       }
     }
+    // Standing stock-sale plan: a player instruction, like the standing retirement withdrawal above —
+    // not the engine deciding to sell. Household-level (stocks are joint), so outside the owner loop.
+    if (s.stockSalePlan && nonnegative(s.stockSalePlan.amount)>0) {
+      const sale=liquidate(s,monthlyAmount(nonnegative(s.stockSalePlan.amount),month),{holdingId:s.stockSalePlan.holdingId || null});
+      statement.plannedStockSales=money((statement.plannedStockSales || 0)+sale.proceeds);
+    }
     const wages=scheduled.primary.wages || 0,spouseWages=scheduled.spouse.wages || 0;
     // Monthly estimated W-2 withholding; final tax settlement credits every prepayment.
     const wageTax=expectedCompensation>0?money(wageWithholding*(wages+spouseWages)/expectedCompensation):0;
@@ -398,6 +404,8 @@ export function projectOneYear(state,difficultyId,opts={}) {
     s.retirementWithdrawalPlan.amount=money(s.retirementWithdrawalPlan.amount*(1+economy.inflation));
   if (s.spouseRetirementWithdrawalPlan?.amount>0 && s.spouseRetirementWithdrawalPlan.inflationAdjusted!==false)
     s.spouseRetirementWithdrawalPlan.amount=money(s.spouseRetirementWithdrawalPlan.amount*(1+economy.inflation));
+  if (s.stockSalePlan?.amount>0 && s.stockSalePlan.inflationAdjusted!==false)
+    s.stockSalePlan.amount=money(s.stockSalePlan.amount*(1+economy.inflation));
   for (const h of s.homes || []) {
     if (h.annualPropertyTax!=null) h.annualPropertyTax=money(h.annualPropertyTax*(1+(h.propertyTaxGrowth ?? economy.inflation)));
     for (const key of ['annualMaintenance','annualInsurance','annualHOA']) if (h[key]!=null) h[key]=money(h[key]*(1+economy.inflation));
@@ -630,6 +638,22 @@ export function setRetirementWithdrawalPlan(state,{amount,account='traditional',
   s[key]={amount:yearly,account:account==='roth'?'roth':'traditional',early:!!early,inflationAdjusted:true};
   post(s,'standing-withdrawal',{...s[key],owner});
   return accepted(s,'Standing withdrawal set: $'+fmt(yearly)+' a year from '+(account==='roth'?'the Roth':'the 401(k)')+'.');
+}
+/**
+ * Player action: a standing yearly stock sale (today's dollars, grows with inflation), sold
+ * proportionally across liquid holdings (or one chosen holding) and paid into Cash in monthly
+ * parts. Realized gains are taxed through the normal year-end capital-gains settlement, the
+ * same as a manual sale. This is the player's own instruction, like setRetirementWithdrawalPlan
+ * above -- not the engine deciding on its own to sell. Amount 0 cancels it.
+ */
+export function setStockSalePlan(state,{amount,holdingId=null}={}) {
+  const s=copy(state), yearly=money(nonnegative(amount));
+  if (!(yearly>0)) { delete s.stockSalePlan; return accepted(s,'Standing stock sale cancelled.'); }
+  if ((state.stocksHoldings || []).some(h=>!h.illiquid && h.basisKnown===false && (!holdingId || h.id===holdingId)))
+    return rejected(state,'Enter verified tax basis before setting up a standing sale from these holdings.');
+  s.stockSalePlan={amount:yearly,holdingId:holdingId || null,inflationAdjusted:true};
+  post(s,'standing-stock-sale-plan',{...s.stockSalePlan});
+  return accepted(s,'Standing stock sale set: $'+fmt(yearly)+' a year, sold into Cash.');
 }
 export const takeHeloc=(s,opts={})=>borrow(s,opts,'heloc');
 export const takeSecuritiesLoan=(s,opts={})=>borrow(s,opts,'securities');

@@ -10,6 +10,11 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+### Added
+- A standing stock-sale plan: a yearly amount (today's dollars, grows with inflation) sold proportionally across liquid holdings or from one chosen holding, in equal monthly parts paid into Cash, taxed as capital gains through the normal year-end settlement. Like the existing standing retirement withdrawal, this is the player's own instruction (set up at the Stock Broker or Career teller, cancellable at any time) — not the engine deciding on its own to sell; it's rejected at setup from a holding with unverified basis, the same guard a manual sale already has. Engine version bumped to 2.3.0.
+- Dialog boxes support inline `**bold**`/`_italic_` markup in authored text (body copy, option labels/subtext, form field labels), replacing the single flat font weight/style used everywhere.
+- SetupScene's home details form now asks for a property name, stored as its label everywhere homes are listed.
+
 ### Changed
 - Custom Setup's online stock lookup now shows a ticker's own price history (annualized mean/sample stdev, when at least 2 years is available) as a labeled reference note alongside the price. It is reference only: the "Expected return model" growth/volatility fields still default to the difficulty's equity assumption, never to that history, since a stock's trailing return — especially after a strong decade like 2016–2025 — is a poor predictor of its future return, and a prefilled default is sticky even when editable.
 - Home value appreciation (`homeRealGrowth`/`homeVolatility` in every difficulty) is now calibrated to ~50 years (1975–2025) of FHFA/Case-Shiller national home price history — 1.25% real appreciation, 5% annual volatility — replacing an uncited 0.5%/6% placeholder. Assumption version bumped to `planning-2026-3`.

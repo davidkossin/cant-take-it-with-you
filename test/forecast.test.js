@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { household } from './fixtures.js';
 import { economicYear, PLANNING_ASSUMPTIONS, holdingReturn } from '../js/finance/Market.js';
 import { projectMonteCarlo, createForecast, addForecastPaths, finishForecast, forecastKey } from '../js/finance/Forecast.js';
-import { projectYears, computeWorth, setRetirementWithdrawalPlan } from '../js/finance/Engine.js';
+import { projectYears, computeWorth, setRetirementWithdrawalPlan, setStockSalePlan } from '../js/finance/Engine.js';
 
 test('annual return draws recover configured arithmetic moments and permit market losses',()=>{
   const a={...PLANNING_ASSUMPTIONS},N=50000;
@@ -39,6 +39,13 @@ test('Monte Carlo is reproducible, does not mutate gameplay, and percentile band
   }
   const acc=createForecast(p,{seed:77});addForecastPaths(acc,75);addForecastPaths(acc,125);
   assert.deepEqual(finishForecast(acc).series,a.series);
+});
+test('a standing stock-sale plan survives Monte Carlo without mutating the input baseline across paths',()=>{
+  const p=setStockSalePlan(household({age:99,cash:0,stocksTotal:30000,stocksCostBasis:30000,annualSpending:20000}),{amount:20000});
+  const before=JSON.stringify(p);
+  const a=projectMonteCarlo(p,{paths:30,seed:5});
+  assert.equal(JSON.stringify(p),before); // the baseline the forecast started from is untouched
+  assert.equal(a.successProbability,1); // zero-volatility fixture: the plan fully funds spending on every path
 });
 test('zero-volatility cash fixture collapses bands and reports all success/all failure truthfully',()=>{
   const p=household({age:98,cash:100000,annualSpending:10000});
