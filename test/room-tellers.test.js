@@ -19,6 +19,7 @@ class ScriptedDialog {
   confirm(text, opts) { return Promise.resolve(this._next('confirm', text, opts)); }
   menu(text, opts) { return Promise.resolve(this._next('menu', text, opts)); }
   form(text, fields, opts) { return Promise.resolve(this._next('form', text, opts)); }
+  multiSelect(text, items, opts) { return Promise.resolve(this._next('multiSelect', text, opts)); }
   show(text, opts) { this.calls.push({ kind: 'show', text, title: opts?.title }); return Promise.resolve(true); }
 }
 
@@ -63,6 +64,38 @@ test('Make a Large Purchase: Back on the very first question exits without side 
   await new RoomScene().handleLargePurchase(game, dialog);
   assert.equal(game.portfolio.cash, 100000);
   assert.equal(game.portfolio.lastTransaction, undefined);
+});
+
+test('Start a Job: setting up retirement contributions runs the questionnaire and applies it', async () => {
+  const game = { portfolio: household({ age: 30, employed: false, salary: 0 }) };
+  const dialog = new ScriptedDialog([
+    'start',  // career window -> Start a Job
+    60000,    // salary
+    true,     // set up retirement contributions? Yes
+    ['k401'], // multiSelect: which accounts does this person have
+    { balance: 0, contrib: 6, match: 50, onFirst: 5, equity: 80 }, // 401(k) form
+  ]);
+  await new RoomScene().handleCareer(game, dialog);
+  assert.equal(game.portfolio.salary, 60000);
+  assert.equal(game.portfolio.employed, true);
+  assert.equal(game.portfolio.has401k, true);
+  assert.equal(game.portfolio.k401ContribRate, .06);
+  assert.equal(game.portfolio.k401MatchRate, .5);
+});
+
+test('Retire: confirms retirement, then sets up a standing stock-sale plan, then Done', async () => {
+  const game = { portfolio: household({ age: 65, employed: true, salary: 80000, stocksTotal: 100000, stocksCostBasis: 100000 }) };
+  const dialog = new ScriptedDialog([
+    'retire', // career window -> Retire
+    true,     // confirm retirement
+    'stock',  // fund choice -> sell stock annually
+    12000,    // standing stock-sale amount
+    null,     // fund choice menu again -> Done
+  ]);
+  await new RoomScene().handleCareer(game, dialog);
+  assert.equal(game.portfolio.salary, 0);
+  assert.equal(game.portfolio.retired, true);
+  assert.deepEqual(game.portfolio.stockSalePlan, { amount: 12000, holdingId: null, inflationAdjusted: true });
 });
 
 function borrowerFixture() {

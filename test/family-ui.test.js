@@ -292,7 +292,7 @@ test('Restarting work after planned retirement collects a new retirement age for
   for (const owner of ['primary','spouse']) {
     const game={portfolio:household({age:70,retired:true,employed:false,married:owner==='spouse',
       spouseAge:70,spouseRetired:true,spouseEmployed:false})};
-    const dialog=scriptedDialog([...(owner==='spouse'?['spouse']:[]),'start',50000,75]);
+    const dialog=scriptedDialog([...(owner==='spouse'?['spouse']:[]),'start',50000,false,75]);
     await new RoomScene().handleTeller(game,dialog,'job');
     const result=projectOneYear(game.portfolio,'standard',{economy:{equity:0,bond:0,inflation:0,home:0,salary:0}});
     assert.equal(result.statement.income[owner==='spouse'?'spouseWages':'wages'],50000);
@@ -303,6 +303,6 @@ test('Restarting work after planned retirement collects a new retirement age for
 test('Cancelling the new job retirement date leaves employment and salaries unchanged', async () => {
   const game={portfolio:household({age:70,retired:true,employed:false})};
   const before=structuredClone(game.portfolio);
-  await new RoomScene().handleTeller(game,scriptedDialog(['start',50000,null]),'job');
+  await new RoomScene().handleTeller(game,scriptedDialog(['start',50000,false,null]),'job');
   assert.deepEqual(game.portfolio,before);
 });

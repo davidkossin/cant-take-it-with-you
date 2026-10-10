@@ -47,6 +47,7 @@ import {
   previewRetirementWithdrawal,
   setRetirementWithdrawalPlan,
   setSavingsTransferPlan,
+  setStockSalePlan,
 } from '../finance/Engine.js';
 import { getDifficulty } from '../finance/Difficulty.js';
 import { commitRoomDecisions, currentNode, westReturnHallway, jumpToHallwayNode } from '../state/GameState.js';
@@ -393,57 +394,7 @@ export class RoomScene {
         await this.handleSellStock(game, dialog, diff);
       }
     } else if (action === 'job') {
-      const owner = p.married ? await dialog.menu('Whose employment?', [
-        { label: personName(p), value: 'primary' },
-        { label: personName(p, 'spouse'), value: 'spouse' },
-        { label: 'Back', value: null },
-      ], { title: 'Job / Retire' }) : 'primary';
-      if (!owner) return;
-      const salaryKey = owner === 'spouse' ? 'spouseSalary' : 'salary';
-      const mode = await dialog.menu(
-        `${personName(p, owner)} career window`,
-        [
-          { label: 'Leave job (salary → $0)', value: 'leave' },
-          { label: 'Start / resume job', value: 'start' },
-          { label: 'Retire', value: 'retire' },
-          { label: 'Never mind', value: null },
-        ],
-        { title: 'Job / Retire' }
-      );
-      if (!mode) return;
-      if (mode === 'start') {
-        const sal = await dialog.prompt(`${personName(p, owner)} new annual gross salary`, {
-          title: 'Start Job',
-          defaultValue: String(p[salaryKey] || 50000),
-          type: 'money',
-        });
-        if (sal == null) return;
-        let retirementAge = p[ownerKey('retirementAge', owner)] ?? 65;
-        const age = ownerAge(p, owner);
-        if (age != null && age >= retirementAge) {
-          while (true) {
-            const answer = await dialog.prompt(`${personName(p, owner)} planned retirement age for this job`, {
-              title: 'Start Job', type: 'number', defaultValue: String(Math.ceil(age + 1)),
-              subtitle: 'Choose a future age so the model includes this new salary.',
-            });
-            if (answer == null) return;
-            if (Number(answer) > age && Number(answer) <= 110) {
-              retirementAge = Number(answer);
-              break;
-            }
-            await dialog.show('Choose a retirement age later than your current age (up to 110).', { title: 'Start Job' });
-          }
-        }
-        game.portfolio = setEmployment(game.portfolio, 'start', { owner });
-        game.portfolio[ownerKey('retirementAge', owner)] = retirementAge;
-        game.portfolio[salaryKey] = Math.max(0, sal);
-        game.portfolio[owner === 'spouse' ? 'spouseEmployed' : 'employed'] = sal > 0;
-        const peakKey = owner === 'spouse' ? 'spousePeakSalary' : 'peakSalary';
-        game.portfolio[peakKey] = Math.max(game.portfolio[peakKey] || 0, sal);
-      } else {
-        game.portfolio = setEmployment(game.portfolio, mode, { owner });
-      }
-      await dialog.show('Employment updated.', { title: 'Job / Retire' });
+      await this.handleCareer(game, dialog);
     } else if (action === 'kid') {
       await this.handleFamily(game, dialog);
     } else if (action === 'purchase') {
@@ -506,6 +457,151 @@ export class RoomScene {
       } };
       await dialog.show(game.portfolio.lastTransaction.description, { title: 'Child Care' });
     }
+  }
+
+  /** Career — choose player/spouse, then Leave / Start a Job / Retire. Back returns to the previous question. */
+  async handleCareer(game, dialog) {
+    const title = 'Career';
+    let step = 0, owner = 'primary';
+    while (true) {
+      const p = game.portfolio;
+      if (step === 0) {
+        if (!p.married) { owner = 'primary'; step = 1; continue; }
+        const result = await dialog.menu(
+          '**Start, end, and modify current jobs and salaries.**\n' +
+            `${personName(p)} ${formatMoneyDisplay(p.salary || 0, p)}/yr · ` +
+            `${personName(p, 'spouse')} ${formatMoneyDisplay(p.spouseSalary || 0, p)}/yr`,
+          [
+            { label: personName(p), value: 'primary' },
+            { label: personName(p, 'spouse'), value: 'spouse' },
+            { label: 'Back', value: null },
+          ], { title }
+        );
+        if (!result) return;
+        owner = result;
+        step = 1;
+      } else if (step === 1) {
+        const result = await dialog.menu(
+          `${personName(p, owner)} career window`,
+          [
+            { label: 'Leave job (salary → $0)', value: 'leave' },
+            { label: 'Start a Job', value: 'start' },
+            { label: 'Retire', value: 'retire' },
+            { label: 'Never mind', value: null },
+          ], { title }
+        );
+        if (!result) { if (!p.married) return; step = 0; continue; }
+        if (result === 'leave') {
+          game.portfolio = setEmployment(game.portfolio, 'leave', { owner });
+          await dialog.show(`${personName(p, owner)}'s salary is now $0.`, { title });
+          return;
+        }
+        if (result === 'start') { await this.handleStartJob(game, dialog, owner); return; }
+        await this.handleRetire(game, dialog, owner);
+        return;
+      }
+    }
+  }
+
+  /** Start a Job — salary, then an optional retirement-contributions setup, then a future retirement age if already past the current one. */
+  async handleStartJob(game, dialog, owner) {
+    const title = 'Start a Job';
+    const salaryKey = owner === 'spouse' ? 'spouseSalary' : 'salary';
+    let step = 0, salary = game.portfolio[salaryKey] || 50000, setupRetirement = null, retirementAge = null;
+    while (true) {
+      const p = game.portfolio;
+      if (step === 0) {
+        const result = await dialog.prompt(`${personName(p, owner)} new annual gross salary`, {
+          title, defaultValue: String(salary), type: 'money',
+        });
+        if (result == null) return;
+        salary = Math.max(0, result);
+        step = 1;
+      } else if (step === 1) {
+        const result = await dialog.confirm('Set up retirement contributions for this job?', {
+          title, yes: 'Yes', no: 'No', distinctCancel: true,
+        });
+        if (result == null) { step = 0; continue; }
+        setupRetirement = result;
+        step = 2;
+      } else if (step === 2) {
+        if (setupRetirement) {
+          const draft = { ...game.portfolio };
+          if (!(await editRetirementAccounts(draft, dialog, { owner }))) { step = 1; continue; }
+          game.portfolio = draft;
+        }
+        retirementAge = game.portfolio[ownerKey('retirementAge', owner)] ?? 65;
+        const age = ownerAge(game.portfolio, owner);
+        step = (age != null && age >= retirementAge) ? 3 : 10;
+      } else if (step === 3) {
+        const age = ownerAge(game.portfolio, owner);
+        const result = await dialog.prompt(`${personName(game.portfolio, owner)} planned retirement age for this job`, {
+          title, type: 'number', defaultValue: String(retirementAge ?? Math.ceil(age + 1)),
+          subtitle: 'Choose a future age so the model includes this new salary.',
+        });
+        if (result == null) return; // no single prior "question" to return to here; cancel the whole job start
+        if (!(Number(result) > age && Number(result) <= 110)) {
+          await dialog.show('Choose a retirement age later than your current age (up to 110).', { title });
+          continue;
+        }
+        retirementAge = Number(result);
+        step = 10;
+      } else if (step === 10) {
+        game.portfolio = setEmployment(game.portfolio, 'start', { owner });
+        game.portfolio[ownerKey('retirementAge', owner)] = retirementAge ?? game.portfolio[ownerKey('retirementAge', owner)] ?? 65;
+        game.portfolio[salaryKey] = salary;
+        game.portfolio[owner === 'spouse' ? 'spouseEmployed' : 'employed'] = salary > 0;
+        const peakKey = owner === 'spouse' ? 'spousePeakSalary' : 'peakSalary';
+        game.portfolio[peakKey] = Math.max(game.portfolio[peakKey] || 0, salary);
+        await dialog.show('Employment updated.', { title });
+        return;
+      }
+    }
+  }
+
+  /**
+   * Retire — sets salary to $0 and offers the two ways to fund retirement spending: a standing
+   * retirement-fund withdrawal, or a standing annual stock sale. Both are the player's own
+   * instruction (cash-only funding); neither is set up automatically.
+   */
+  async handleRetire(game, dialog, owner) {
+    const title = 'Career';
+    const p0 = game.portfolio;
+    const ok = await dialog.confirm(`Retire ${personName(p0, owner)}? Salary will be set to $0.`, { title, yes: 'Retire', no: 'Cancel' });
+    if (!ok) return;
+    game.portfolio = setEmployment(game.portfolio, 'retire', { owner });
+    const report = async (heading, description = null) => {
+      const t = game.portfolio.lastTransaction || {};
+      await dialog.show(t.accepted === false ? transactionReason(t, game.portfolio) : description || t.description || 'Done.', { title: heading });
+    };
+    while (true) {
+      const p = game.portfolio;
+      const choice = await dialog.menu(
+        `${personName(p, owner)} is retired.\nFund retirement by pulling from retirement funds, or by selling stock periodically. Either is your own standing instruction -- nothing is sold or withdrawn on its own.`,
+        [
+          { label: 'Pull from retirement funds', value: 'withdraw' },
+          { label: 'Sell stock annually', value: 'stock' },
+          { label: 'Done', value: null },
+        ], { title }
+      );
+      if (!choice) return;
+      if (choice === 'withdraw') await this.handleStandingWithdrawal(game, dialog, report);
+      else await this.handleStockSalePlanSetup(game, dialog, report);
+    }
+  }
+
+  /** Set (or cancel) a standing annual stock sale, sold proportionally across liquid holdings. */
+  async handleStockSalePlanSetup(game, dialog, report) {
+    const title = 'Standing stock sale';
+    const p = game.portfolio, money = n => formatMoneyDisplay(n, p);
+    const current = p.stockSalePlan;
+    const amount = await dialog.prompt('Sell how much stock each year? ($0 stops it)', {
+      title, portfolio: p, defaultValue: String(Math.round(current?.amount || 0)), type: 'money', prefix: '$',
+    });
+    if (amount == null) return;
+    game.portfolio = setStockSalePlan(p, { amount, holdingId: current?.holdingId || null });
+    if (game.portfolio.lastTransaction?.accepted === false) { await report(title); return; }
+    await report(title, amount > 0 ? `Standing stock sale set: ${money(amount)}/year, sold into Cash.` : 'Standing stock sale cancelled.');
   }
 
   /** Make a Large Purchase — a step index so Back always returns to the previous question. */
