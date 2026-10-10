@@ -178,15 +178,15 @@ test('Cancelling marriage leaves household finances and filing status unchanged'
   const p = household({ playerName: 'Ada' });
   const game = { portfolio: p };
   const before = structuredClone(p);
-  await new RoomScene().handleTeller(game, scriptedDialog(['marry', { name: 'Ben', age: 35 }, 'dark', 'short', null]), 'kid');
+  await new RoomScene().handleTeller(game, scriptedDialog(['spouse', null, null]), 'kid');
   assert.deepEqual(game.portfolio, before);
 });
 
 test('Marriage collects spouse financial context and the next year uses that person’s age and salary', async () => {
   const game = { portfolio: household({ playerName: 'Ada', age: 65, k401Balance: 50000 }) };
-  const dialog = scriptedDialog(['marry', { name: 'Ben', age: 55 }, 'red', 'short',
+  const dialog = scriptedDialog(['spouse', { name: 'Ben', age: 55 }, 'red', 'short',
     { salary: 0, spouseSalary: 50000 }, { retirementAge: 65, spouseRetirementAge: 65 },
-    ['k401'], { balance: 100000, contrib: 10, match: 100, onFirst: 3, equity: 80 }]);
+    ['k401'], { balance: 100000, contrib: 10, match: 100, onFirst: 3, equity: 80 }, null]);
   await new RoomScene().handleTeller(game, dialog, 'kid');
   assert.equal(game.portfolio.married, true);
   assert.equal(game.portfolio.filingStatus, 'married');
@@ -198,9 +198,26 @@ test('Marriage collects spouse financial context and the next year uses that per
   assert.equal(next.age, 66);
 });
 
+test('Add a Spouse: backing out of the income question returns to spouse identity instead of exiting the whole flow', async () => {
+  const game = { portfolio: household({ playerName: 'Ada' }) };
+  const dialog = scriptedDialog(['spouse',
+    { name: 'Ben', age: 40 }, 'dark', 'short',
+    null,                                           // income form -- Back to spouse identity
+    { name: 'Ben', age: 40 }, 'dark', 'short',      // identity re-asked, not discarded
+    { salary: 0, spouseSalary: 60000 },
+    { retirementAge: 65, spouseRetirementAge: 65 },
+    [],                                              // spouse has no retirement accounts
+    null,                                            // Done at the Family Planning menu
+  ]);
+  await new RoomScene().handleTeller(game, dialog, 'kid');
+  assert.equal(game.portfolio.married, true);
+  assert.equal(game.portfolio.spouseName, 'Ben');
+  assert.equal(game.portfolio.spouseSalary, 60000);
+});
+
 test('Family child care instruction uses entry dollars and stops after the chosen years', async () => {
   const game = { portfolio: household({ year: 2040, priceIndex: 2, cash: 100000 }) };
-  await new RoomScene().handleTeller(game, scriptedDialog(['care', 'nanny', { annualCost: 12000, years: 2 }]), 'kid');
+  await new RoomScene().handleTeller(game, scriptedDialog(['care', 'nanny', { annualCost: 12000, years: 2 }, null]), 'kid');
   const plan = game.portfolio.childcarePlans[0];
   assert.equal(plan.entryPriceIndex, 2);
   assert.equal(plan.endYearExclusive, 2042);

@@ -108,7 +108,7 @@ export function buildDecisionRoom(opts = {}) {
       y: (rows - 1) * TILE - 4,
       w: 32,
       h: 22,
-      label: 'Family',
+      label: 'Family Planning',
       kind: 'teller',
       action: 'kid',
       wall: true,

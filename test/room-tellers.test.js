@@ -355,3 +355,74 @@ test('Find a Tenant: with no investment property, points to Buy a Home instead',
   await new RoomScene().handleFindTenant(game, dialog);
   assert.equal(dialog.calls[0].text, 'No investment properties to rent out. Buy one first with "Buy a home".');
 });
+
+test('Family Planning: the main menu lists the spouse and kids by name and age', async () => {
+  const game = { portfolio: household({ married: true, spouseName: 'Sam', spouseAge: 38, kids: [{ name: 'Alex', age: 9 }] }) };
+  const dialog = new ScriptedDialog([null]); // Done immediately
+  await new RoomScene().handleFamilyPlanning(game, dialog);
+  const menuText = dialog.calls.find(c => c.kind === 'menu').text;
+  assert.match(menuText, /Sam.*age 38/);
+  assert.match(menuText, /Alex.*age 9/);
+});
+
+test('Have a Kid: a single name question, always starting at age 0, up to the four-kid limit', async () => {
+  const game = { portfolio: household({}) };
+  const dialog = new ScriptedDialog(['Riley']);
+  await new RoomScene().handleHaveKid(game, dialog);
+  assert.deepEqual(game.portfolio.kids, [{ name: 'Riley', age: 0 }]);
+
+  const full = { portfolio: household({ kids: [{ name: 'A', age: 1 }, { name: 'B', age: 2 }, { name: 'C', age: 3 }, { name: 'D', age: 4 }] }) };
+  await new RoomScene().handleHaveKid(full, new ScriptedDialog([]));
+  assert.equal(full.portfolio.kids.length, 4);
+});
+
+function marriedFixture(overrides = {}) {
+  return household({ married: true, spouseName: 'Sam', spouseAge: 38, spouseSalary: 70000, spouseK401Balance: 30000,
+    cash: 40000, savings: 60000, stocksTotal: 100000, stocksCostBasis: 50000, ...overrides });
+}
+
+test('Remove a Spouse / divorce: a linked $/% fund split over joint Cash, Savings and investments; the spouse\'s own retirement leaves with them', async () => {
+  const game = { portfolio: marriedFixture() };
+  const dialog = new ScriptedDialog([
+    true,                          // end the marriage? (no homes -- property question is skipped)
+    { pct: 60, amount: 120000 },   // fund split: 60% of 200000 joint Cash+Savings+Stocks
+    true,                          // finalize divorce
+  ]);
+  await new RoomScene().handleDivorce(game, dialog);
+  assert.equal(game.portfolio.married, false);
+  assert.equal(game.portfolio.filingStatus, 'single');
+  assert.equal(game.portfolio.spouseName, undefined);
+  assert.equal(game.portfolio.spouseK401Balance, undefined);
+  assert.equal(game.portfolio.cash, 24000); // 60% of 40000
+  assert.equal(game.portfolio.savings, 36000); // 60% of 60000
+  assert.equal(game.portfolio.stocksTotal, 60000); // 60% of 100000
+  assert.equal(game.portfolio.stocksCostBasis, 30000); // same 60% fraction applied to basis
+});
+
+test('Remove a Spouse / divorce: selling property folds proceeds into the split, and Escape at the final summary returns to the split question', async () => {
+  const game = { portfolio: marriedFixture({ cash: 0, savings: 0, stocksTotal: 0, stocksCostBasis: 0, homes: [
+    { type: 'primary', label: 'Home', value: 400000, mortgageOwed: 100000, rate: .05, remainingMonths: 300,
+      remainingTerm: 25, monthlyPayment: 0, basisKnown: true, costBasis: 200000 },
+  ] }) };
+  const dialog = new ScriptedDialog([
+    true,                          // end the marriage?
+    'sell',                        // sell all property and split proceeds
+    { pct: 50, amount: 138000 },   // fund split over the resulting cash
+    null,                          // Escape at the summary -> back to the split question
+    { pct: 50, amount: 138000 },
+    true,                          // finalize divorce
+  ]);
+  await new RoomScene().handleDivorce(game, dialog);
+  assert.equal(game.portfolio.homes.length, 0);
+  assert.equal(game.portfolio.married, false);
+  // 400000 value - 24000 (6% fee) - 100000 mortgage payoff = 276000 net; 50% kept = 138000
+  assert.equal(game.portfolio.cash, 138000);
+});
+
+test('Remove a Spouse / divorce: declining at the intro question leaves the household untouched', async () => {
+  const game = { portfolio: marriedFixture() };
+  const dialog = new ScriptedDialog([false]);
+  await new RoomScene().handleDivorce(game, dialog);
+  assert.equal(game.portfolio.married, true);
+  assert.equal(game.portfolio.spouseName, 'Sam');
+});

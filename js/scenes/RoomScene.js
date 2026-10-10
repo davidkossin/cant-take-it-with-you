@@ -2,6 +2,7 @@ import { editPlanningInputs } from './PlanningInputs.js';
 import { editSpouseIdentity, editFamilyIncome, editRetirementAges, editRetirementAccounts, personName } from './FamilyInputs.js';
 import { ensureHoldings, syncBook, post } from '../finance/Books.js';
 import { childCostLabel } from '../data/stateChildCosts.js';
+import { randomChildName } from '../data/childNames.js';
 import {
   FRAME_W,
   WORLD_SCALE,
@@ -289,7 +290,7 @@ export class RoomScene {
     } else if (action === 'job') {
       await this.handleCareer(game, dialog);
     } else if (action === 'kid') {
-      await this.handleFamily(game, dialog);
+      await this.handleFamilyPlanning(game, dialog);
     } else if (action === 'purchase') {
       await this.handleLargePurchase(game, dialog);
     } else if (action === 'borrow') {
@@ -301,55 +302,195 @@ export class RoomScene {
     }
   }
 
-  async handleFamily(game, dialog) {
-    const p = game.portfolio;
-    const choice = await dialog.menu('Family decisions', [
-      { label: 'Have a kid', value: 'kid' },
-      { label: p.married ? 'Spouse details' : 'Get married', value: 'marry' },
-      { label: 'Child Care', value: 'care' },
-      { label: 'Back', value: null },
-    ], { title: 'Family' });
-    if (choice === 'kid') {
-      if ((p.kids || []).length >= 4) {
-        await dialog.show('Four kids is the max for this ledger.', { title: 'Have a kid' });
+  /** Family Planning — roster of spouse/kids, then Add/Remove a Spouse, Have a Kid, Child Care. */
+  async handleFamilyPlanning(game, dialog) {
+    const title = 'Family Planning';
+    while (true) {
+      const p = game.portfolio;
+      const lines = [];
+      if (p.married) lines.push(`**${personName(p, 'spouse')}** age ${p.spouseAge ?? '?'}`);
+      for (const k of p.kids || []) lines.push(`**${k.name}** age ${k.age}`);
+      if (!lines.length) lines.push('No spouse or kids yet.');
+      const choice = await dialog.menu(
+        lines.join('\n'),
+        [
+          { label: p.married ? 'Remove a Spouse' : 'Add a Spouse', value: p.married ? 'divorce' : 'spouse' },
+          { label: 'Have a Kid', value: 'kid' },
+          { label: 'Child Care', value: 'care' },
+          { label: 'Done', value: null },
+        ],
+        { title }
+      );
+      if (!choice) return;
+      if (choice === 'spouse') await this.handleAddSpouse(game, dialog);
+      else if (choice === 'divorce') await this.handleDivorce(game, dialog);
+      else if (choice === 'kid') await this.handleHaveKid(game, dialog);
+      else if (choice === 'care') await this.handleChildCare(game, dialog);
+    }
+  }
+
+  /** Add a Spouse — mirrors Setup's own marriage questions (identity/appearance, income, retirement age, accounts). */
+  async handleAddSpouse(game, dialog) {
+    const title = 'Add a Spouse';
+    const draft = { ...game.portfolio, married: true, filingStatus: 'married' };
+    let step = 0;
+    while (true) {
+      if (step === 0) {
+        if (!(await editSpouseIdentity(draft, dialog, { title }))) return;
+        step = 1;
+      } else if (step === 1) {
+        if (!(await editFamilyIncome(draft, dialog, { title }))) { step = 0; continue; }
+        step = 2;
+      } else if (step === 2) {
+        if (!(await editRetirementAges(draft, dialog, { title }))) { step = 1; continue; }
+        step = 3;
+      } else if (step === 3) {
+        if (!(await editRetirementAccounts(draft, dialog, { owner: 'spouse', title }))) { step = 2; continue; }
+        draft.lastTransaction = { accepted: true, description: `${personName(draft, 'spouse')} joins the household. Cash and Savings are joint accounts.` };
+        draft.milestones = [...(game.portfolio.milestones || []), { year: game.portfolio.year, age: game.portfolio.age, kind: 'marriage', message: draft.lastTransaction.description }];
+        game.portfolio = draft;
+        await dialog.show(draft.lastTransaction.description, { title });
         return;
       }
-      const name = await dialog.prompt("Child's name?", { title: 'Have a kid', defaultValue: `Child ${(p.kids || []).length + 1}` });
-      if (name == null) return;
-      game.portfolio = addKid(p, { name: name || 'Child', age: 0 });
-      await dialog.show(`${name || 'Child'} joins the timeline at age 0. Annual child costs use ${childCostLabel(p.zip)} until age 18.`, { title: 'Family' });
-    } else if (choice === 'marry') {
-      const draft = { ...p, married: true, filingStatus: 'married' };
-      if (!(await editSpouseIdentity(draft, dialog))) return;
-      if (!p.married) {
-        if (!(await editFamilyIncome(draft, dialog, { title: 'Family' }))) return;
-        if (!(await editRetirementAges(draft, dialog, { title: 'Family' }))) return;
-        if (!(await editRetirementAccounts(draft, dialog, { owner: 'spouse', title: 'Family' }))) return;
-      }
-      draft.lastTransaction = { accepted: true, description: `${personName(draft, 'spouse')} ${p.married ? 'details updated' : 'joins the household'}. Cash and Savings are joint accounts.` };
-      draft.milestones = [...(p.milestones || []), { year: p.year, age: p.age, kind: p.married ? 'spouseDetails' : 'marriage', message: draft.lastTransaction.description }];
-      game.portfolio = draft;
-      await dialog.show(draft.lastTransaction.description, { title: 'Family' });
-    } else if (choice === 'care') {
-      const type = await dialog.menu('Child Care', [
-        { label: 'Hire a Nanny', value: 'nanny' }, { label: 'Place in daycare', value: 'daycare' }, { label: 'Back', value: null },
-      ], { title: 'Family' });
-      if (!type) return;
-      const form = await dialog.form(type === 'nanny' ? 'Hire a Nanny' : 'Place in daycare', [
-        { key: 'annualCost', label: 'Annual household child care cost', type: 'money', prefix: '$', defaultValue: '18000' },
-        { key: 'years', label: 'Number of years, starting now', type: 'number', defaultValue: '3' },
-      ], { title: 'Child Care', portfolio: p, subtitle: 'Added to ordinary child costs; grows with inflation.' });
-      if (!form) return;
-      const annualCost = Math.max(0, Number(form.annualCost) || 0);
-      const years = Math.max(1, Math.min(100, Math.round(Number(form.years) || 1)));
-      const existing = p.childcarePlans || [];
-      const plan = { id: `${type}-${p.year}-${existing.length + 1}`, type, annualCost, startYear: p.year,
-        endYearExclusive: p.year + years, entryPriceIndex: p.priceIndex || 1 };
-      game.portfolio = { ...p, childcarePlans: [...existing, plan], lastTransaction: {
-        accepted: true, description: `${type === 'nanny' ? 'Nanny' : 'Daycare'}: ${formatMoneyDisplay(annualCost, p)}/year from ${p.year} through ${p.year + years - 1}.`,
-      } };
-      await dialog.show(game.portfolio.lastTransaction.description, { title: 'Child Care' });
     }
+  }
+
+  /** Have a Kid — mirrors Setup's child name question; always starts at age 0. */
+  async handleHaveKid(game, dialog) {
+    const title = 'Have a Kid';
+    const p = game.portfolio;
+    if ((p.kids || []).length >= 4) {
+      await dialog.show('Four kids is the max for this ledger.', { title });
+      return;
+    }
+    const name = await dialog.prompt('Name of the new child', { title, defaultValue: randomChildName() });
+    if (name == null) return;
+    game.portfolio = addKid(p, { name: name || 'Child', age: 0 });
+    await dialog.show(`${name || 'Child'} joins the timeline at age 0. Annual child costs use ${childCostLabel(p.zip)} until age 18.`, { title });
+  }
+
+  /** Remove a Spouse / divorce — fund-split % (linked fields) over joint Cash/Savings/investments, then property. */
+  async handleDivorce(game, dialog) {
+    const title = 'Family Planning';
+    const p0 = game.portfolio;
+    const spouse = personName(p0, 'spouse');
+    const intro = await dialog.confirm(
+      `End the marriage?\n${spouse} leaves with their own retirement accounts. Your joint Cash, Savings and investments are split by a percentage you choose next.`,
+      { title, yes: 'End it', no: 'Cancel' }
+    );
+    if (!intro) return;
+
+    const homes = p0.homes || [];
+    const sellable = homes.length > 0 && homes.every(h => h.basisKnown !== false);
+    let step = homes.length ? 0 : 1, propertyChoice = homes.length ? null : 'keep', keepPct = 50;
+    let draft = null, total = 0;
+    while (true) {
+      if (step === 0) {
+        const result = await dialog.menu('What happens to your property?', [
+          { label: 'Keep all property (and its debt)', value: 'keep' },
+          ...(sellable ? [{ label: 'Sell all property and split proceeds', value: 'sell' }] : []),
+          { label: 'Back', value: null },
+        ], { title });
+        if (result == null) return;
+        propertyChoice = result;
+        step = 1;
+      } else if (step === 1) {
+        draft = { ...p0 };
+        if (propertyChoice === 'sell') {
+          let failed = false;
+          for (let i = draft.homes.length - 1; i >= 0; i--) {
+            const sold = sellHome(draft, i, { exclusionEligible: false });
+            if (sold.lastTransaction?.accepted === false) {
+              await dialog.show(transactionReason(sold.lastTransaction, draft), { title });
+              failed = true;
+              break;
+            }
+            draft = sold;
+          }
+          if (failed) { if (!homes.length) return; step = 0; continue; }
+        }
+        total = Math.max(0, (draft.cash || 0) + (draft.savings || 0) + (draft.stocksTotal || 0));
+        const result = await dialog.form(
+          `Splitting ${formatMoneyDisplay(total, draft)} of joint Cash, Savings and investments`,
+          [
+            { key: 'pct', label: 'You keep (%)', type: 'percent', defaultValue: String(keepPct) },
+            { key: 'amount', label: 'You keep ($)', type: 'money', defaultValue: String(Math.round(total * keepPct / 100)) },
+          ],
+          {
+            title, portfolio: draft,
+            onFieldChange: (fields, idx) => {
+              const totalDisplay = toDisplayMoney(total, draft);
+              if (idx === 0) {
+                const pct = Math.max(0, Math.min(100, parseFloat(fields[0].value) || 0));
+                fields[1].value = formatMoneyInput(String(Math.round(totalDisplay * pct / 100)));
+              } else {
+                const amt = Math.max(0, Math.min(totalDisplay, parseMoneyInput(fields[1].value)));
+                fields[0].value = totalDisplay > 0 ? ((amt / totalDisplay) * 100).toFixed(1) : '0';
+              }
+            },
+          }
+        );
+        if (!result) { if (!homes.length) return; step = 0; continue; }
+        keepPct = Math.max(0, Math.min(100, Number(result.pct) || 0));
+        step = 2;
+      } else if (step === 2) {
+        const fraction = keepPct / 100;
+        const keepCash = Math.round((draft.cash || 0) * fraction);
+        const keepSavings = Math.round((draft.savings || 0) * fraction);
+        const keepStocks = Math.round((draft.stocksTotal || 0) * fraction);
+        const confirmed = await dialog.confirm(
+          `${spouse} leaves the household with ${(100 - keepPct).toFixed(1)}% of joint Cash/Savings/investments and their own retirement accounts.\n` +
+          `You keep: Cash ${formatMoneyDisplay(keepCash, draft)} · Savings ${formatMoneyDisplay(keepSavings, draft)} · Investments ${formatMoneyDisplay(keepStocks, draft)}`,
+          { title, yes: 'Finalize divorce', no: 'Cancel', distinctCancel: true }
+        );
+        if (confirmed == null) { step = 1; continue; }
+        if (!confirmed) return;
+        const final = { ...draft };
+        final.cash = keepCash;
+        final.savings = keepSavings;
+        if (fraction < 1) {
+          ensureHoldings(final);
+          final.stocksHoldings = final.stocksHoldings.map(h => ({
+            ...h, value: Math.round(h.value * fraction), costBasis: Math.round((h.costBasis || 0) * fraction), shares: h.shares * fraction,
+          }));
+          syncBook(final);
+        }
+        for (const key of Object.keys(final)) if (key.startsWith('spouse')) delete final[key];
+        final.married = false;
+        final.filingStatus = 'single';
+        final.lastTransaction = { accepted: true, description:
+          `${spouse} leaves the household. You keep ${keepPct.toFixed(1)}% of joint Cash, Savings and investments` +
+          (propertyChoice === 'sell' ? ', and all property was sold and split.' : ', and you keep all property.') };
+        final.milestones = [...(p0.milestones || []), { year: p0.year, age: p0.age, kind: 'divorce', message: final.lastTransaction.description }];
+        game.portfolio = final;
+        await dialog.show(final.lastTransaction.description, { title });
+        return;
+      }
+    }
+  }
+
+  /** Child Care — unchanged: hire a nanny or place in daycare for a fixed number of years. */
+  async handleChildCare(game, dialog) {
+    const title = 'Child Care';
+    const p = game.portfolio;
+    const type = await dialog.menu('Child Care', [
+      { label: 'Hire a Nanny', value: 'nanny' }, { label: 'Place in daycare', value: 'daycare' }, { label: 'Back', value: null },
+    ], { title });
+    if (!type) return;
+    const form = await dialog.form(type === 'nanny' ? 'Hire a Nanny' : 'Place in daycare', [
+      { key: 'annualCost', label: 'Annual household child care cost', type: 'money', prefix: '$', defaultValue: '18000' },
+      { key: 'years', label: 'Number of years, starting now', type: 'number', defaultValue: '3' },
+    ], { title, portfolio: p, subtitle: 'Added to ordinary child costs; grows with inflation.' });
+    if (!form) return;
+    const annualCost = Math.max(0, Number(form.annualCost) || 0);
+    const years = Math.max(1, Math.min(100, Math.round(Number(form.years) || 1)));
+    const existing = p.childcarePlans || [];
+    const plan = { id: `${type}-${p.year}-${existing.length + 1}`, type, annualCost, startYear: p.year,
+      endYearExclusive: p.year + years, entryPriceIndex: p.priceIndex || 1 };
+    game.portfolio = { ...p, childcarePlans: [...existing, plan], lastTransaction: {
+      accepted: true, description: `${type === 'nanny' ? 'Nanny' : 'Daycare'}: ${formatMoneyDisplay(annualCost, p)}/year from ${p.year} through ${p.year + years - 1}.`,
+    } };
+    await dialog.show(game.portfolio.lastTransaction.description, { title });
   }
 
   /** Career — choose player/spouse, then Leave / Start a Job / Retire. Back returns to the previous question. */

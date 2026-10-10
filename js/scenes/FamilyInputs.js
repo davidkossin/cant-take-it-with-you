@@ -14,16 +14,16 @@ export function householdSalary(p) {
 }
 
 /** Cancel leaves the original household unchanged. */
-export async function editSpouseIdentity(p, dialog) {
+export async function editSpouseIdentity(p, dialog, { title = 'Family' } = {}) {
   let details;
   while (true) {
     details = await dialog.form('Spouse details', [
     { key: 'name', label: 'Spouse name', type: 'text', defaultValue: p.spouseName || 'Spouse' },
     { key: 'age', label: 'Spouse age', type: 'number', defaultValue: p.spouseAge == null ? '' : String(p.spouseAge) },
-  ], { title: 'Family', portfolio: p });
+  ], { title, portfolio: p });
     if (!details) return false;
     if (Number.isFinite(Number(details.age)) && Number(details.age) >= 18 && Number(details.age) <= 110) break;
-    await dialog.show('Enter the spouse’s actual age (18–110).', { title: 'Family' });
+    await dialog.show('Enter the spouse’s actual age (18–110).', { title });
   }
   // Length is asked next, so the preview uses the spouse's current length.
   const look = await dialog.palette('Spouse appearance', [
@@ -31,11 +31,11 @@ export async function editSpouseIdentity(p, dialog) {
       selected: normalizeHairColor(p.spouseHairColor) },
     { key: 'shirtColor', label: 'Shirt color', kind: 'shirt', colors: SHIRT_PALETTE,
       selected: normalizeShirtColor(p.spouseShirtColor) },
-  ], { title: 'Family', hairLength: p.spouseHairLength === 'long' ? 'long' : 'short', backValue: null });
+  ], { title, hairLength: p.spouseHairLength === 'long' ? 'long' : 'short', backValue: null });
   if (look == null) return false;
   const length = await dialog.menu('Spouse hair length', [
     { label: 'Short', value: 'short' }, { label: 'Long', value: 'long' }, { label: 'Back', value: null },
-  ], { title: 'Family', selected: p.spouseHairLength === 'long' ? 1 : 0 });
+  ], { title, selected: p.spouseHairLength === 'long' ? 1 : 0 });
   if (length == null) return false;
   p.spouseName = String(details.name || 'Spouse').trim().slice(0, 28) || 'Spouse';
   p.spouseAge = Math.max(18, Math.min(110, Math.round(Number(details.age) || 18)));

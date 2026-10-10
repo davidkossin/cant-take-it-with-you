@@ -69,7 +69,7 @@ Child costs at ages 0–17 are a flat state average annual cost of raising a chi
 
 | Area | Implementation / limits |
 |---|---|
-| Filing | Single and married filing jointly. Separate owner wages for payroll caps. Other statuses unsupported. |
+| Filing | Single and married filing jointly. Separate owner wages for payroll caps. Other statuses unsupported. Family Planning's divorce resets filing status to single and the departing spouse's separately-owned wages/accounts stop being processed from that point on; joint Cash, Savings and investments split by a player-chosen percentage are a non-taxable transfer (no gain/loss recorded), matching the tax treatment of a property settlement incident to divorce. |
 | Federal ordinary income | Published 2025/2026 progressive thresholds and standard deductions; additional age-65 deduction; eligible senior enhancement sunsets after 2028. |
 | Capital gains | Short-/long-term netting, annual $3,000 net-loss deduction and character-preserving carryover; 0/15/20% preferred-income stacking. |
 | Income sources | W-2 compensation, savings interest, qualified/ordinary dividends, realized gains, traditional withdrawals/pensions, taxable benefit portion and positive rental profit. |
