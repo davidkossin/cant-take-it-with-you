@@ -3,7 +3,7 @@
  * Supports keyboard and mouse/pointer hit-testing for options.
  */
 
-import { PALETTE, FRAME_W, FRAME_H, KEYS } from '../config.js';
+import { PALETTE, FRAME_W, FRAME_H, HUD_H, KEYS } from '../config.js';
 import { makeDialogChrome, makePlayerSprite, hairTones, shirtTones } from './Assets.js';
 import { captureMoneyContext, toDisplayMoney, fromDisplayMoney, moneyUnitSubtitle } from '../finance/DollarBasis.js';
 export { formatMoneyDisplay } from '../finance/DollarBasis.js';
@@ -61,6 +61,73 @@ export function sanitizeTextInput(raw) {
   return String(raw ?? '').slice(0, 28);
 }
 
+/**
+ * Rich text: **bold** and _italic_ runs in authored copy (body text, option labels/subtext,
+ * form field labels), never in a player-typed value. Press Start 2P is monospace, so wrapping
+ * by character count (as before) stays pixel-accurate; only drawing needs real measurement,
+ * and draw() always has a live canvas context (unlike the constructors below, which run in
+ * plain Node tests with no document/canvas available).
+ */
+const FONT_FAMILY = '"Press Start 2P", monospace';
+function richFont(px, { bold = false, italic = false } = {}) {
+  return `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${px}px ${FONT_FAMILY}`;
+}
+/** Split one line of text into styled runs. Unmatched markers are left literal. */
+function parseRuns(text) {
+  const runs = [];
+  const re = /\*\*(.+?)\*\*|_(.+?)_/g;
+  let last = 0, m;
+  while ((m = re.exec(String(text)))) {
+    if (m.index > last) runs.push({ text: text.slice(last, m.index), bold: false, italic: false });
+    runs.push(m[1] != null ? { text: m[1], bold: true, italic: false } : { text: m[2], bold: false, italic: true });
+    last = re.lastIndex;
+  }
+  if (last < text.length || !runs.length) runs.push({ text: String(text).slice(last), bold: false, italic: false });
+  return runs;
+}
+const richWords = run => run.text.split(/\s+/).filter(Boolean).map(w => ({ text: w, bold: run.bold, italic: run.italic }));
+/** Word-wrap rich text by character budget; returns lines of styled word tokens. */
+function wrapRich(text, maxChars) {
+  const lines = [];
+  for (const para of String(text).split('\n')) {
+    const words = parseRuns(para).flatMap(richWords);
+    if (!words.length) { lines.push([]); continue; }
+    let cur = [], curLen = 0;
+    for (const word of words) {
+      const next = cur.length ? curLen + 1 + word.text.length : word.text.length;
+      if (cur.length && next > maxChars) { lines.push(cur); cur = [word]; curLen = word.text.length; }
+      else { cur.push(word); curLen = next; }
+    }
+    if (cur.length) lines.push(cur);
+  }
+  return lines.length ? lines : [[]];
+}
+/** Draw one unwrapped line of authored text, styled run by run (no line-breaking). */
+function drawRichText(ctx, text, x, y, px, color) {
+  let cx = x;
+  for (const run of parseRuns(text)) {
+    ctx.font = richFont(px, run);
+    ctx.fillStyle = color;
+    ctx.fillText(run.text, cx, y);
+    cx += ctx.measureText(run.text).width;
+  }
+  return cx - x;
+}
+/** Draw one already-wrapped rich line (word tokens from wrapRich), word by word. */
+function drawRichLine(ctx, words, x, y, px, color) {
+  ctx.font = richFont(px);
+  const spaceW = ctx.measureText(' ').width;
+  let cx = x;
+  for (const word of words) {
+    ctx.font = richFont(px, word);
+    ctx.fillStyle = color;
+    ctx.fillText(word.text, cx, y);
+    cx += ctx.measureText(word.text).width + spaceW;
+  }
+}
+const OPTION_BASE_H = 40;
+const OPTION_SUB_LINE_H = 22;
+
 export class Dialog {
   constructor() {
     this.active = false;
@@ -101,7 +168,7 @@ export class Dialog {
       this.mode = 'text';
       this.title = title;
       this.subtitle = subtitle;
-      this.lines = wrapText(text, 40);
+      this.lines = wrapRich(text, 40);
       this.options = [{ label: 'OK', value: true }];
       this.selected = 0;
       this.resolve = resolve;
@@ -116,7 +183,7 @@ export class Dialog {
       this.mode = 'menu';
       this.title = title;
       this.subtitle = subtitle;
-      this.lines = wrapText(text, 40);
+      this.lines = wrapRich(text, 40);
       this.options = options;
       this.selected = Math.max(0, Math.min(options.length - 1, selected));
       this.resolve = resolve;
@@ -150,7 +217,7 @@ export class Dialog {
       this.title = title;
       this._moneyContext = captureMoneyContext(portfolio);
       this.subtitle = type === 'money' ? moneySubtitle(subtitle, this._moneyContext) : subtitle;
-      this.lines = wrapText(text, 40);
+      this.lines = wrapRich(text, 40);
       this.promptType = type;
       this.promptPrefix = prefix || (type === 'money' ? '$' : '');
       let initial = String(defaultValue ?? '');
@@ -182,7 +249,7 @@ export class Dialog {
       this.title = title;
       this._moneyContext = captureMoneyContext(portfolio);
       this.subtitle = (fields || []).some(f => f.type === 'money') ? moneySubtitle(subtitle, this._moneyContext) : subtitle;
-      this.lines = wrapText(text || '', 40);
+      this.lines = wrapRich(text || '', 40);
       this.fields = (fields || []).map((f) => {
         let v = String(f.defaultValue ?? '');
         const type = f.type || 'text';
@@ -221,7 +288,7 @@ export class Dialog {
       this.mode = 'multi';
       this.title = title;
       this.subtitle = subtitle;
-      this.lines = wrapText(text, 40);
+      this.lines = wrapRich(text, 40);
       this.multiValues = new Set(selected || []);
       this.options = [
         ...(items || []).map((it) => ({
@@ -259,7 +326,7 @@ export class Dialog {
       this.mode = 'palette';
       this.title = title;
       this.subtitle = subtitle;
-      this.lines = wrapText(text, 40);
+      this.lines = wrapRich(text, 40);
       this.palGroups = (groups || []).map((g) => ({
         key: g.key,
         label: g.label,
@@ -390,7 +457,7 @@ export class Dialog {
     this.loadingMessage = message;
     this.title = '';
     this.subtitle = '';
-    this.lines = wrapText(message, 40);
+    this.lines = wrapRich(message, 40);
     this.options = [];
     this.resolve = null;
     this.chrome = null;
@@ -431,11 +498,17 @@ export class Dialog {
     return this._fieldBoxRects[index] || null;
   }
 
+  /** Per-option row metrics: base label height, plus wrapped subtext lines (if any). */
+  _optionMetrics() {
+    return this.options.map((opt) => {
+      const subLines = opt.subtext ? wrapRich(opt.subtext, 64) : [];
+      return { subLines, h: OPTION_BASE_H + (subLines.length ? 6 + subLines.length * OPTION_SUB_LINE_H : 0) };
+    });
+  }
+
   _layout() {
-    const boxW = Math.min(1500, FRAME_W - 120);
+    const boxW = Math.min(1640, FRAME_W - 200);
     const lineH = 28;
-    const hasSub = this.options.some((o) => o.subtext) || !!this.subtitle;
-    const optH = hasSub || this.mode === 'multi' ? 58 : 40;
     const pad = 36;
     const textH = this.lines.length * lineH;
     const subH = this.subtitle ? 28 : 0;
@@ -444,21 +517,23 @@ export class Dialog {
       this.mode === 'form'
         ? this.fields.reduce((s, f) => s + (f.subtitle ? 78 : 58), 0) + 8
         : 0;
-    const optsH = this.mode === 'palette' ? this._palBlockH(optH) + 8 : this.options.length * optH + 8;
+    const optsH = this.mode === 'palette' ? this._palBlockH(OPTION_BASE_H) + 8
+      : this._optionMetrics().reduce((s, m) => s + m.h, 0) + 8;
     const titleH = this.title ? 44 : 0;
-    const boxH = Math.min(
-      FRAME_H - 40,
-      pad * 2 + titleH + subH + textH + promptH + formH + optsH + 16
-    );
+    // Stay below the HUD band and above a bottom margin; grow within that space, not the full frame.
+    const topMargin = 28, bottomMargin = 28;
+    const availTop = HUD_H + topMargin;
+    const availH = FRAME_H - availTop - bottomMargin;
+    const boxH = Math.min(availH, pad * 2 + titleH + subH + textH + promptH + formH + optsH + 16);
     const x = Math.floor((FRAME_W - boxW) / 2);
-    const y = Math.floor((FRAME_H - boxH) / 2);
+    const y = availTop + Math.floor((availH - boxH) / 2);
     let ty = y + pad;
     if (this.title) ty += titleH;
     if (this.subtitle) ty += subH;
     ty += textH;
     let promptY = ty;
     if (this.mode === 'prompt') promptY = ty + 8;
-    return { boxW, boxH, pad, lineH, optH, titleH, textH, subH, x, y, promptY, formH };
+    return { boxW, boxH, pad, lineH, optH: OPTION_BASE_H, titleH, textH, subH, x, y, promptY, formH };
   }
 
   /** True when (lx, ly) is on a text entry box (prompt field or a form field). */
@@ -721,7 +796,7 @@ export class Dialog {
   draw(ctx) {
     if (!this.active) return;
     const layout = this._layout();
-    const { boxW, boxH, pad, optH, x, y } = layout;
+    const { boxW, boxH, pad, x, y } = layout;
 
     if (!this.chrome || this.chrome.width !== boxW || this.chrome.height !== boxH) {
       this.chrome = makeDialogChrome(boxW, boxH);
@@ -739,17 +814,8 @@ export class Dialog {
       ty += layout.titleH;
     }
     if (this.subtitle) {
-      ctx.font = '14px "Press Start 2P", monospace';
-      ctx.fillStyle = '#a89878';
-      ctx.fillText(this.subtitle.slice(0, 64), x + pad, ty);
-      ctx.font = '18px "Press Start 2P", monospace';
+      drawRichText(ctx, this.subtitle.slice(0, 64), x + pad, ty, 14, '#a89878');
       ty += layout.subH;
-    }
-
-    ctx.fillStyle = PALETTE.uiText;
-    for (const line of this.lines) {
-      ctx.fillText(line, x + pad, ty);
-      ty += layout.lineH;
     }
 
     this._fieldHitRects = [];
@@ -761,6 +827,11 @@ export class Dialog {
       const dots = '.'.repeat(Math.floor(performance.now() / 400) % 4);
       ctx.fillText(this.loadingMessage + dots, x + pad, ty + 12);
       return;
+    }
+
+    for (const line of this.lines) {
+      drawRichLine(ctx, line, x + pad, ty, 18, PALETTE.uiText);
+      ty += layout.lineH;
     }
 
     if (this.mode === 'prompt') {
@@ -780,9 +851,7 @@ export class Dialog {
       ty += 4;
       this.fields.forEach((f, i) => {
         const focused = i === this.fieldIndex;
-        ctx.font = '14px "Press Start 2P", monospace';
-        ctx.fillStyle = focused ? PALETTE.gold : '#a89878';
-        ctx.fillText(f.label, x + pad, ty);
+        drawRichText(ctx, f.label, x + pad, ty, 14, focused ? PALETTE.gold : '#a89878');
         ty += 20;
         ctx.fillStyle = '#000';
         ctx.fillRect(x + pad, ty, boxW - pad * 2, 36);
@@ -805,9 +874,7 @@ export class Dialog {
         this._fieldBoxRects[i] = { x: x + pad, y: ty, w: boxW - pad * 2, h: 36 };
         ty += 40;
         if (f.subtitle) {
-          ctx.font = '12px "Press Start 2P", monospace';
-          ctx.fillStyle = '#777';
-          ctx.fillText(f.subtitle.slice(0, 70), x + pad, ty);
+          drawRichText(ctx, f.subtitle.slice(0, 70), x + pad, ty, 12, '#777');
           ty += 18;
         }
       });
@@ -819,40 +886,39 @@ export class Dialog {
       ty += 6;
     }
 
+    const metrics = this._optionMetrics();
     this.options.forEach((opt, i) => {
       const selected = i === this.selected;
       const checked =
         this.mode === 'multi' && opt.toggle && this.multiValues.has(opt.value);
+      const h = metrics[i].h;
       if (selected) {
         ctx.fillStyle = 'rgba(200,160,80,0.25)';
-        ctx.fillRect(x + pad - 2, ty - 1, boxW - pad * 2 + 4, optH);
+        ctx.fillRect(x + pad - 2, ty - 1, boxW - pad * 2 + 4, h);
         ctx.fillStyle = PALETTE.gold;
-        ctx.font = '18px "Press Start 2P", monospace';
+        ctx.font = richFont(18);
         ctx.fillText('▶', x + pad, ty);
-      } else {
-        ctx.fillStyle = PALETTE.uiText;
-        ctx.font = '18px "Press Start 2P", monospace';
       }
       let label = opt.label;
       if (this.mode === 'multi' && opt.toggle) {
         label = `${checked ? '[X]' : '[ ]'} ${opt.label}`;
       }
-      ctx.fillText(label, x + pad + 36, ty);
-      if (opt.subtext) {
-        ctx.font = '14px "Press Start 2P", monospace';
-        ctx.fillStyle = selected ? '#c8b878' : '#888070';
-        const sub = wrapText(opt.subtext, 64);
-        ctx.fillText(sub[0] || '', x + pad + 36, ty + 28);
-        ctx.font = '18px "Press Start 2P", monospace';
+      drawRichText(ctx, label, x + pad + 36, ty, 18, selected ? PALETTE.gold : PALETTE.uiText);
+      if (metrics[i].subLines.length) {
+        let sy = ty + 28;
+        for (const subLine of metrics[i].subLines) {
+          drawRichLine(ctx, subLine, x + pad + 36, sy, 14, selected ? '#c8b878' : '#888070');
+          sy += OPTION_SUB_LINE_H;
+        }
       }
       this._optionHitRects.push({
         index: i,
         x: x + pad - 2,
         y: ty - 1,
         w: boxW - pad * 2 + 4,
-        h: optH,
+        h,
       });
-      ty += optH;
+      ty += h;
     });
   }
 
@@ -1009,23 +1075,3 @@ function moneySubtitle(subtitle, context) {
   return subtitle ? `${units} · ${subtitle}` : units;
 }
 
-function wrapText(text, maxChars) {
-  const raw = String(text);
-  const paragraphs = raw.split('\n');
-  const lines = [];
-  for (const para of paragraphs) {
-    const words = para.split(/\s+/).filter(Boolean);
-    let cur = '';
-    for (const w of words) {
-      if ((cur + ' ' + w).trim().length > maxChars) {
-        if (cur) lines.push(cur);
-        cur = w;
-      } else {
-        cur = (cur + ' ' + w).trim();
-      }
-    }
-    if (cur) lines.push(cur);
-    if (!words.length) lines.push('');
-  }
-  return lines.length ? lines : [''];
-}
