@@ -177,7 +177,14 @@ export class Dialog {
     });
   }
 
-  menu(text, options, { title = '', subtitle = '', selected = 0 } = {}) {
+  /**
+   * @param {object} [opts]
+   * @param {*} [opts.escValue] what Escape/B resolves to. Default: the first option valued
+   *   false/null/'__back' (or the last option if none), same as before this existed. Pass
+   *   this when an option's real value (e.g. confirm()'s "No" = false) would otherwise be
+   *   indistinguishable from "the player wants to go back", which they are not the same thing.
+   */
+  menu(text, options, { title = '', subtitle = '', selected = 0, escValue } = {}) {
     return new Promise((resolve) => {
       this.active = true;
       this.mode = 'menu';
@@ -186,20 +193,22 @@ export class Dialog {
       this.lines = wrapRich(text, 40);
       this.options = options;
       this.selected = Math.max(0, Math.min(options.length - 1, selected));
+      this._escValue = escValue;
       this.resolve = resolve;
       this.chrome = null;
       this.fields = [];
     });
   }
 
-  confirm(text, { title = 'Confirm', yes = 'Yes', no = 'No', subtitle = '' } = {}) {
+  /** @param {boolean} [opts.distinctCancel] Escape resolves to null, distinct from Yes/No. */
+  confirm(text, { title = 'Confirm', yes = 'Yes', no = 'No', subtitle = '', distinctCancel = false } = {}) {
     return this.menu(
       text,
       [
         { label: yes, value: true },
         { label: no, value: false },
       ],
-      { title, subtitle }
+      { title, subtitle, escValue: distinctCancel ? null : undefined }
     );
   }
 
@@ -767,10 +776,13 @@ export class Dialog {
       if (this.mode === 'prompt' || this.mode === 'form') this.close(null);
       else if (this.mode === 'multi') this.close(null);
       else if (this.mode === 'menu' || this.mode === 'confirm') {
-        const cancel = this.options.find(
-          (o) => o.value === false || o.value === null || o.value === '__back'
-        );
-        this.close(cancel ? cancel.value : this.options[this.options.length - 1].value);
+        if (this._escValue !== undefined) this.close(this._escValue);
+        else {
+          const cancel = this.options.find(
+            (o) => o.value === false || o.value === null || o.value === '__back'
+          );
+          this.close(cancel ? cancel.value : this.options[this.options.length - 1].value);
+        }
       }
       e.preventDefault();
       return true;

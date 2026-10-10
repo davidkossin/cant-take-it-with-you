@@ -11,6 +11,8 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 ## [Unreleased]
 
 ### Added
+- `dialog.confirm(..., { distinctCancel: true })`: Escape/B now resolves to a value distinct from either Yes or No, so a Decision Room flow can tell "the player chose No" apart from "the player wants to go back" (previously both resolved to `false`, indistinguishable). Existing callers are unaffected (defaults to the old behavior).
+- Make a Large Purchase (renamed from "Make Large Purchase") is rebuilt on a step index, so Back at any question returns to the previous one instead of exiting the whole flow; first prompt reworded to "What is your Purchase?" and "($)" dropped from the amount question.
 - A standing stock-sale plan: a yearly amount (today's dollars, grows with inflation) sold proportionally across liquid holdings or from one chosen holding, in equal monthly parts paid into Cash, taxed as capital gains through the normal year-end settlement. Like the existing standing retirement withdrawal, this is the player's own instruction (set up at the Stock Broker or Career teller, cancellable at any time) — not the engine deciding on its own to sell; it's rejected at setup from a holding with unverified basis, the same guard a manual sale already has. Engine version bumped to 2.3.0.
 - Dialog boxes support inline `**bold**`/`_italic_` markup in authored text (body copy, option labels/subtext, form field labels), replacing the single flat font weight/style used everywhere.
 - SetupScene's home details form now asks for a property name, stored as its label everywhere homes are listed.

@@ -446,73 +446,7 @@ export class RoomScene {
     } else if (action === 'kid') {
       await this.handleFamily(game, dialog);
     } else if (action === 'purchase') {
-      const itemName = await dialog.prompt('What are you buying? (name)', {
-        title: 'Make Large Purchase',
-        defaultValue: 'New car',
-      });
-      if (itemName == null) return;
-      const label = String(itemName).trim() || 'Large Purchase';
-
-      const amt = await dialog.prompt('Purchase amount ($)?', {
-        title: label,
-        defaultValue: '5000',
-        type: 'money',
-      });
-      if (amt == null) return;
-      const price = Math.max(0, amt);
-
-      const financed = await dialog.confirm('Is this purchase being financed?', {
-        title: label,
-        yes: 'Yes — finance it',
-        no: 'No — pay in full',
-      });
-      if (financed == null) return;
-
-      if (!financed) {
-        game.portfolio = largePurchase(game.portfolio, price, { label });
-        await dialog.show(
-          transactionReason(game.portfolio.lastTransaction, game.portfolio) || `Purchased ${label} — paid in full from Cash.`,
-          { title: 'Make Large Purchase' }
-        );
-        return;
-      }
-
-      const down = await dialog.prompt('Down payment ($)?', {
-        title: label,
-        defaultValue: String(Math.round(price * 0.2)),
-        type: 'money',
-      });
-      if (down == null) return;
-
-      const ratePct = await dialog.prompt('Interest rate (%)?', {
-        title: label,
-        defaultValue: '6.9',
-        type: 'percent',
-      });
-      if (ratePct == null) return;
-
-      const term = await dialog.prompt('Loan term (years)?', {
-        title: label,
-        defaultValue: '5',
-        type: 'number',
-      });
-      if (term == null) return;
-
-      const downCap = Math.max(0, Math.min(price, down || 0));
-      const principal = price - downCap;
-      game.portfolio = largePurchase(game.portfolio, price, {
-        financed: true,
-        downPayment: downCap,
-        rate: (ratePct || 0) / 100,
-        term: term ?? 5,
-        label,
-      });
-      await dialog.show(
-        transactionReason(game.portfolio.lastTransaction, game.portfolio) || `Purchased ${label}.\n` +
-          `Down ${formatMoneyDisplay(downCap)}; financed ${formatMoneyDisplay(principal)} ` +
-          `at ${ratePct}% for ${Math.max(1, Math.round(term ?? 5))} yr.`,
-        { title: 'Make Large Purchase' }
-      );
+      await this.handleLargePurchase(game, dialog);
     } else if (action === 'borrow') {
       await this.handleBorrow(game, dialog);
     } else if (action === 'portfolio') {
@@ -570,6 +504,71 @@ export class RoomScene {
         accepted: true, description: `${type === 'nanny' ? 'Nanny' : 'Daycare'}: ${formatMoneyDisplay(annualCost, p)}/year from ${p.year} through ${p.year + years - 1}.`,
       } };
       await dialog.show(game.portfolio.lastTransaction.description, { title: 'Child Care' });
+    }
+  }
+
+  /** Make a Large Purchase — a step index so Back always returns to the previous question. */
+  async handleLargePurchase(game, dialog) {
+    const title = 'Make a Large Purchase';
+    let step = 0, itemName = 'New car', price = 5000, financed = false, down = 0, ratePct = 6.9, term = 5;
+    while (true) {
+      const label = String(itemName).trim() || 'Large Purchase';
+      if (step === 0) {
+        const result = await dialog.prompt('What is your Purchase?', { title, defaultValue: itemName });
+        if (result == null) return;
+        itemName = result;
+        step = 1;
+      } else if (step === 1) {
+        const result = await dialog.prompt('Purchase amount?', { title: label, defaultValue: String(price), type: 'money' });
+        if (result == null) { step = 0; continue; }
+        price = Math.max(0, result);
+        step = 2;
+      } else if (step === 2) {
+        const result = await dialog.confirm('Is this purchase being financed?', {
+          title: label, yes: 'Yes — finance it', no: 'No — pay in full', distinctCancel: true,
+        });
+        if (result == null) { step = 1; continue; }
+        financed = result;
+        step = financed ? 3 : 10;
+      } else if (step === 3) {
+        const result = await dialog.prompt('Down payment?', {
+          title: label, defaultValue: String(down || Math.round(price * 0.2)), type: 'money',
+        });
+        if (result == null) { step = 2; continue; }
+        down = Math.max(0, result);
+        step = 4;
+      } else if (step === 4) {
+        const result = await dialog.prompt('Interest rate (%)?', { title: label, defaultValue: String(ratePct), type: 'percent' });
+        if (result == null) { step = 3; continue; }
+        ratePct = result;
+        step = 5;
+      } else if (step === 5) {
+        const result = await dialog.prompt('Loan term (years)?', { title: label, defaultValue: String(term), type: 'number' });
+        if (result == null) { step = 4; continue; }
+        term = result;
+        step = 10;
+      } else if (step === 10) {
+        if (!financed) {
+          game.portfolio = largePurchase(game.portfolio, price, { label });
+          await dialog.show(
+            transactionReason(game.portfolio.lastTransaction, game.portfolio) || `Purchased ${label} — paid in full from Cash.`,
+            { title }
+          );
+          return;
+        }
+        const downCap = Math.max(0, Math.min(price, down || 0));
+        const principal = price - downCap;
+        game.portfolio = largePurchase(game.portfolio, price, {
+          financed: true, downPayment: downCap, rate: (ratePct || 0) / 100, term: term ?? 5, label,
+        });
+        await dialog.show(
+          transactionReason(game.portfolio.lastTransaction, game.portfolio) || `Purchased ${label}.\n` +
+            `Down ${formatMoneyDisplay(downCap)}; financed ${formatMoneyDisplay(principal)} ` +
+            `at ${ratePct}% for ${Math.max(1, Math.round(term ?? 5))} yr.`,
+          { title }
+        );
+        return;
+      }
     }
   }
 
