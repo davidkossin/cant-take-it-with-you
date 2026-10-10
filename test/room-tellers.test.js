@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { household } from './fixtures.js';
 import { RoomScene } from '../js/scenes/RoomScene.js';
+import { getDifficulty } from '../js/finance/Difficulty.js';
 
 /**
  * Scripts dialog.prompt/confirm/menu/form answers in call order; dialog.show just logs and
@@ -21,7 +22,10 @@ class ScriptedDialog {
   form(text, fields, opts) { return Promise.resolve(this._next('form', text, opts)); }
   multiSelect(text, items, opts) { return Promise.resolve(this._next('multiSelect', text, opts)); }
   show(text, opts) { this.calls.push({ kind: 'show', text, title: opts?.title }); return Promise.resolve(true); }
+  showLoading() {}
+  hideLoading() {}
 }
+const STANDARD = getDifficulty('standard');
 
 test('Make a Large Purchase: Back at the amount step re-asks the name, not exits the flow', async () => {
   const game = { portfolio: household({ cash: 100000 }) };
@@ -152,6 +156,76 @@ test('Withdraw from Retirement Fund: declining the early-withdrawal penalty retu
   assert.equal(game.portfolio.k401Balance, 50000); // untouched -- the 401(k) path was declined
   assert.equal(game.portfolio.rothBalance, 15000); // 20000 - 5000
   assert.equal(game.portfolio.lastWithdrawal.account, 'roth');
+});
+
+test('Stock Broker: the main menu shows portfolio value with % change since the start of the game', async () => {
+  const game = { portfolio: household({ stocksTotal: 10000, stocksCostBasis: 10000 }) };
+  game.portfolio.stocksTotal = 12000; // simulated growth; initialStocksTotal is captured once at creation
+  const dialog = new ScriptedDialog([null]); // Done immediately
+  await new RoomScene().handleStockBroker(game, dialog, STANDARD);
+  const menuText = dialog.calls.find(c => c.kind === 'menu').text;
+  assert.match(menuText, /\$12,000/);
+  assert.match(menuText, /\+20\.0% since start/);
+});
+
+test('Buy Stock: a specific ticker entered and priced manually mirrors Setup\'s ticker/price/growth-vol questions', async () => {
+  const game = { portfolio: household({ cash: 100000 }) };
+  const dialog = new ScriptedDialog([
+    'TSLA',  // ticker
+    false,   // look up online? No, enter manually
+    250,     // manual price
+    2000,    // amount to invest
+    { growth: 8, vol: 20 }, // expected return model
+    true,    // confirm Buy
+  ]);
+  await new RoomScene().handleBuySpecificStock(game, dialog);
+  const holding = game.portfolio.stocksHoldings.find(h => h.ticker === 'TSLA');
+  assert.equal(holding.value, 2000);
+  assert.equal(holding.costBasis, 2000);
+  assert.equal(holding.price, 250);
+  assert.equal(holding.growth, .08);
+  assert.equal(holding.volatility, .2);
+  assert.equal(game.portfolio.cash, 98000);
+});
+
+test('Sell Stock: selecting a holding, overriding its price, and the linked $/% fields produce a tax-correct, unscaled-basis sale', async () => {
+  const game = { portfolio: household({
+    cash: 0, stocksTotal: 10000, stocksCostBasis: 5000,
+    stocksHoldings: [{ ticker: 'AAPL', value: 10000, costBasis: 5000, shares: 100, price: 100, holdingPeriod: 'long' }],
+  }) };
+  const dialog = new ScriptedDialog([
+    'AAPL',  // which holding
+    120,     // override the $100 tracked price to $120
+    { dollars: 5000, percent: 50 }, // linked $/% form: sell half the holding (at the tracked price)
+    true,    // confirm the sale
+  ]);
+  await new RoomScene().handleSellStock(game, dialog, STANDARD);
+  const holding = game.portfolio.stocksHoldings.find(h => h.ticker === 'AAPL');
+  assert.equal(holding.value, 5000); // half the tracked value left, not rescaled by the price override
+  assert.equal(holding.costBasis, 2500);
+  const confirmText = dialog.calls.find(c => c.kind === 'confirm').text;
+  assert.match(confirmText, /Sell \$6,000/); // credited at the overridden $120 price
+  assert.match(confirmText, /Realized gain\/loss: \$3,500/);
+});
+
+test('Sell Stock: Back at the price-override step returns to holding choice, and Back on the $/% form returns to the price', async () => {
+  const game = { portfolio: household({
+    cash: 0, stocksTotal: 10000, stocksCostBasis: 5000,
+    stocksHoldings: [
+      { ticker: 'AAPL', value: 10000, costBasis: 5000, shares: 100, price: 100, holdingPeriod: 'long' },
+      { ticker: 'MSFT', value: 4000, costBasis: 1000, shares: 20, price: 200, holdingPeriod: 'long' },
+    ],
+  }) };
+  const dialog = new ScriptedDialog([
+    'AAPL', null,              // price step -> Back to holding choice
+    'AAPL', 100, null,         // $/% form -> Back to the price step
+    100, { dollars: 2000, percent: 20 }, true,
+  ]);
+  await new RoomScene().handleSellStock(game, dialog, STANDARD);
+  const menus = dialog.calls.filter(c => c.kind === 'menu').length;
+  assert.equal(menus, 2); // holding choice re-asked once after Back
+  const holding = game.portfolio.stocksHoldings.find(h => h.ticker === 'AAPL');
+  assert.equal(holding.value, 8000);
 });
 
 test('Borrow / Loan: Escape at the HELOC summary goes back to the term question; explicit Cancel exits cleanly', async () => {

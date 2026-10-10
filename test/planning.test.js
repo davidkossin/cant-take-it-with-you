@@ -195,6 +195,19 @@ test('nothing is sold automatically; a player sale consumes lots and settles gai
   assert.equal(annual.statement.income.longGains,20000);assert.ok(annual.statement.income.taxPaid>=sale.tax.total);
   close(annual.statement.reconciliation.difference,0);
 });
+test('sellStock priceOverrideRatio rescales the cash and gain credited, never the fraction of shares/basis removed',()=>{
+  const p=household({cash:0,stocksTotal:10000,stocksCostBasis:5000,
+    stocksHoldings:[{ticker:'AAPL',value:10000,costBasis:5000,shares:100,price:100,holdingPeriod:'long'}]});
+  // Selling 50% of the holding at the tracked $100 price, then crediting cash as if executed at $120:
+  // half the shares/basis still leave (the player chose "50%"), but the cash and gain scale with price.
+  const sale=sellStock(p,{proceeds:5000,holdingId:'AAPL',priceOverrideRatio:1.2});
+  assert.equal(sale.basis,2500);assert.equal(sale.proceeds,6000);
+  assert.equal(sale.gains,3500);assert.equal(sale.longGains,3500);assert.equal(sale.shortGains,0);
+  const holding=sale.state.stocksHoldings.find(h=>h.ticker==='AAPL');
+  assert.equal(holding.value,5000);assert.equal(holding.costBasis,2500);
+  const unscaled=sellStock(p,{proceeds:5000,holdingId:'AAPL'});
+  assert.equal(unscaled.proceeds,5000);assert.equal(unscaled.gains,2500);
+});
 test('home purchase closing costs and borrowing obey balance sheet conservation',()=>{
   const p=household({cash:100000,stocksTotal:100000,stocksCostBasis:100000});
   const home=buyHome(p,{value:300000,downPayment:60000,rate:0,term:30});

@@ -52,8 +52,9 @@ import {
 import { getDifficulty } from '../finance/Difficulty.js';
 import { commitRoomDecisions, currentNode, westReturnHallway, jumpToHallwayNode } from '../state/GameState.js';
 import { autoSave } from '../state/SaveSystem.js';
-import { formatMoneyDisplay } from '../render/Dialog.js';
-import { setMoneyContext } from '../finance/DollarBasis.js';
+import { formatMoneyDisplay, formatMoneyInput, parseMoneyInput } from '../render/Dialog.js';
+import { setMoneyContext, toDisplayMoney } from '../finance/DollarBasis.js';
+import { lookupStockWithLoading } from '../finance/stockQuotes.js';
 import { ownerAge, ownerKey } from '../finance/Household.js';
 import { log as debugLog } from '../debug/Logger.js';
 
@@ -372,27 +373,7 @@ export class RoomScene {
         );
       }
     } else if (action === 'stock') {
-      const mode = await dialog.menu(
-        `Portfolio: ${formatMoneyDisplay(p.stocksTotal || 0)}`,
-        [
-          { label: 'Buy stock', value: 'buy' },
-          { label: 'Sell stock', value: 'sell' },
-          { label: 'Never mind', value: null },
-        ],
-        { title: 'Buy/Sell Stock' }
-      );
-      if (mode === 'buy') {
-        const amt = await dialog.prompt('Buy how much ($)?', {
-          title: 'Buy Stock',
-          defaultValue: '1000',
-          type: 'money',
-        });
-        if (amt == null) return;
-        game.portfolio = buyStock(game.portfolio, Math.max(0, amt));
-        await dialog.show(transactionReason(game.portfolio.lastTransaction, game.portfolio) || 'Broad-market shares purchased; basis updated.', { title: 'Buy Stock' });
-      } else if (mode === 'sell') {
-        await this.handleSellStock(game, dialog, diff);
-      }
+      await this.handleStockBroker(game, dialog, diff);
     } else if (action === 'job') {
       await this.handleCareer(game, dialog);
     } else if (action === 'kid') {
@@ -1171,53 +1152,231 @@ Cash received: ${money(preview.netCash)}`, {
     }
   }
 
+  /** Stock Broker — portfolio summary (+/- since game start), Buy, Sell, and the standing stock-sale plan. */
+  async handleStockBroker(game, dialog, diff) {
+    const title = 'Stock Broker';
+    while (true) {
+      const p = game.portfolio, now = p.stocksTotal || 0, start = p.initialStocksTotal;
+      const change = start > 0 ? ` (${now >= start ? '+' : ''}${(((now - start) / start) * 100).toFixed(1)}% since start)` : '';
+      const choice = await dialog.menu(
+        `**Stock Portfolio:** ${formatMoneyDisplay(now, p)}${change}`,
+        [
+          { label: 'Buy stock', value: 'buy' },
+          { label: 'Sell stock', value: 'sell' },
+          { label: 'Set a standing stock sale', value: 'plan' },
+          { label: 'Done', value: null },
+        ],
+        { title }
+      );
+      if (!choice) return;
+      if (choice === 'buy') await this.handleBuyStock(game, dialog);
+      else if (choice === 'sell') await this.handleSellStock(game, dialog, diff);
+      else if (choice === 'plan') {
+        const report = async (heading, description = null) => {
+          const t = game.portfolio.lastTransaction || {};
+          await dialog.show(t.accepted === false ? transactionReason(t, game.portfolio) : description || t.description || 'Done.', { title: heading });
+        };
+        await this.handleStockSalePlanSetup(game, dialog, report);
+      }
+    }
+  }
+
+  /** Buy Stock — broad market shares, or a specific ticker (mirrors Setup's ticker/lookup/growth-vol questions). */
+  async handleBuyStock(game, dialog) {
+    const title = 'Buy Stock';
+    const mode = await dialog.menu('Buy broad market shares, or a specific stock?', [
+      { label: 'Broad market shares', value: 'market' },
+      { label: 'Specific stock (ticker)', value: 'ticker' },
+      { label: 'Back', value: null },
+    ], { title });
+    if (!mode) return;
+    if (mode === 'ticker') { await this.handleBuySpecificStock(game, dialog); return; }
+    const amt = await dialog.prompt('Buy how much?', { title, defaultValue: '1000', type: 'money' });
+    if (amt == null) return;
+    game.portfolio = buyStock(game.portfolio, Math.max(0, amt));
+    await dialog.show(transactionReason(game.portfolio.lastTransaction, game.portfolio) || 'Broad-market shares purchased; basis updated.', { title });
+  }
+
+  /** Buy a specific ticker — same questions as Custom Setup's specific-stock flow. */
+  async handleBuySpecificStock(game, dialog) {
+    const title = 'Buy Stock';
+    const diff = getDifficulty(game.portfolio.difficulty || 'standard');
+    const defGrowth = ((diff.equityReturn) * 100).toFixed(2).replace(/\.?0+$/, '');
+    const defVol = ((diff.equityVolatility) * 100).toFixed(2).replace(/\.?0+$/, '');
+    let step = 0, ticker = '', online = true, price = 0, onlineNote = '', historyNote = '',
+      dollars = 1000, growthPct = defGrowth, volPct = defVol;
+    const lookupOnline = async (tk) => {
+      let loading = false;
+      const result = await lookupStockWithLoading(tk, {
+        wantHistory: true,
+        onLoading: () => { loading = true; dialog.showLoading('Loading…'); },
+        onLoadingDone: () => { if (loading) dialog.hideLoading(); },
+      });
+      if (loading) dialog.hideLoading();
+      return result;
+    };
+    while (true) {
+      if (step === 0) {
+        const result = await dialog.prompt('Stock ticker', { title, defaultValue: ticker });
+        if (result == null) return;
+        ticker = String(result || '').trim().toUpperCase();
+        if (!ticker) { await dialog.show('Enter a ticker symbol.', { title }); continue; }
+        step = 1;
+      } else if (step === 1) {
+        const result = await dialog.confirm('Look up this ticker online?', { title, yes: 'Yes', no: 'No, enter manually', distinctCancel: true });
+        if (result == null) { step = 0; continue; }
+        online = result;
+        step = 2;
+      } else if (step === 2) {
+        price = 0; onlineNote = ''; historyNote = '';
+        if (online) {
+          const look = await lookupOnline(ticker);
+          if (look.ok && look.price > 0) {
+            price = look.price;
+            onlineNote = `Online (${look.source})`;
+            if (Number.isFinite(look.growth) && Number.isFinite(look.volatility) && look.historyYears >= 2) {
+              historyNote = `Estimated from ${look.historyYears} yrs of price history — not a guarantee of future returns; edit freely.`;
+            }
+          } else {
+            await dialog.show(look.error || 'Lookup failed. Enter price manually.', { title });
+            online = false;
+          }
+        }
+        if (!online || !(price > 0)) {
+          const result = await dialog.prompt('Current stock price', {
+            title, defaultValue: price > 0 ? String(price) : '', type: 'money',
+            subtitle: onlineNote || 'Enter per-share price',
+          });
+          if (result == null) { step = 1; continue; }
+          price = Math.max(0, result);
+        } else {
+          await dialog.show(`${ticker} @ ${formatMoneyDisplay(price)}${onlineNote ? '\n' + onlineNote : ''}`, { title });
+        }
+        if (!(price > 0)) { await dialog.show('Price must be greater than zero.', { title }); step = 1; continue; }
+        step = 3;
+      } else if (step === 3) {
+        const result = await dialog.prompt('Amount to invest', { title, defaultValue: String(dollars), type: 'money', prefix: '$' });
+        if (result == null) { step = 2; continue; }
+        if (!(result > 0)) { await dialog.show('Enter a positive purchase amount.', { title }); continue; }
+        dollars = Math.max(0, result);
+        step = 4;
+      } else if (step === 4) {
+        const result = await dialog.form('Expected return model', [
+          { key: 'growth', label: 'Growth % per year', type: 'percent', defaultValue: String(growthPct) },
+          {
+            key: 'vol', label: 'Volatility %', type: 'percent', defaultValue: String(volPct),
+            subtitle: historyNote || 'The amount the gains fluctuate year after year.',
+          },
+        ], { title });
+        if (!result) { step = 3; continue; }
+        growthPct = result.growth; volPct = result.vol;
+        step = 5;
+      } else if (step === 5) {
+        const confirmed = await dialog.confirm(
+          `Buy ${formatMoneyDisplay(dollars)} of ${ticker} @ ${formatMoneyDisplay(price)}?\nGrowth ${growthPct}% · Volatility ${volPct}%`,
+          { title, yes: 'Buy', no: 'Cancel', distinctCancel: true }
+        );
+        if (confirmed == null) { step = 4; continue; }
+        if (!confirmed) return;
+        game.portfolio = buyStock(game.portfolio, dollars, {
+          ticker, price, assetClass: 'equity', growth: (growthPct || 0) / 100, volatility: (volPct || 0) / 100,
+        });
+        await dialog.show(transactionReason(game.portfolio.lastTransaction, game.portfolio) || `Bought ${formatMoneyDisplay(dollars)} of ${ticker}.`, { title });
+        return;
+      }
+    }
+  }
+
+  /**
+   * Sell Stock — selects a holding when specific stocks exist (shows the game's current
+   * projected price per share, overridable), with linked $/% fields on one page.
+   */
   async handleSellStock(game, dialog, diff) {
-    const p = game.portfolio;
-    const held = p.stocksTotal || 0;
-    if (held <= 0) {
-      await dialog.show('No stock to sell.', { title: 'Sell Stock' });
+    const title = 'Sell Stock';
+    if (!((game.portfolio.stocksTotal || 0) > 0)) {
+      await dialog.show('No stock to sell.', { title });
       return;
     }
-    const mode = await dialog.menu(
-      `Held: ${formatMoneyDisplay(held)}`,
-      [
-        { label: 'Sell $ amount', value: 'amount' },
-        { label: 'Sell % of portfolio', value: 'percent' },
-        { label: 'Cancel', value: null },
-      ],
-      { title: 'Sell Stock' }
-    );
-    if (!mode) return;
-
-    let proceeds = 0;
-    if (mode === 'amount') {
-      const amt = await dialog.prompt('Sale amount ($)?', {
-        title: 'Sell Stock',
-        defaultValue: String(Math.min(held, 1000)),
-        type: 'money',
-      });
-      if (amt == null) return;
-      proceeds = Math.min(held, Math.max(0, amt));
-    } else {
-      const pct = await dialog.prompt('% of portfolio to sell?', {
-        title: 'Sell Stock',
-        defaultValue: '10',
-        type: 'percent',
-      });
-      if (pct == null) return;
-      proceeds = Math.round(held * (Math.max(0, Math.min(100, pct)) / 100));
+    let step = 0, holdingId = null, holding = null, price = 0, dollars = 0;
+    while (true) {
+      const p = game.portfolio;
+      if (step === 0) {
+        const sellable = (p.stocksHoldings || []).filter(h => !h.illiquid && h.value > 0);
+        if (sellable.length > 1 || (sellable.length === 1 && sellable[0].ticker !== 'MARKET')) {
+          const result = await dialog.menu('Sell which holding?', [
+            ...sellable.map(h => ({
+              label: `${h.ticker} — ${formatMoneyDisplay(h.value, p)}`, value: h.id,
+              subtext: `${(h.shares || 0).toFixed(2)} sh @ ${formatMoneyDisplay(h.price || 0, p)}`,
+            })),
+            { label: 'Entire portfolio (proportional)', value: '__all__' },
+            { label: 'Cancel', value: null },
+          ], { title });
+          if (!result) return;
+          holdingId = result === '__all__' ? null : result;
+        } else holdingId = null;
+        holding = holdingId ? p.stocksHoldings.find(h => h.id === holdingId) : null;
+        price = holding ? (holding.price || 0) : 0;
+        step = holding ? 1 : 2;
+      } else if (step === 1) {
+        const result = await dialog.prompt(`${holding.ticker} current price (per share)`, {
+          title, defaultValue: String(price), type: 'money',
+          subtitle: 'The game’s current projected price; override to use a different one.',
+        });
+        if (result == null) { step = 0; continue; }
+        price = Math.max(.01, result);
+        step = 2;
+      } else if (step === 2) {
+        const available = holding ? holding.value : (p.stocksTotal || 0);
+        dollars = Math.min(available, dollars || Math.round(available * .1));
+        const result = await dialog.form(
+          holding
+            ? `Selling ${holding.ticker} — held ${formatMoneyDisplay(available, p)} (${(holding.shares || 0).toFixed(2)} sh @ ${formatMoneyDisplay(price, p)})`
+            : `Held: ${formatMoneyDisplay(available, p)}`,
+          [
+            { key: 'dollars', label: 'Sell $ amount', type: 'money', defaultValue: String(dollars) },
+            { key: 'percent', label: 'Sell % of holding', type: 'percent', defaultValue: String(available > 0 ? (dollars / available * 100).toFixed(1) : '0') },
+          ],
+          {
+            title, portfolio: p,
+            onFieldChange: (fields, i) => {
+              const availDisplay = toDisplayMoney(available, p);
+              if (i === 0) {
+                const d = Math.max(0, Math.min(availDisplay, parseMoneyInput(fields[0].value)));
+                fields[1].value = availDisplay > 0 ? ((d / availDisplay) * 100).toFixed(1) : '0';
+              } else {
+                const pct = Math.max(0, Math.min(100, parseFloat(fields[1].value) || 0));
+                fields[0].value = formatMoneyInput(String(Math.round(availDisplay * pct / 100)));
+              }
+            },
+          }
+        );
+        if (!result) { step = holding ? 1 : 0; continue; }
+        dollars = Math.max(0, Math.min(available, Number(result.dollars) || 0));
+        if (!(dollars > 0)) { await dialog.show('Enter a positive amount to sell.', { title }); continue; }
+        step = 3;
+      } else if (step === 3) {
+        // dollars/percent were chosen against the tracked price, so that fraction of the
+        // holding's shares/basis is what liquidates; priceOverrideRatio only rescales the
+        // cash (and gain) the sale credits, via sellStock -- never the fraction removed.
+        const priceOverrideRatio = holding && price !== (holding.price || 0) && holding.price > 0
+          ? price / holding.price : undefined;
+        const result = sellStock(game.portfolio, { proceeds: dollars, holdingId, priceOverrideRatio }, diff);
+        if (result.state.lastTransaction?.accepted === false) {
+          await dialog.show(transactionReason(result.state.lastTransaction, p), { title });
+          step = 2; continue;
+        }
+        const confirmed = await dialog.confirm(
+          'Sell ' + formatMoneyDisplay(result.proceeds) + '?\nBasis removed: ' + formatMoneyDisplay(result.basis) +
+          '\nRealized gain/loss: ' + formatMoneyDisplay(result.gains) +
+          '\nEstimated tax: ' + formatMoneyDisplay(result.tax.total) + '\nNet cash: ' + formatMoneyDisplay(result.netCash),
+          { title: 'Holdings sale', yes: 'Sell', no: 'Cancel', distinctCancel: true });
+        if (confirmed == null) { step = 2; continue; }
+        if (!confirmed) return;
+        game.portfolio = result.state;
+        await dialog.show('Sale posted; estimated tax is credited at year-end.', { title });
+        return;
+      }
     }
-
-    const result = sellStock(game.portfolio, { proceeds }, diff);
-    if (result.state.lastTransaction?.accepted === false) {
-      await dialog.show(transactionReason(result.state.lastTransaction, p), { title: 'Sell Stock' }); return;
-    }
-    const okay = await dialog.confirm(
-      'Sell ' + formatMoneyDisplay(result.proceeds) + '?\nBasis removed: ' + formatMoneyDisplay(result.basis) +
-      '\nRealized gain/loss: ' + formatMoneyDisplay(result.gains) +
-      '\nEstimated tax: ' + formatMoneyDisplay(result.tax.total) + '\nNet cash: ' + formatMoneyDisplay(result.netCash),
-      { title: 'Holdings sale', yes: 'Sell', no: 'Cancel' });
-    if (okay) { game.portfolio = result.state; await dialog.show('Sale posted; estimated tax is credited at year-end.', { title: 'Sell Stock' }); }
   }
 
   render(ctx, game) {

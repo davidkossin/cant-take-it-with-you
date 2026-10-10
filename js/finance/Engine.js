@@ -506,6 +506,19 @@ export function sellStock(state,opts={},difficulty=null) {
   const s=copy(state),held=availableStocks(s);
   const amount=opts.percent!=null?held*nonnegative(opts.percent)/100:nonnegative(opts.proceeds);
   const sale=liquidate(s,amount,{holdingId:opts.holdingId,date:opts.date});
+  const ratio=opts.priceOverrideRatio;
+  // A manually-overridden sale price changes the CASH received for the same fraction of
+  // shares/basis liquidate() already removed -- it never changes that fraction itself.
+  if (ratio!=null && ratio!==1 && sale.proceeds>0) {
+    const adjustedProceeds=money(sale.proceeds*ratio),delta=money(adjustedProceeds-sale.proceeds);
+    s.cash=money(s.cash+delta);
+    const totalGains=sale.shortGains+sale.longGains;
+    const shortShare=totalGains!==0?sale.shortGains/totalGains:(sale.shortGains>=sale.longGains?1:0);
+    const shortDelta=money(delta*shortShare),longDelta=money(delta-shortDelta);
+    if (shortDelta) { addIncome(s,'shortGains',shortDelta); sale.shortGains=money(sale.shortGains+shortDelta); }
+    if (longDelta) { addIncome(s,'longGains',longDelta); sale.longGains=money(sale.longGains+longDelta); }
+    sale.proceeds=adjustedProceeds; sale.gains=money(sale.shortGains+sale.longGains);
+  }
   const tax=estimateCapitalGainsTax({...sale,state,afterState:s,difficulty:difficulty || {}});
   const withholding=money(Math.min(nonnegative(tax.total),s.cash));
   s.cash=money(s.cash-withholding); incomeFor(s).taxPaid=money(incomeFor(s).taxPaid+withholding);

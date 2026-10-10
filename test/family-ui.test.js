@@ -245,7 +245,7 @@ test('Rejected room purchases show needed and available Cash in the selected dol
   for (const inflationAdjusted of [true, false]) {
     const game = { portfolio: household({ year: 2040, dollarBaseYear: 2026, priceIndex: 2,
       inflationAdjusted, cash: 10000 }) };
-    const dialog = scriptedDialog(['buy', inflationAdjusted ? 12000 : 24000]);
+    const dialog = scriptedDialog(['buy', 'market', inflationAdjusted ? 12000 : 24000, null]);
     await new RoomScene().handleTeller(game, dialog, 'stock');
     assert.equal(game.portfolio.cash, 10000);
     assert.equal(game.portfolio.stocksTotal, 0);
