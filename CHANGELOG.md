@@ -12,6 +12,7 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ### Changed
 - Custom Setup's online stock lookup now shows a ticker's own price history (annualized mean/sample stdev, when at least 2 years is available) as a labeled reference note alongside the price. It is reference only: the "Expected return model" growth/volatility fields still default to the difficulty's equity assumption, never to that history, since a stock's trailing return — especially after a strong decade like 2016–2025 — is a poor predictor of its future return, and a prefilled default is sticky even when editable.
+- Home value appreciation (`homeRealGrowth`/`homeVolatility` in every difficulty) is now calibrated to ~50 years (1975–2025) of FHFA/Case-Shiller national home price history — 1.25% real appreciation, 5% annual volatility — replacing an uncited 0.5%/6% placeholder. Assumption version bumped to `planning-2026-3`.
 
 ## [0.7.5] — 2026-10-09
 

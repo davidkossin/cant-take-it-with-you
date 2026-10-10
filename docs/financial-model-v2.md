@@ -1,6 +1,6 @@
 # Financial model v2 — existing JavaScript game
 
-Game development version: **0.7.0**. Engine version: **2.2.0** (funding rule **cash-only**). Assumptions: **planning-2026-1**. Federal rule set: **irs-2026-1**. Original rule review October 4, 2026; cash-only funding and median-first-wall Hallway selection October 7, 2026. See [the planning update](planning-update.md) for household ownership, currency units, gross-up, timelines and persistence.
+Game development version: **0.7.5**. Engine version: **2.2.0** (funding rule **cash-only**). Assumptions: **planning-2026-3**. Federal rule set: **irs-2026-1**. Original rule review October 4, 2026; cash-only funding and median-first-wall Hallway selection October 7, 2026. See [the planning update](planning-update.md) for household ownership, currency units, gross-up, timelines and persistence.
 
 This corrects the existing game’s financial system; it does not recreate the game. Room/teller decisions, the hallway, timeline forks, saves, profiles and ending remain in the root JavaScript application.
 
@@ -106,10 +106,12 @@ Defaults are **illustrative long-horizon inputs**, not forecasts fitted to the u
 | Savings APY | 2.5% (entered account rate overrides) |
 | Annual investment fee | 0.2% |
 | Equity dividend yield | 1.5% |
-| Home real-return mean / annual volatility | 0.5% / 6% |
+| Home real-return mean / annual volatility | 1.25% / 5% |
 | Equity/bond log-shock correlation | 0.10 |
 
 Optimistic uses 8% equity mean, 16% volatility and 2% CPI. Grim uses 4.5%, 22% and 3.5%. Overrides are stored with the portfolio. Specific stocks use a common equity factor plus stable ticker-specific risk, with 35% default volatility and no automatically inferred permanent alpha. Multiple lots of the same ticker receive the same return. Other correlations and tax-sensitive asset-location optimization are not calibrated.
+
+The home mean is calibrated to ~50 years (1975-2025) of FHFA All-Transactions HPI and S&P/Case-Shiller U.S. National Home Price Index history: nominal CAGR ~4.9-5.0%, real (CPI-deflated) ~1.0-1.5%; this model uses 1.25% real. Unlike an individual stock's recent-history prefill (deliberately avoided elsewhere in this document), a 50-year national index is a long-horizon calibration consistent with this model's own stated philosophy, not a recency-biased fit — though the headline CAGR is still start-year sensitive (anchoring right after the 2006-2012 bust trough versus a pre-bust year can swing it several points). The national index's annual volatility has no single clean long-run citation; 5% is a labeled analyst estimate, not a sourced figure like the mean.
 
 For arithmetic simple-return mean `a` and standard deviation `v`, the lognormal parameters are:
 
@@ -151,5 +153,7 @@ Validation commands: `npm test`, `npm run check`, `node scripts/benchmark.mjs 10
 - [SSA contribution and benefit bases](https://www.ssa.gov/oact/cola/cbb.html)
 - [SSA receiving benefits while working](https://www.ssa.gov/benefits/retirement/planner/whileworking.html)
 - [California FTB 2025 rate schedules](https://www.ftb.ca.gov/forms/2025/2025-540-tax-rate-schedules.pdf) and [deductions](https://www.ftb.ca.gov/file/personal/deductions/index.html)
+- [FHFA All-Transactions House Price Index, USA (FRED series USSTHPI)](https://fred.stlouisfed.org/series/USSTHPI)
+- [S&P/Case-Shiller U.S. National Home Price Index (FRED series CSUSHPINSA)](https://fred.stlouisfed.org/series/CSUSHPINSA)
 
 These sources establish core rule constants. They do not validate illustrative market moments, unimplemented tax cases or the accuracy of future projections.
