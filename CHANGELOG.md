@@ -10,6 +10,11 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.7] — 2026-10-10
+
+### Changed
+- Decision Room teller windows redrawn with a polished brass frame, speaking grille, limestone counter and warm light, still set into the wall, with new icons on every window: a cottage (Manage Property), rising bars (Stock Broker), a family (Family Planning), an open ledger (Portfolio), a car (Make a Large Purchase), a briefcase and clock (Career), a handshake and coin (Borrow / Loan) and a columned bank (Bank).
+
 ## [0.7.6] — 2026-10-10
 
 ### Added
