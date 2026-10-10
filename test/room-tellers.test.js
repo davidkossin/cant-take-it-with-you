@@ -64,3 +64,43 @@ test('Make a Large Purchase: Back on the very first question exits without side 
   assert.equal(game.portfolio.cash, 100000);
   assert.equal(game.portfolio.lastTransaction, undefined);
 });
+
+function borrowerFixture() {
+  return household({
+    cash: 10000, stocksTotal: 50000, stocksCostBasis: 50000,
+    homes: [{ type: 'primary', label: 'Home', value: 400000, mortgageOwed: 100000, rate: .06,
+      remainingMonths: 300, remainingTerm: 25, monthlyPayment: 0 }],
+  });
+}
+
+test('Borrow / Loan: backing out of the HELOC home-choice returns to the HELOC/shares menu, not out of the teller', async () => {
+  const game = { portfolio: borrowerFixture() };
+  const dialog = new ScriptedDialog([
+    'heloc',  // kind menu
+    null,     // which home for HELOC -> Back
+    'securities', // kind menu shown again
+    5000, 7, 10,  // amount, rate, term
+    true,     // take loan
+  ]);
+  await new RoomScene().handleBorrow(game, dialog);
+  const menus = dialog.calls.filter(c => c.kind === 'menu').map(c => c.text);
+  assert.equal(menus.filter(t => t.includes('Asset-backed')).length, 2); // kind menu shown twice
+  assert.equal(game.portfolio.otherLoans.length, 1);
+  assert.equal(game.portfolio.otherLoans[0].type, 'securities');
+  assert.equal(game.portfolio.cash, 15000); // +5000 loan proceeds
+});
+
+test('Borrow / Loan: Escape at the HELOC summary goes back to the term question; explicit Cancel exits cleanly', async () => {
+  const game = { portfolio: borrowerFixture() };
+  const dialog = new ScriptedDialog([
+    'heloc', 0, 20000, 8.5, 15,
+    null,   // summary: Escape -> back to term
+    12,     // term re-asked
+    false,  // summary: explicit Cancel -> exit, nothing committed
+  ]);
+  await new RoomScene().handleBorrow(game, dialog);
+  assert.equal(game.portfolio.otherLoans?.length || 0, 0);
+  assert.equal(game.portfolio.cash, 10000); // unchanged
+  const prompts = dialog.calls.filter(c => c.kind === 'prompt' && c.text.startsWith('Term')).length;
+  assert.equal(prompts, 2);
+});

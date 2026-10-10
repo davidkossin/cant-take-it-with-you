@@ -744,170 +744,167 @@ Cash received: ${money(preview.netCash)}`, {
       : 'Standing withdrawal cancelled.');
   }
 
+  /** Borrow / Loan — asset-backed only. Picks a kind, then re-shows this menu if that sub-flow backs out of its first question. */
   async handleBorrow(game, dialog) {
-    const kind = await dialog.menu(
-      'Asset-backed borrowing only.\nNo unsecured loans.',
-      [
-        { label: 'HELOC (home equity)', value: 'heloc' },
-        { label: 'Loan against shares', value: 'securities' },
-        { label: 'Never mind', value: null },
-      ],
-      { title: 'Borrow' }
-    );
-    if (!kind) return;
-    if (kind === 'heloc') await this.handleHeloc(game, dialog);
-    else await this.handleSecuritiesLoan(game, dialog);
+    const title = 'Borrow / Loan';
+    while (true) {
+      const kind = await dialog.menu(
+        '**Asset-backed borrowing.** No unsecured loans.',
+        [
+          { label: 'HELOC (home equity)', value: 'heloc' },
+          { label: 'Loan against shares', value: 'securities' },
+          { label: 'Never mind', value: null },
+        ],
+        { title }
+      );
+      if (!kind) return;
+      const done = kind === 'heloc' ? await this.handleHeloc(game, dialog) : await this.handleSecuritiesLoan(game, dialog);
+      if (done) return;
+    }
   }
 
+  /** @returns {boolean} true once the player is done with Borrow entirely; false to re-show the HELOC/shares choice. */
   async handleHeloc(game, dialog) {
-    const p = game.portfolio;
-    const homes = p.homes || [];
-    if (!homes.length) {
+    if (!(game.portfolio.homes || []).length) {
       await dialog.show(
         `No homes to borrow against.\nA HELOC needs home equity (${Math.round(HELOC_CLTV * 100)}% CLTV rule).`,
         { title: 'HELOC' }
       );
-      return;
+      return false;
     }
-
-    const homeIndex = await dialog.menu(
-      'Which home for the HELOC?',
-      [
-        ...homes.map((h, i) => ({
-          label: `${h.label || h.type} — avail ${formatMoneyDisplay(helocCapacity(p, i))}`,
-          value: i,
-          subtext: `Value ${formatMoneyDisplay(h.value)} · mtg ${formatMoneyDisplay(h.mortgageOwed || 0)}`,
-        })),
-        { label: 'Cancel', value: null },
-      ],
-      { title: 'HELOC' }
-    );
-    if (homeIndex == null) return;
-
-    const cap = helocCapacity(p, homeIndex);
-    if (cap <= 0) {
-      await dialog.show(
-        `No HELOC capacity on this home.\nNeed equity under ${Math.round(HELOC_CLTV * 100)}% CLTV after mortgage and existing HELOCs.`,
-        { title: 'HELOC' }
-      );
-      return;
+    let step = 0, homeIndex = null, amount = 25000, ratePct = +(HELOC_DEFAULT_RATE * 100).toFixed(2), years = 15;
+    while (true) {
+      const p = game.portfolio, homes = p.homes || [];
+      if (step === 0) {
+        const result = await dialog.menu(
+          'Which home for the HELOC?',
+          [
+            ...homes.map((h, i) => ({
+              label: `${h.label || h.type} — avail ${formatMoneyDisplay(helocCapacity(p, i))}`,
+              value: i,
+              subtext: `Value ${formatMoneyDisplay(h.value)} · mtg ${formatMoneyDisplay(h.mortgageOwed || 0)}`,
+            })),
+            { label: 'Cancel', value: null },
+          ],
+          { title: 'HELOC' }
+        );
+        if (result == null) return false;
+        const cap = helocCapacity(p, result);
+        if (cap <= 0) {
+          await dialog.show(
+            `No HELOC capacity on this home.\nNeed equity under ${Math.round(HELOC_CLTV * 100)}% CLTV after mortgage and existing HELOCs.`,
+            { title: 'HELOC' }
+          );
+          continue;
+        }
+        homeIndex = result;
+        amount = Math.min(cap, amount);
+        step = 1;
+      } else if (step === 1) {
+        const cap = helocCapacity(p, homeIndex);
+        const result = await dialog.prompt(`HELOC amount? Max ${formatMoneyDisplay(cap)}`, {
+          title: 'HELOC', defaultValue: String(Math.min(cap, amount)), type: 'money',
+        });
+        if (result == null) { step = 0; continue; }
+        amount = Math.max(0, Math.min(cap, Math.round(result)));
+        if (amount <= 0) { await dialog.show('Amount must be greater than zero.', { title: 'HELOC' }); continue; }
+        step = 2;
+      } else if (step === 2) {
+        const defPct = String(+(HELOC_DEFAULT_RATE * 100).toFixed(2));
+        const result = await dialog.prompt(
+          `Interest rate APR (%)?\nTypical HELOC ~${defPct}% (prime + margin).\nAllowed ${HELOC_RATE_MIN * 100}–${HELOC_RATE_MAX * 100}%.`,
+          { title: 'HELOC', defaultValue: String(ratePct), type: 'percent' }
+        );
+        if (result == null) { step = 1; continue; }
+        ratePct = result;
+        step = 3;
+      } else if (step === 3) {
+        const result = await dialog.prompt('Term (years)? (10–30)', { title: 'HELOC', defaultValue: String(years), type: 'number' });
+        if (result == null) { step = 2; continue; }
+        years = Math.max(10, Math.min(30, Math.round(result || 15)));
+        step = 4;
+      } else if (step === 4) {
+        const rate = Math.max(HELOC_RATE_MIN, Math.min(HELOC_RATE_MAX, (ratePct || 0) / 100));
+        const annual = annualLoanPayment({ principal: amount, rate, remainingTerm: years });
+        const aprShow = String(+(rate * 100).toFixed(2));
+        const ok = await dialog.confirm(
+          `HELOC summary:\n` +
+            `Principal ${formatMoneyDisplay(amount)} → Cash\n` +
+            `APR ${aprShow}% · ${years} yr amortizing\n` +
+            `Est. annual P&I ~${formatMoneyDisplay(Math.round(annual))}\n` +
+            `Confirm?`,
+          { title: 'HELOC', yes: 'Take HELOC', no: 'Cancel', distinctCancel: true }
+        );
+        if (ok == null) { step = 3; continue; }
+        if (!ok) return true;
+        game.portfolio = takeHeloc(game.portfolio, { homeIndex, amount, rate, term: years });
+        await dialog.show(`HELOC funded ${formatMoneyDisplay(amount)} to Cash at ${aprShow}% APR.`, { title: 'HELOC' });
+        return true;
+      }
     }
-
-    const amount = await dialog.prompt(`HELOC amount ($)? Max ${formatMoneyDisplay(cap)}`, {
-      title: 'HELOC',
-      defaultValue: String(Math.min(cap, 25000)),
-      type: 'money',
-    });
-    if (amount == null) return;
-    const principal = Math.max(0, Math.min(cap, Math.round(amount)));
-    if (principal <= 0) {
-      await dialog.show('Amount must be greater than zero.', { title: 'HELOC' });
-      return;
-    }
-
-    const defPct = String(+(HELOC_DEFAULT_RATE * 100).toFixed(2));
-    const ratePct = await dialog.prompt(
-      `Interest rate APR (%)?\nTypical HELOC ~${defPct}% (prime + margin).\nAllowed ${HELOC_RATE_MIN * 100}–${HELOC_RATE_MAX * 100}%.`,
-      { title: 'HELOC', defaultValue: defPct, type: 'percent' }
-    );
-    if (ratePct == null) return;
-    const rate = Math.max(HELOC_RATE_MIN, Math.min(HELOC_RATE_MAX, (ratePct || 0) / 100));
-
-    const term = await dialog.prompt('Term (years)? (10–30)', {
-      title: 'HELOC',
-      defaultValue: '15',
-      type: 'number',
-    });
-    if (term == null) return;
-    const years = Math.max(10, Math.min(30, Math.round(term || 15)));
-
-    const annual = annualLoanPayment({ principal, rate, remainingTerm: years });
-    const aprShow = String(+(rate * 100).toFixed(2));
-    const ok = await dialog.confirm(
-      `HELOC summary:\n` +
-        `Principal ${formatMoneyDisplay(principal)} → Cash\n` +
-        `APR ${aprShow}% · ${years} yr amortizing\n` +
-        `Est. annual P&I ~${formatMoneyDisplay(Math.round(annual))}\n` +
-        `Confirm?`,
-      { title: 'HELOC', yes: 'Take HELOC', no: 'Cancel' }
-    );
-    if (!ok) return;
-
-    game.portfolio = takeHeloc(game.portfolio, { homeIndex, amount: principal, rate, term: years });
-    await dialog.show(
-      `HELOC funded ${formatMoneyDisplay(principal)} to Cash at ${aprShow}% APR.`,
-      { title: 'HELOC' }
-    );
   }
 
+  /** @returns {boolean} true once the player is done with Borrow entirely; false to re-show the HELOC/shares choice. */
   async handleSecuritiesLoan(game, dialog) {
-    const p = game.portfolio;
-    const cap = securitiesLoanCapacity(p);
-    if (cap <= 0) {
+    if (securitiesLoanCapacity(game.portfolio) <= 0) {
       await dialog.show(
         `No capacity for a loan against shares.\n` +
           `Need taxable brokerage; advance rate ${Math.round(SB_LTV * 100)}% minus existing share-backed loans.\n` +
           `(401(k) cannot be pledged.)`,
         { title: 'Loan against shares' }
       );
-      return;
+      return false;
     }
-
-    const amount = await dialog.prompt(
-      `Loan amount ($)? Max ${formatMoneyDisplay(cap)}\n(${Math.round(SB_LTV * 100)}% of stocks minus existing)`,
-      {
-        title: 'Loan against shares',
-        defaultValue: String(Math.min(cap, 10000)),
-        type: 'money',
+    let step = 0, amount = Math.min(securitiesLoanCapacity(game.portfolio), 10000),
+      ratePct = +(SECURITIES_LOAN_DEFAULT_RATE * 100).toFixed(2), years = 10;
+    while (true) {
+      const p = game.portfolio, cap = securitiesLoanCapacity(p);
+      if (step === 0) {
+        const result = await dialog.prompt(
+          `Loan amount? Max ${formatMoneyDisplay(cap)}\n(${Math.round(SB_LTV * 100)}% of stocks minus existing)`,
+          { title: 'Loan against shares', defaultValue: String(Math.min(cap, amount)), type: 'money' }
+        );
+        if (result == null) return false;
+        amount = Math.max(0, Math.min(cap, Math.round(result)));
+        if (amount <= 0) { await dialog.show('Amount must be greater than zero.', { title: 'Loan against shares' }); continue; }
+        step = 1;
+      } else if (step === 1) {
+        const defPct = String(+(SECURITIES_LOAN_DEFAULT_RATE * 100).toFixed(2));
+        const result = await dialog.prompt(
+          `Interest rate APR (%)?\nTypical pledged-asset line ~${defPct}% (usually below HELOC).\nAllowed ${SECURITIES_LOAN_RATE_MIN * 100}–${SECURITIES_LOAN_RATE_MAX * 100}%.`,
+          { title: 'Loan against shares', defaultValue: String(ratePct), type: 'percent' }
+        );
+        if (result == null) { step = 0; continue; }
+        ratePct = result;
+        step = 2;
+      } else if (step === 2) {
+        const result = await dialog.prompt('Term (years)? (5–20)', { title: 'Loan against shares', defaultValue: String(years), type: 'number' });
+        if (result == null) { step = 1; continue; }
+        years = Math.max(5, Math.min(20, Math.round(result || 10)));
+        step = 3;
+      } else if (step === 3) {
+        const rate = Math.max(SECURITIES_LOAN_RATE_MIN, Math.min(SECURITIES_LOAN_RATE_MAX, (ratePct || 0) / 100));
+        const annual = annualLoanPayment({ principal: amount, rate, remainingTerm: years });
+        const aprShow = String(+(rate * 100).toFixed(2));
+        const ok = await dialog.confirm(
+          `Loan against shares:\n` +
+            `Principal ${formatMoneyDisplay(amount)} → Cash\n` +
+            `APR ${aprShow}% · ${years} yr amortizing\n` +
+            `Est. annual P&I ~${formatMoneyDisplay(Math.round(annual))}\n` +
+            `If stocks fall below maintenance LTV, a margin call may sell shares.\n` +
+            `Confirm?`,
+          { title: 'Loan against shares', yes: 'Take loan', no: 'Cancel', distinctCancel: true }
+        );
+        if (ok == null) { step = 2; continue; }
+        if (!ok) return true;
+        game.portfolio = takeSecuritiesLoan(game.portfolio, { amount, rate, term: years });
+        await dialog.show(`Loan against shares funded ${formatMoneyDisplay(amount)} to Cash at ${aprShow}% APR.`, { title: 'Loan against shares' });
+        return true;
       }
-    );
-    if (amount == null) return;
-    const principal = Math.max(0, Math.min(cap, Math.round(amount)));
-    if (principal <= 0) {
-      await dialog.show('Amount must be greater than zero.', { title: 'Loan against shares' });
-      return;
     }
-
-    const defPct = String(+(SECURITIES_LOAN_DEFAULT_RATE * 100).toFixed(2));
-    const ratePct = await dialog.prompt(
-      `Interest rate APR (%)?\nTypical pledged-asset line ~${defPct}% (usually below HELOC).\nAllowed ${SECURITIES_LOAN_RATE_MIN * 100}–${SECURITIES_LOAN_RATE_MAX * 100}%.`,
-      { title: 'Loan against shares', defaultValue: defPct, type: 'percent' }
-    );
-    if (ratePct == null) return;
-    const rate = Math.max(
-      SECURITIES_LOAN_RATE_MIN,
-      Math.min(SECURITIES_LOAN_RATE_MAX, (ratePct || 0) / 100)
-    );
-
-    const term = await dialog.prompt('Term (years)? (5–20)', {
-      title: 'Loan against shares',
-      defaultValue: '10',
-      type: 'number',
-    });
-    if (term == null) return;
-    const years = Math.max(5, Math.min(20, Math.round(term || 10)));
-
-    const annual = annualLoanPayment({ principal, rate, remainingTerm: years });
-    const aprShow = String(+(rate * 100).toFixed(2));
-    const ok = await dialog.confirm(
-      `Loan against shares:\n` +
-        `Principal ${formatMoneyDisplay(principal)} → Cash\n` +
-        `APR ${aprShow}% · ${years} yr amortizing\n` +
-        `Est. annual P&I ~${formatMoneyDisplay(Math.round(annual))}\n` +
-        `If stocks fall below maintenance LTV, a margin call may sell shares.\n` +
-        `Confirm?`,
-      { title: 'Loan against shares', yes: 'Take loan', no: 'Cancel' }
-    );
-    if (!ok) return;
-
-    game.portfolio = takeSecuritiesLoan(game.portfolio, { amount: principal, rate, term: years });
-    await dialog.show(
-      `Loan against shares funded ${formatMoneyDisplay(principal)} to Cash at ${aprShow}% APR.`,
-      { title: 'Loan against shares' }
-    );
   }
 
-  
+
   /**
    * Portfolio teller — edit income, spending, contributions and setup inputs. Balances
    * (Cash, Savings, stocks, 401(k), Roth) are locked during play: they change only through
