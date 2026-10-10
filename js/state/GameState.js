@@ -241,6 +241,8 @@ export function createGameFromSetup(setup) {
     socialSecurity: 0,
     childCostInflator: 1,
   }, { legacy: false });
+  // Fixed baseline for the Stock Broker's "since start of game" change; never touched again.
+  portfolio.initialStocksTotal = portfolio.stocksTotal;
 
   const nodeId = `room-${portfolio.year}-0`;
   const worth = computeWorth(portfolio);

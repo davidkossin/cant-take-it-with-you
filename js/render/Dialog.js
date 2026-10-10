@@ -250,8 +250,13 @@ export class Dialog {
    * Multi-field form. Resolves with { key: parsedValue } or null on Back.
    * @param {string} text
    * @param {{key:string,label:string,type?:string,defaultValue?:string|number,prefix?:string,subtitle?:string}[]} fields
+   * @param {object} [opts]
+   * @param {(fields:object[], changedIndex:number)=>void} [opts.onFieldChange] called after any
+   *   field's value changes (keyboard or mobile input), so a caller can keep a linked field (e.g.
+   *   a $ amount and a % amount that should recompute each other) in sync. Mutate `fields[i].value`
+   *   directly; this does not itself recurse back into onFieldChange.
    */
-  form(text, fields, { title = '', subtitle = '', portfolio } = {}) {
+  form(text, fields, { title = '', subtitle = '', portfolio, onFieldChange = null } = {}) {
     return new Promise((resolve) => {
       this.active = true;
       this.mode = 'form';
@@ -259,6 +264,7 @@ export class Dialog {
       this._moneyContext = captureMoneyContext(portfolio);
       this.subtitle = (fields || []).some(f => f.type === 'money') ? moneySubtitle(subtitle, this._moneyContext) : subtitle;
       this.lines = wrapRich(text || '', 40);
+      this.onFieldChange = onFieldChange;
       this.fields = (fields || []).map((f) => {
         let v = String(f.defaultValue ?? '');
         const type = f.type || 'text';
@@ -686,8 +692,9 @@ export class Dialog {
     if (this.mode === 'form' && !fromNativeInput) {
       const f = this.fields[this.fieldIndex];
       if (f && e.key === 'Backspace') {
-        f.value = f.value.slice(0, -1);
-        if (f.type === 'money') f.value = formatMoneyInput(f.value);
+        let v = f.value.slice(0, -1);
+        if (f.type === 'money') v = formatMoneyInput(v);
+        this.setFieldValue(this.fieldIndex, v);
         e.preventDefault();
         return true;
       }
@@ -791,18 +798,31 @@ export class Dialog {
   }
 
   _typeInto(f, ch) {
+    const i = this.fields.indexOf(f);
     if (f.type === 'money') {
       if (/[0-9.,\-]/.test(ch)) {
         const raw = (f.value + ch).replace(/,/g, '');
         if (/^-?\d*\.?\d*$/.test(raw) || raw === '-' || raw === '.') {
-          f.value = formatMoneyInput(raw);
+          this.setFieldValue(i, formatMoneyInput(raw));
         }
       }
     } else if (f.type === 'number' || f.type === 'percent') {
-      if (/[0-9.\-]/.test(ch)) f.value += ch;
+      if (/[0-9.\-]/.test(ch)) this.setFieldValue(i, f.value + ch);
     } else if (f.value.length < 28) {
-      f.value += ch;
+      this.setFieldValue(i, f.value + ch);
     }
+  }
+
+  /**
+   * Set a form field's value (the only path that should mutate it -- keyboard typing/backspace
+   * and the mobile text input both go through this), then run the form's onFieldChange hook, if
+   * any, so a caller can keep a second field (e.g. a linked $ amount / % amount pair) in sync.
+   */
+  setFieldValue(index, value) {
+    const f = this.fields[index];
+    if (!f) return;
+    f.value = value;
+    this.onFieldChange?.(this.fields, index);
   }
 
   draw(ctx) {

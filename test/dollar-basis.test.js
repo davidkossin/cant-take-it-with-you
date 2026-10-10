@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Dialog } from '../js/render/Dialog.js';
+import { Dialog, formatMoneyInput, parseMoneyInput } from '../js/render/Dialog.js';
 import { captureMoneyContext, setMoneyContext, toDisplayMoney, fromDisplayMoney, formatMoneyDisplay } from '../js/finance/DollarBasis.js';
 import { editPlanningInputs, editInflationSettings } from '../js/scenes/PlanningInputs.js';
 import { projectOneYear } from '../js/finance/Engine.js';
@@ -39,6 +39,24 @@ test('untouched monetary fields preserve their exact balances despite display ro
   dialog._activateSelected();
   assert.deepEqual(await result,{basis:12345.67});
   assert.equal(captureMoneyContext(portfolio).priceIndex,1.93247);
+});
+
+test('form onFieldChange keeps a linked $ amount and % amount in sync, typed from either side',async()=>{
+  const total=2000;
+  const dialog=new Dialog();
+  const result=dialog.form('Sell',[
+    {key:'dollars',type:'money',defaultValue:'1000'},
+    {key:'percent',type:'percent',defaultValue:'50'},
+  ],{onFieldChange:(fields,i)=>{
+    if (i===0) fields[1].value=((parseMoneyInput(fields[0].value)/total)*100).toFixed(1);
+    else fields[0].value=formatMoneyInput(String(total*(parseFloat(fields[1].value)||0)/100));
+  }});
+  dialog.setFieldValue(0,'1,500');
+  assert.equal(dialog.fields[1].value,'75.0');
+  dialog.setFieldValue(1,'25');
+  assert.equal(dialog.fields[0].value,'500');
+  dialog._activateSelected();
+  assert.deepEqual(await result,{dollars:500,percent:25});
 });
 
 test('money fields convert baseline benefits and education separately from CPI',async()=>{
