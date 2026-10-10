@@ -10,6 +10,8 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-10-10
+
 ### Added
 - `dialog.form(..., { onFieldChange })`: a form field can now keep a second field in sync live (e.g. a $ amount and a % amount that recompute each other as either is typed), on both keyboard and mobile-input paths. Existing forms are unaffected (the hook is optional and only fires when provided).
 - Career (renamed from "Job / Retire", description "Start, end, and modify current jobs and salaries") is rebuilt on a step index. Starting a job now asks whether to set up retirement contributions for it and, if so, runs the same retirement-accounts questionnaire used elsewhere, before asking the future retirement age (only shown when already past the current retirement age). Retiring now offers a loop to fund it: a standing retirement-fund withdrawal (reuses Bank's screen) or a new standing annual stock sale -- either the player's own instruction, nothing sold or withdrawn automatically.
