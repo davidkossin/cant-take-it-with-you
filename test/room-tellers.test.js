@@ -242,3 +242,116 @@ test('Borrow / Loan: Escape at the HELOC summary goes back to the term question;
   const prompts = dialog.calls.filter(c => c.kind === 'prompt' && c.text.startsWith('Term')).length;
   assert.equal(prompts, 2);
 });
+
+test('Manage Property: the main menu lists homes with values and investment revenue, or rent if renting', async () => {
+  const game = { portfolio: household({ homes: [
+    { type: 'investment', label: 'Duplex', value: 250000, mortgageOwed: 150000, basisKnown: true, costBasis: 250000, monthlyRevenue: 1500 },
+  ] }) };
+  const dialog = new ScriptedDialog([null]); // Done immediately
+  await new RoomScene().handleManageProperty(game, dialog, STANDARD);
+  const menuText = dialog.calls.find(c => c.kind === 'menu').text;
+  assert.match(menuText, /Duplex[^$]*\$250,000/);
+  assert.match(menuText, /Revenue \$18,000\/yr/); // $1,500/mo * 12
+});
+
+test('Buy a Home: mirrors Setup\'s questions (name, price, down payment, financing) and ends an existing lease when buying a primary', async () => {
+  const game = { portfolio: household({ cash: 100000, housing: 'rent', monthlyRent: 1500 }) };
+  const dialog = new ScriptedDialog([
+    'primary',                               // property type
+    { name: 'Lakehouse', value: 300000 },    // name + purchase price
+    60000,                                   // down payment
+    { rate: 6, term: 30, propTax: 3000 },    // financing (no revenue field -- not investment)
+    true,                                    // confirm Buy
+  ]);
+  await new RoomScene().handleBuyHome(game, dialog, STANDARD);
+  const home = game.portfolio.homes[0];
+  assert.equal(home.label, 'Lakehouse');
+  assert.equal(home.value, 300000);
+  assert.equal(home.mortgageOwed, 240000);
+  assert.equal(game.portfolio.cash, 34000); // 100000 - 60000 down - 6000 (2% closing)
+  assert.equal(game.portfolio.housing, 'own'); // buying a primary home ends the existing lease
+});
+
+test('Buy a Home: Back at any step returns to the previous question, and a second primary residence is blocked', async () => {
+  const game = { portfolio: household({ cash: 500000, homes: [
+    { type: 'primary', label: 'Home', value: 300000, mortgageOwed: 100000, rate: .05,
+      remainingMonths: 300, remainingTerm: 25, monthlyPayment: 0, basisKnown: true, costBasis: 300000 },
+  ] }) };
+  const dialog = new ScriptedDialog(['primary', null]); // blocked (already own a primary) -> re-asked -> Back exits
+  await new RoomScene().handleBuyHome(game, dialog, STANDARD);
+  assert.equal(game.portfolio.homes.length, 1);
+  const shown = dialog.calls.find(c => c.kind === 'show');
+  assert.match(shown.text, /already own a primary home/);
+});
+
+function homeFixture(overrides = {}) {
+  return household({ homes: [{ type: 'primary', label: 'Rose Cottage', value: 400000, mortgageOwed: 100000,
+    rate: .05, remainingMonths: 300, remainingTerm: 25, monthlyPayment: 0, basisKnown: true, costBasis: 200000 }],
+    ...overrides });
+}
+
+test('Sell a Home: a single clear summary (price, costs, lien payoff, gain, net cash) replaces the old disconnected yes/no questions; Escape returns to the exclusion question', async () => {
+  const game = { portfolio: homeFixture({ cash: 0, married: false }) };
+  const dialog = new ScriptedDialog([
+    0,       // which home
+    false,   // not eligible for the exclusion
+    null,    // Escape at the summary -> back to the exclusion question
+    true,    // eligible after all
+    true,    // confirm Sell
+  ]);
+  await new RoomScene().handleSellHome(game, dialog);
+  assert.equal(game.portfolio.homes.length, 0);
+  assert.equal(game.portfolio.housing, 'rent'); // selling the primary home ends ownership
+  // 400000 value - 24000 (6% fee) - 100000 mortgage payoff = 276000 net; exclusion zeroes the taxable gain
+  assert.equal(game.portfolio.cash, 276000);
+  const confirms = dialog.calls.filter(c => c.kind === 'confirm');
+  assert.match(confirms[confirms.length - 1].text, /Taxable gain: \$0/);
+});
+
+test('Sell a Home: an unverified cost basis points to Portfolio instead of a dead-end rejection loop', async () => {
+  const game = { portfolio: household({ homes: [
+    { type: 'secondary', label: 'Cabin', value: 200000, mortgageOwed: 0, basisKnown: false },
+  ] }) };
+  const dialog = new ScriptedDialog([0]);
+  await new RoomScene().handleSellHome(game, dialog);
+  assert.equal(game.portfolio.homes.length, 1); // untouched
+  const shown = dialog.calls.find(c => c.kind === 'show');
+  assert.match(shown.text, /verified purchase cost/);
+});
+
+test('Start/End a Lease: keeps housing status consistent with whether a primary home is owned', async () => {
+  const renter = { portfolio: household({}) }; // housing 'own', no homes -- can start a lease
+  await new RoomScene().handleLease(renter, new ScriptedDialog([1800]));
+  assert.equal(renter.portfolio.housing, 'rent');
+  assert.equal(renter.portfolio.monthlyRent, 1800);
+
+  const blocked = { portfolio: homeFixture() }; // owns a primary -- starting a lease is blocked
+  await new RoomScene().handleLease(blocked, new ScriptedDialog([]));
+  assert.equal(blocked.portfolio.housing, 'own');
+
+  const stuck = { portfolio: household({ housing: 'rent', monthlyRent: 1500 }) }; // no primary home to move into
+  await new RoomScene().handleLease(stuck, new ScriptedDialog([]));
+  assert.equal(stuck.portfolio.housing, 'rent');
+
+  const mover = { portfolio: homeFixture({ housing: 'rent', monthlyRent: 1500 }) };
+  await new RoomScene().handleLease(mover, new ScriptedDialog([true]));
+  assert.equal(mover.portfolio.housing, 'own');
+});
+
+test('Find a Tenant: sets an investment property\'s monthly revenue and vacancy rate', async () => {
+  const game = { portfolio: household({ homes: [
+    { type: 'investment', label: 'Duplex', value: 250000, mortgageOwed: 150000, basisKnown: true, costBasis: 250000, monthlyRevenue: 0 },
+  ] }) };
+  const dialog = new ScriptedDialog([0, 1800, 8]);
+  await new RoomScene().handleFindTenant(game, dialog);
+  const home = game.portfolio.homes[0];
+  assert.equal(home.monthlyRevenue, 1800);
+  assert.equal(home.vacancyRate, .08);
+});
+
+test('Find a Tenant: with no investment property, points to Buy a Home instead', async () => {
+  const game = { portfolio: household({}) };
+  const dialog = new ScriptedDialog([]);
+  await new RoomScene().handleFindTenant(game, dialog);
+  assert.equal(dialog.calls[0].text, 'No investment properties to rent out. Buy one first with "Buy a home".');
+});

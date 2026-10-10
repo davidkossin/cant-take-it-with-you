@@ -55,6 +55,8 @@ import { autoSave } from '../state/SaveSystem.js';
 import { formatMoneyDisplay, formatMoneyInput, parseMoneyInput } from '../render/Dialog.js';
 import { setMoneyContext, toDisplayMoney } from '../finance/DollarBasis.js';
 import { lookupStockWithLoading } from '../finance/stockQuotes.js';
+import { monthlyPayment } from '../finance/Loans.js';
+import { defaultPropertyTaxRate } from '../data/state-from-zip.js';
 import { ownerAge, ownerKey } from '../finance/Household.js';
 import { log as debugLog } from '../debug/Logger.js';
 
@@ -281,97 +283,7 @@ export class RoomScene {
     const diff = getDifficulty(p.difficulty || 'standard');
 
     if (action === 'home') {
-      const mode = await dialog.menu(
-        'Real estate window',
-        [
-          { label: 'Buy a home', value: 'buy' },
-          { label: 'Sell a home', value: 'sell' },
-          { label: 'Never mind', value: null },
-        ],
-        { title: 'Buy/Sell Home' }
-      );
-      if (mode === 'buy') {
-        if ((p.homes || []).length >= 5) {
-          await dialog.show('You already hold 5 properties.', { title: 'Buy/Sell Home' });
-          return;
-        }
-        const type = await dialog.menu(
-          'Property type?',
-          [
-            { label: 'Primary', value: 'primary' },
-            { label: 'Secondary', value: 'secondary' },
-            { label: 'Investment', value: 'investment' },
-          ],
-          { title: 'Buy Home' }
-        );
-        if (type == null) return;
-        const value = await dialog.prompt('Purchase price ($)?', {
-          title: 'Buy Home',
-          defaultValue: '400000',
-          type: 'money',
-        });
-        if (value == null) return;
-        const down = await dialog.prompt('Down payment ($)?', {
-          title: 'Buy Home',
-          defaultValue: String(Math.round(value * 0.2)),
-          type: 'money',
-        });
-        if (down == null) return;
-        const ratePct = await dialog.prompt('Mortgage rate (%)?', {
-          title: 'Buy Home',
-          defaultValue: '6.5',
-          type: 'percent',
-        });
-        if (ratePct == null) return;
-        const term = await dialog.prompt('Term (years)?', {
-          title: 'Buy Home',
-          defaultValue: '30',
-          type: 'number',
-        });
-        if (term == null) return;
-        game.portfolio = buyHome(p, {
-          type,
-          value,
-          downPayment: down || 0,
-          rate: (ratePct || 0) / 100,
-          term: term ?? 30,
-          label: HOME_TYPES[type]?.label,
-        });
-        await dialog.show(transactionReason(game.portfolio.lastTransaction, game.portfolio) || 'Home purchased; 2% closing costs included.', { title: 'Buy Home' });
-      } else if (mode === 'sell') {
-        if (!p.homes?.length) {
-          await dialog.show('No homes to sell.', { title: 'Sell Home' });
-          return;
-        }
-        const idx = await dialog.menu(
-          'Sell which home?',
-          [
-            ...p.homes.map((h, i) => ({
-              label: `${h.label || h.type} — ${formatMoneyDisplay(h.value)}`,
-              value: i,
-            })),
-            { label: 'Cancel', value: null },
-          ],
-          { title: 'Sell Home' }
-        );
-        if (idx == null) return;
-        const helocLien = (p.otherLoans || [])
-          .filter((l) => l.type === 'heloc' && l.homeIndex === idx)
-          .reduce((s, l) => s + (l.principal || 0), 0);
-        if (helocLien > 0) {
-          const okSell = await dialog.confirm(
-            `This home has a HELOC lien of ${formatMoneyDisplay(helocLien)}.\nSale proceeds will pay it off first. Continue?`,
-            { title: 'Sell Home', yes: 'Sell', no: 'Cancel' }
-          );
-          if (!okSell) return;
-        }
-        const exclusion = p.homes[idx].type === 'primary' ? await dialog.confirm('Eligible for the primary-home gain exclusion? Confirm ownership/use tests from tax records.', {title:'Home sale tax'}) : false;
-        game.portfolio = sellHome(game.portfolio, idx, { exclusionEligible: exclusion === true });
-        await dialog.show(
-          transactionReason(game.portfolio.lastTransaction, game.portfolio) || 'Sold after liens and 6% selling costs. Taxable gain enters this year’s tax record.',
-          { title: 'Sell Home' }
-        );
-      }
+      await this.handleManageProperty(game, dialog, diff);
     } else if (action === 'stock') {
       await this.handleStockBroker(game, dialog, diff);
     } else if (action === 'job') {
@@ -1035,7 +947,7 @@ Cash received: ${money(preview.netCash)}`, {
   /**
    * Portfolio teller — edit income, spending, contributions and setup inputs. Balances
    * (Cash, Savings, stocks, 401(k), Roth) are locked during play: they change only through
-   * Decision Room actions (Bank, Buy/Sell Stock, Buy/Sell Home, Borrow, purchases).
+   * Decision Room actions (Bank, Stock Broker, Manage Property, Borrow / Loan, purchases).
    */
   async handlePortfolioEditor(game, dialog, diff) {
     const p = game.portfolio;
@@ -1050,7 +962,6 @@ Cash received: ${money(preview.netCash)}`, {
           { label: 'ZIP / tax profile', value: 'tax' },
           { label: 'Difficulty rates', value: 'rates' },
           { label: 'Annual spending', value: 'spend' },
-          { label: 'Housing / rent', value: 'housing' },
           { label: 'Planning inputs / benefits', value: 'planning' },
           { label: 'Done', value: null },
         ],
@@ -1131,23 +1042,237 @@ Cash received: ${money(preview.netCash)}`, {
           p.annualSpending = Math.max(0, v);
           p.spendingBreakdown = { other: p.annualSpending };
         }
-      } else if (choice === 'housing') {
-        const mode = await dialog.menu('Housing', [
-          { label: 'Own', value: 'own' },
-          { label: 'Rent', value: 'rent' },
-          { label: 'Cancel', value: null },
-        ], { title: 'Portfolio' });
-        if (!mode) continue;
-        p.housing = mode;
-        if (mode === 'rent') {
-          const r = await dialog.prompt('Monthly rent', {
-            title: 'Portfolio',
-            defaultValue: String(p.monthlyRent || 0),
-            type: 'money',
-            prefix: '$',
-          });
-          if (r != null) p.monthlyRent = Math.max(0, r);
+      }
+    }
+  }
+
+  /** Manage Property — list homes/rent, then Buy, Sell, Start/End a Lease, Find a Tenant. */
+  async handleManageProperty(game, dialog, diff) {
+    const title = 'Manage Property';
+    while (true) {
+      const p = game.portfolio, money = n => formatMoneyDisplay(n, p), homes = p.homes || [];
+      const homeLines = homes.map(h => `**${h.label || h.type}** ${money(h.value)}` +
+        (h.type === 'investment' ? ` · Revenue ${money((h.monthlyRevenue || 0) * 12)}/yr` : ''));
+      if (p.housing === 'rent') homeLines.push(`**Renting** ${money((p.monthlyRent || 0) * 12)}/yr`);
+      if (!homeLines.length) homeLines.push('No property owned.');
+      const choice = await dialog.menu(
+        `**Make Real Estate Decisions**\n${homeLines.join('\n')}`,
+        [
+          { label: 'Buy a home', value: 'buy' },
+          { label: 'Sell a home', value: 'sell' },
+          { label: p.housing === 'rent' ? 'End a Lease' : 'Start a Lease', value: 'lease' },
+          { label: 'Find a Tenant', value: 'tenant' },
+          { label: 'Done', value: null },
+        ],
+        { title }
+      );
+      if (!choice) return;
+      if (choice === 'buy') await this.handleBuyHome(game, dialog, diff);
+      else if (choice === 'sell') await this.handleSellHome(game, dialog);
+      else if (choice === 'lease') await this.handleLease(game, dialog);
+      else if (choice === 'tenant') await this.handleFindTenant(game, dialog);
+    }
+  }
+
+  /** Buy a Home — mirrors Setup's own home questions (incl. naming it), plus a down payment since this is a fresh purchase. */
+  async handleBuyHome(game, dialog, diff) {
+    const title = 'Buy a Home';
+    if ((game.portfolio.homes || []).length >= 5) {
+      await dialog.show('You already hold 5 properties.', { title });
+      return;
+    }
+    let step = 0, type = 'primary', name = '', value = 400000, down = 80000,
+      ratePct = +((diff.mortgageRate || .065) * 100).toFixed(2), term = 30,
+      propTax = Math.round(400000 * defaultPropertyTaxRate(game.portfolio.zip)), revenue = 0;
+    while (true) {
+      const p = game.portfolio;
+      if (step === 0) {
+        const result = await dialog.menu('Property type?', [
+          { label: 'Primary', value: 'primary' },
+          { label: 'Secondary', value: 'secondary' },
+          { label: 'Investment', value: 'investment' },
+          { label: 'Back', value: null },
+        ], { title });
+        if (!result) return;
+        if (result === 'primary' && (p.homes || []).some(h => h.type === 'primary')) {
+          await dialog.show('You already own a primary home. Sell it first, or buy this as a Secondary or Investment property.', { title });
+          continue;
         }
+        type = result; name = name || HOME_TYPES[type]?.label || 'Home';
+        step = 1;
+      } else if (step === 1) {
+        const result = await dialog.form(`${HOME_TYPES[type]?.label || 'Home'} details`, [
+          { key: 'name', label: 'Name this property', type: 'text', defaultValue: name },
+          { key: 'value', label: 'Purchase price', type: 'money', defaultValue: String(value) },
+        ], { title });
+        if (!result) { step = 0; continue; }
+        name = String(result.name || '').trim().slice(0, 28) || HOME_TYPES[type]?.label || 'Home';
+        value = Math.max(0, result.value || 0);
+        propTax = Math.round(value * defaultPropertyTaxRate(p.zip));
+        step = 2;
+      } else if (step === 2) {
+        const result = await dialog.prompt('Down payment?', {
+          title, defaultValue: String(Math.min(value, down || Math.round(value * .2))), type: 'money',
+        });
+        if (result == null) { step = 1; continue; }
+        down = Math.max(0, Math.min(value, result));
+        step = 3;
+      } else if (step === 3) {
+        const fields = [
+          { key: 'rate', label: 'Mortgage rate %', type: 'percent', defaultValue: String(ratePct) },
+          { key: 'term', label: 'Term (years)', type: 'number', defaultValue: String(term) },
+          { key: 'propTax', label: 'Annual property tax', type: 'money', defaultValue: String(propTax),
+            subtitle: p.zip ? `Default from ZIP ${p.zip}` : 'Default from national average' },
+        ];
+        if (type === 'investment') fields.push({ key: 'revenue', label: 'Monthly rental revenue', type: 'money', defaultValue: String(revenue) });
+        const result = await dialog.form('Financing', fields, { title });
+        if (!result) { step = 2; continue; }
+        ratePct = result.rate; term = Math.max(1, Math.round(result.term ?? 30));
+        propTax = Math.max(0, result.propTax || 0); revenue = Math.max(0, result.revenue || 0);
+        step = 4;
+      } else if (step === 4) {
+        const rate = Math.max(0, (ratePct || 0) / 100), closing = Math.round(value * .02);
+        const monthly = monthlyPayment(value - down, rate, term * 12);
+        const confirmed = await dialog.confirm(
+          `Buy ${name} for ${formatMoneyDisplay(value, p)}?\n` +
+          `Down payment: ${formatMoneyDisplay(down, p)} · Closing costs (2%): ${formatMoneyDisplay(closing, p)}\n` +
+          `Mortgage: ${formatMoneyDisplay(value - down, p)} @ ${ratePct}% for ${term} yr (~${formatMoneyDisplay(Math.round(monthly), p)}/mo)`,
+          { title, yes: 'Buy', no: 'Cancel', distinctCancel: true }
+        );
+        if (confirmed == null) { step = 3; continue; }
+        if (!confirmed) return;
+        game.portfolio = buyHome(p, {
+          type, value, downPayment: down, rate, term, label: name,
+          propertyTaxRate: value > 0 ? propTax / value : defaultPropertyTaxRate(p.zip),
+          annualPropertyTax: propTax, monthlyRevenue: type === 'investment' ? revenue : 0,
+        });
+        if (type === 'primary' && game.portfolio.lastTransaction?.accepted !== false) game.portfolio.housing = 'own';
+        await dialog.show(transactionReason(game.portfolio.lastTransaction, game.portfolio) || `${name} purchased; 2% closing costs included.`, { title });
+        return;
+      }
+    }
+  }
+
+  /** Sell a Home — one comprehensive summary (price, costs, liens, gain, net cash) instead of disconnected yes/no questions. */
+  async handleSellHome(game, dialog) {
+    const title = 'Sell a Home';
+    if (!(game.portfolio.homes || []).length) {
+      await dialog.show('No homes to sell.', { title });
+      return;
+    }
+    let step = 0, index = null, exclusion = false;
+    while (true) {
+      const p = game.portfolio, home = index != null ? p.homes[index] : null;
+      if (step === 0) {
+        const result = await dialog.menu('Sell which home?', [
+          ...p.homes.map((h, i) => ({
+            label: `${h.label || h.type} — ${formatMoneyDisplay(h.value, p)}`, value: i,
+            subtext: h.mortgageOwed > 0 ? `Mortgage ${formatMoneyDisplay(h.mortgageOwed, p)}` : undefined,
+          })),
+          { label: 'Cancel', value: null },
+        ], { title });
+        if (result == null) return;
+        if (p.homes[result].basisKnown === false) {
+          await dialog.show('Enter this property’s verified purchase cost (basis) in Portfolio → Property basis / costs before selling it.', { title });
+          return;
+        }
+        index = result;
+        step = p.homes[index].type === 'primary' ? 1 : 2;
+      } else if (step === 1) {
+        const result = await dialog.confirm(
+          'Have you owned and lived in this home as your primary residence for at least 2 of the last 5 years?\n' +
+          'This qualifies the sale for a tax-free gain exclusion (up to $250,000 single / $500,000 married).',
+          { title, yes: 'Yes', no: 'No / not sure', distinctCancel: true }
+        );
+        if (result == null) { step = 0; continue; }
+        exclusion = result;
+        step = 2;
+      } else if (step === 2) {
+        const result = sellHome(p, index, { exclusionEligible: exclusion === true });
+        if (result.lastTransaction?.accepted === false) {
+          await dialog.show(transactionReason(result.lastTransaction, p), { title });
+          return;
+        }
+        const tx = result.transactions[result.transactions.length - 1];
+        const confirmed = await dialog.confirm(
+          `Sell ${home.label || home.type} for ${formatMoneyDisplay(home.value, p)}?\n` +
+          `Selling costs (6%): ${formatMoneyDisplay(tx.sellingCosts, p)}\n` +
+          (tx.liens > 0 ? `Mortgage/lien payoff: ${formatMoneyDisplay(tx.liens, p)}\n` : '') +
+          `Taxable gain: ${formatMoneyDisplay(tx.gain, p)}\n` +
+          `Net cash: ${formatMoneyDisplay(tx.netCash, p)}`,
+          { title, yes: 'Sell', no: 'Cancel', distinctCancel: true }
+        );
+        if (confirmed == null) { step = home.type === 'primary' ? 1 : 0; continue; }
+        if (!confirmed) return;
+        game.portfolio = result;
+        await dialog.show('Sold after liens and 6% selling costs. Taxable gain enters this year’s tax record.', { title });
+        return;
+      }
+    }
+  }
+
+  /** Start/End a Lease — the player's own housing status (own vs. rent), kept consistent with whether a primary home exists. */
+  async handleLease(game, dialog) {
+    const title = 'Manage Property';
+    const p = game.portfolio;
+    const hasPrimary = (p.homes || []).some(h => h.type === 'primary');
+    if (p.housing === 'rent') {
+      if (!hasPrimary) {
+        await dialog.show('You have no primary home to move into. Buy one first with "Buy a home".', { title });
+        return;
+      }
+      const confirmed = await dialog.confirm('End your lease and move into your primary home?\nRent payments stop.', { title, yes: 'End lease', no: 'Cancel' });
+      if (!confirmed) return;
+      p.housing = 'own';
+      await dialog.show('Lease ended; rent payments stop.', { title });
+    } else {
+      if (hasPrimary) {
+        await dialog.show('You own a primary home. Sell it first with "Sell a home" before starting a lease.', { title });
+        return;
+      }
+      const result = await dialog.prompt('Monthly rent?', { title, defaultValue: String(p.monthlyRent || 1500), type: 'money' });
+      if (result == null) return;
+      p.monthlyRent = Math.max(0, result);
+      p.housing = 'rent';
+      await dialog.show(`Lease started at ${formatMoneyDisplay(p.monthlyRent, p)}/mo.`, { title });
+    }
+  }
+
+  /** Find a Tenant — set or replace an investment property's rental revenue and expected vacancy. */
+  async handleFindTenant(game, dialog) {
+    const title = 'Manage Property';
+    const p = game.portfolio, rentable = (p.homes || []).filter(h => h.type === 'investment');
+    if (!rentable.length) {
+      await dialog.show('No investment properties to rent out. Buy one first with "Buy a home".', { title });
+      return;
+    }
+    const index = await dialog.menu('Find a tenant for which property?', [
+      ...rentable.map(h => ({
+        label: `${h.label || h.type} — ${h.monthlyRevenue ? formatMoneyDisplay(h.monthlyRevenue, p) + '/mo currently' : 'vacant'}`,
+        value: p.homes.indexOf(h),
+      })),
+      { label: 'Cancel', value: null },
+    ], { title });
+    if (index == null) return;
+    const home = p.homes[index];
+    let step = 0, rent = home.monthlyRevenue || Math.round(home.value * .005), vacancyPct = (home.vacancyRate ?? .05) * 100;
+    while (true) {
+      if (step === 0) {
+        const result = await dialog.prompt(`Monthly rent for ${home.label || home.type}?`, { title, defaultValue: String(rent), type: 'money' });
+        if (result == null) return;
+        rent = Math.max(0, result);
+        step = 1;
+      } else if (step === 1) {
+        const result = await dialog.prompt('Expected vacancy rate %?', {
+          title, defaultValue: String(+vacancyPct.toFixed(1)), type: 'percent',
+          subtitle: 'Share of the year this unit sits empty between tenants.',
+        });
+        if (result == null) { step = 0; continue; }
+        vacancyPct = Math.max(0, Math.min(100, result));
+        home.monthlyRevenue = rent;
+        home.vacancyRate = vacancyPct / 100;
+        await dialog.show(`Tenant found: ${formatMoneyDisplay(rent, p)}/mo (${vacancyPct.toFixed(1)}% vacancy).`, { title });
+        return;
       }
     }
   }
