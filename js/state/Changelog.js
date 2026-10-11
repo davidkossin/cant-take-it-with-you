@@ -3,6 +3,8 @@
  * Source of truth is the markdown file next to index.html (GitHub Pages).
  */
 
+import { GAME_VERSION } from '../config.js';
+
 const FETCH_URLS = ['./CHANGELOG.md', 'CHANGELOG.md'];
 
 /** Max wrapped lines per dialog page (keeps LTTP box under the 210px cap). */
@@ -46,16 +48,20 @@ export function parseChangelog(md) {
     const start = m.index + m[0].length;
     const end = i + 1 < matches.length ? matches[i + 1].index : md.length;
     const rawBody = md.slice(start, end).replace(/^---\s*$/gm, '').trim();
-    const fullLabel = date ? `${version} — ${date}` : version;
+    // The "Unreleased" heading is a maintainer-facing convention (CHANGELOG.md keeps unpublished
+    // notes there until the version is formally dated); players should just see the live version
+    // number they're already running, matching GAME_VERSION shown on the canvas.
+    const displayVersion = version.toLowerCase() === 'unreleased' ? GAME_VERSION : version;
+    const fullLabel = date ? `${displayVersion} — ${date}` : displayVersion;
     // Keep Start-2P menu labels inside the 280px dialog (≈28 chars).
     const label =
       fullLabel.length > 28 ? fullLabel.slice(0, 27) + '…' : fullLabel;
     sections.push({
       id: version,
-      version,
+      version: displayVersion,
       date,
       label,
-      title: version,
+      title: displayVersion,
       body: formatChangelogBody(rawBody),
     });
   }

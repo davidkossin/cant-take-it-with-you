@@ -564,11 +564,11 @@ export class PauseMenu {
 
     if (this.screen === 'confirmQuit') {
       // Pause menu stays visible underneath; only the question is clickable.
-      this.drawMenu(ctx, x, y, boxW, game);
+      this.drawMenu(ctx, x, y, boxW, boxH);
       this._hits = [];
       this.drawQuitConfirm(ctx);
     } else if (this.screen === 'menu') {
-      this.drawMenu(ctx, x, y, boxW, game);
+      this.drawMenu(ctx, x, y, boxW, boxH);
     } else {
       this.drawSubView(ctx, game, x, y, boxW, boxH);
     }
@@ -579,7 +579,7 @@ export class PauseMenu {
     return MENU_ITEMS.map((item, i) => ({ ...item, index: i, x: x + 40, y: y + 152 + i * 64, w: boxW - 80, h: 48 }));
   }
 
-  drawMenu(ctx, x, y, boxW) {
+  drawMenu(ctx, x, y, boxW, boxH) {
     ctx.font = '32px "Press Start 2P", monospace';
     ctx.textBaseline = 'top';
     ctx.fillStyle = PALETTE.gold;
