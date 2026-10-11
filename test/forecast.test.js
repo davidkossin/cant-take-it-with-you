@@ -76,6 +76,24 @@ test('forecast cache changes for model inputs and versions, not reporting noise'
   assert.equal(key.funding,'cash-only');assert.equal(key.selection,'median-first-wall');
 });
 
+test('failureByYear is monotonic, matches both extremes of the zero-volatility fixture, and is identical whether partial or full',()=>{
+  const success=household({age:98,cash:100000,annualSpending:10000});
+  const ok=projectMonteCarlo(success,{paths:50});
+  assert.equal(ok.failureByYear.length,ok.series.length);
+  assert.ok(ok.failureByYear.every(row=>row.fraction===0)); // never fails
+  const fail=projectMonteCarlo({...success,cash:0},{paths:50});
+  assert.equal(fail.failureByYear[0].fraction,1); // fails immediately, at the very first year
+  assert.ok(fail.failureByYear.every(row=>row.fraction===1));
+  for (let i=1;i<fail.failureByYear.length;i++) assert.ok(fail.failureByYear[i].fraction>=fail.failureByYear[i-1].fraction);
+  const acc=createForecast(success,{seed:3});addForecastPaths(acc,50);
+  assert.deepEqual(finishForecast(acc,{partial:true}).failureByYear,finishForecast(acc).failureByYear);
+});
+test('reference carries each year\'s life events, previously dropped on the way out of Forecast.js',()=>{
+  const p=household({age:64,retirementAge:65,employed:true,salary:80000,annualSpending:40000,cash:50000});
+  const f=projectMonteCarlo(p,{paths:20,seed:11});
+  assert.ok(f.reference.every(row=>Array.isArray(row.events)));
+  assert.ok(f.reference.some(row=>row.events.includes('Retired')));
+});
 test('partial injected economic paths retain finite account factors; crash affects specific stocks',()=>{
   const p=household({age:60,stocksTotal:100000,stocksCostBasis:100000,k401Balance:100000});
   const r=projectYears(p,1,'standard',{economy:{equity:-.2},deterministic:true})[0];

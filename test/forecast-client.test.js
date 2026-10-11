@@ -208,3 +208,54 @@ test('Pause Charts render preliminary bands before the played scenario and annua
     assert.deepEqual(game.timeline.forecasts, {}, 'Preliminary bands never archive a gameplay forecast');
   } finally { pause.hide(); restore(); }
 });
+
+test('Charts screen: view paging, scale/zoom toggles, and camera-follow all work and reset on leaving the screen', () => {
+  browserStubs();
+  const { workers, restore } = stubWorkers();
+  const p = household({ age: 65, stocksTotal: 200000, stocksCostBasis: 200000, annualSpending: 20000 });
+  const g = createGameFromSetup({ ...createDefaultSetup(), ...p });
+  const pause = new PauseMenu(), ctx = stubCanvas();
+  const draw = () => pause.drawCharts(ctx, g, 0, 0, 1800, 1000);
+  try {
+    pause.show(g); pause.screen = 'charts'; draw();
+    const { seed } = workers[0].message;
+    const result = projectMonteCarlo(workers[0].message.portfolio, { paths: workers[0].message.paths, seed });
+    workers[0].onmessage({ data: { type: 'result', result } });
+    draw();
+    assert.equal(pause.chartForecast, result);
+
+    // Paging ('[' / ']', the on-screen '‹ ›', or the options menu all call this) cycles all 4 views and wraps.
+    assert.equal(pause.chartView, 'bands');
+    for (const expected of ['composition', 'cashflow', 'risk', 'bands']) {
+      pause.chartAction('viewNext', g);
+      assert.equal(pause.chartView, expected);
+      assert.doesNotThrow(draw);
+    }
+    pause.chartAction('viewPrev', g);
+    assert.equal(pause.chartView, 'risk');
+    assert.doesNotThrow(draw);
+
+    // Log-scale toggles independently of the current view and zoom state.
+    assert.equal(pause.chartScaleLog, false);
+    pause.chartAction('scale', g);
+    assert.equal(pause.chartScaleLog, true);
+    assert.doesNotThrow(draw);
+
+    // Zoom opens a window centered on the cursor year, then camera-follows (shifts, not recenters) as the cursor nears its edge.
+    pause.chartYear = 5;
+    pause.chartAction('zoom', g);
+    assert.equal(pause.chartZoomSpan, 15);
+    const centerYear = result.series[0].year + 5;
+    assert.equal(pause.chartZoomCenter, centerYear);
+    for (let i = 0; i < 8; i++) pause.chartAction('next', g);
+    assert.ok(pause.chartZoomCenter > centerYear, 'the window shifted forward once the cursor neared its right edge');
+    assert.doesNotThrow(draw);
+    pause.chartAction('zoom', g);
+    assert.equal(pause.chartZoomSpan, null); assert.equal(pause.chartZoomCenter, null);
+
+    // Leaving the Charts screen resets scale/zoom so a confusing state doesn't silently persist across visits.
+    pause.chartScaleLog = true; pause.chartZoomSpan = 10; pause.chartZoomCenter = 2030;
+    pause.back();
+    assert.equal(pause.chartScaleLog, false); assert.equal(pause.chartZoomSpan, null); assert.equal(pause.chartZoomCenter, null);
+  } finally { pause.hide(); restore(); }
+});
