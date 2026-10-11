@@ -250,6 +250,55 @@ test('Map compares two distinct numeric timelines through keyboard and mouse, dr
   assert.equal(Object.keys(g.timeline.forecasts).length, count);
 });
 
+/** A minimal two-timeline fixture for drawTimelineComparison, independent of the full game stack. */
+function compareTimelineFixture(number, startYear = 2026) {
+  const years = [startYear, startYear + 1, startYear + 2];
+  const pct = (p10, p90) => ({ p10, p25: p10, p50: (p10 + p90) / 2, p75: p90, p90 });
+  return {
+    id: `t${number}`, number,
+    forecast: {
+      count: 10,
+      series: years.map((year, i) => ({ year, age: 60 + i, realNetWorth: pct(100000 + i * 10000, 500000 + i * 50000) })),
+      scenarioSeries: years.map((year, i) => ({ year, age: 60 + i, realNetWorth: 300000 + i * 20000 })),
+      reference: years.map((year, i) => ({ year, age: 60 + i, events: i === 1 ? ['Retired'] : [] })),
+    },
+  };
+}
+
+test('drawTimelineComparison reuses the Charts.js helpers: log scale, year-range zoom, and life-event ticks', () => {
+  const calls = [];
+  const ctx = new Proxy({ measureText(text) { return { width: String(text).length * 8 }; } }, {
+    get: (target, key) => (key in target ? target[key] : (...args) => { calls.push({ op: key, args }); }),
+    set: (target, key, value) => { target[key] = value; return true; },
+  });
+  const fixtures = [compareTimelineFixture(1), compareTimelineFixture(2)];
+  assert.doesNotThrow(() => drawTimelineComparison(ctx, fixtures, { x: 0, y: 0, w: 1600, h: 700 }, 2026, 'realNetWorth'));
+  assert.doesNotThrow(() => drawTimelineComparison(ctx, fixtures, { x: 0, y: 0, w: 1600, h: 700 }, 2026, 'realNetWorth',
+    { log: true, zoomSpan: 2, zoomCenter: 2027 }));
+  assert.ok(calls.some(c => c.op === 'arc')); // the 'Retired' event tick, drawn via the shared drawEventTicks
+});
+
+test('Map Compare exposes its own S/Z scale/zoom toggles while open, reset on leaving Compare', () => {
+  const g = game(); commitRoomDecisions(g); commitHallwayNode(g);
+  const { path } = saveForecast(g);
+  enterYearRoom(g, path[1].state, path.slice(1, 2)); commitRoomDecisions(g); commitHallwayNode(g); saveForecast(g);
+  const pause = new PauseMenu(), { ctx } = canvas(); pause.show(g); pause.screen = 'map';
+  pause.toggleMapCompare(g);
+  pause.compareSelectionIndex = 0;
+  pause.handleKey({ key: 'Enter', preventDefault() {} }, g);
+  pause.handleKey({ key: 'Enter', preventDefault() {} }, g);
+  assert.equal(pause.mapMode, 'result');
+  assert.equal(pause.compareScaleLog, false); assert.equal(pause.compareZoomSpan, null);
+  pause.handleKey({ key: 's', preventDefault() {} }, g);
+  assert.equal(pause.compareScaleLog, true);
+  pause.handleKey({ key: 'z', preventDefault() {} }, g);
+  assert.equal(pause.compareZoomSpan, 15);
+  assert.doesNotThrow(() => pause.drawMap(ctx, g, 0, 0, 1680, 880));
+  pause.back();
+  assert.equal(pause.mapMode, 'overview');
+  assert.equal(pause.compareScaleLog, false); assert.equal(pause.compareZoomSpan, null);
+});
+
 test('map migration preserves old node snapshots and reports unrecoverable forecasts honestly', () => {
   const g = game(); commitRoomDecisions(g); commitHallwayNode(g);
   const snapshots = JSON.stringify(g.timeline.snapshots);

@@ -10,6 +10,10 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+### Added
+- Pause menu Charts redesigned. The forecast chart's drawing area is roughly 60% taller (the box itself grew to the same HUD-aware sizing `Dialog.js` already used, and the surrounding text was cut from 9 mostly-static lines to one headline, one contextual line and one small badges row). Three new chart views join the original percentile-band fan chart, all paged with clickable/tappable "‹ ›" buttons or `[`/`]`: Composition (the played Hallway path's asset mix over time — cash, savings, stocks, retirement, home equity), Cashflow (the Hallway path's grouped income vs. expenses per year, shortfall years outlined), and Risk (the cumulative share of all simulated paths that have hit a glass wall by each year). Small tick marks now mark life-event years (retirement, marriage, a kid, etc.) on every chart. A new `S` hotkey (and options-menu row) toggles a log Y-axis, and a new `Z` hotkey opens a 15-year zoom window that follows the year cursor; both compose with every view and reset when the Charts screen is left.
+- Map → Compare two timelines gains the same Y-axis readability controls (`S` log scale, `Z` zoom window) and life-event tick marks, reusing the exact rendering helpers built for the Charts screen above instead of its own separate math.
+
 ## [0.7.7] — 2026-10-10
 
 ### Changed

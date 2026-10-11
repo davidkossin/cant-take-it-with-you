@@ -1,5 +1,6 @@
 import { PALETTE } from '../config.js';
 import { formatMoneyDisplay } from './Dialog.js';
+import { makeYScale, windowByYear, drawEventTicks } from './Charts.js';
 
 export const TIMELINE_COLORS = ['#72d5ee', '#e4b75c', '#ba96ed', '#7dcc9b', '#ee91ae', '#99b6ff', '#d9d081'];
 const font = px => `${px}px "Press Start 2P", monospace`;
@@ -71,61 +72,80 @@ export function drawTimelineMap(ctx, model, rect, selection, addHit, activate) {
   ctx.restore();
 }
 
-/** All three comparison charts use the same absolute-year and dollar-value axes. */
+/**
+ * All three comparison charts use the same absolute-year and dollar-value axes.
+ * `rows`/`values` (combined across the given timelines) feed makeYScale/windowByYear so a zoom
+ * or log toggle stays identical across all three panels.
+ */
 export function comparisonDomain(timelines, metric = 'realNetWorth') {
-  const rows = timelines.flatMap(t => t.forecast?.series || []);
+  const rows = timelines.flatMap(t => t.forecast?.series || []).sort((a, b) => a.year - b.year);
   const values = rows.flatMap(r => [r[metric]?.p10, r[metric]?.p90]).filter(Number.isFinite);
   const actual = timelines.flatMap(t => t.forecast?.scenarioSeries || []).map(r => r[metric]).filter(Number.isFinite);
-  const min = Math.min(0, ...values, ...actual), rawMax = Math.max(1, ...values, ...actual);
   return { firstYear: Math.min(...rows.map(r => r.year)), lastYear: Math.max(...rows.map(r => r.year)),
-    min, max: rawMax + Math.max(1, rawMax - min) * .05 };
+    rows, values: [...values, ...actual] };
 }
 
-function drawProjection(ctx, timelines, rect, domain, title, metric) {
+/** `panelOpts`: {log, windowRows, windowValues} -- shared across all panels by drawTimelineComparison. */
+function drawProjection(ctx, timelines, rect, domain, title, metric, panelOpts = {}) {
   const { x, y, w, h } = rect;
+  const { log = false, windowRows = domain.rows, windowValues = domain.values } = panelOpts;
   ctx.save(); ctx.fillStyle = 'rgba(0,0,0,.38)'; ctx.fillRect(x, y, w, h);
   const left = x + 110, right = x + w - 20, top = y + 54, bottom = y + h - 38;
-  const px = year => left + (year - domain.firstYear) / Math.max(1, domain.lastYear - domain.firstYear) * (right - left);
-  const py = v => bottom - (v - domain.min) / Math.max(1, domain.max - domain.min) * (bottom - top);
+  const firstYear = windowRows[0]?.year ?? domain.firstYear, lastYear = windowRows.at(-1)?.year ?? domain.lastYear;
+  const px = year => left + (year - firstYear) / Math.max(1, lastYear - firstYear) * (right - left);
+  const scale = makeYScale(windowValues, { top, bottom, log }), py = scale.project;
   ctx.font = font(14); ctx.textBaseline = 'top'; ctx.fillStyle = PALETTE.gold; ctx.fillText(title, x + 16, y + 13);
   ctx.font = font(12); ctx.textBaseline = 'middle';
-  for (let i = 0; i <= 3; i++) {
-    const v = domain.min + (domain.max - domain.min) * i / 3, yy = py(v);
+  for (const v of scale.gridValues(3)) {
+    const yy = py(v);
     ctx.strokeStyle = '#30323b'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(right, yy); ctx.stroke();
     ctx.fillStyle = '#a9a9b2'; ctx.fillText(compact(v), x + 10, yy);
   }
   timelines.forEach((timeline, index) => {
     const f = timeline.forecast;
     const color = timeline.compareColor;
+    const series = (f.series || []).filter(r => r.year >= firstYear && r.year <= lastYear);
+    const scenarioSeries = (f.scenarioSeries || []).filter(r => r.year >= firstYear && r.year <= lastYear);
+    const reference = (f.reference || []).filter(r => r.year >= firstYear && r.year <= lastYear);
     const band = (lo, hi, alpha) => {
       ctx.globalAlpha = alpha; ctx.fillStyle = color; ctx.beginPath();
-      f.series.forEach((r, i) => i ? ctx.lineTo(px(r.year), py(r[metric][hi])) : ctx.moveTo(px(r.year), py(r[metric][hi])));
-      [...f.series].reverse().forEach(r => ctx.lineTo(px(r.year), py(r[metric][lo])));
+      series.forEach((r, i) => i ? ctx.lineTo(px(r.year), py(r[metric][hi])) : ctx.moveTo(px(r.year), py(r[metric][hi])));
+      [...series].reverse().forEach(r => ctx.lineTo(px(r.year), py(r[metric][lo])));
       ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
     };
     band('p10', 'p90', timelines.length > 1 ? .12 : .18); band('p25', 'p75', timelines.length > 1 ? .14 : .24);
     ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath();
-    f.series.forEach((r, i) => i ? ctx.lineTo(px(r.year), py(r[metric].p50)) : ctx.moveTo(px(r.year), py(r[metric].p50))); ctx.stroke();
+    series.forEach((r, i) => i ? ctx.lineTo(px(r.year), py(r[metric].p50)) : ctx.moveTo(px(r.year), py(r[metric].p50))); ctx.stroke();
     ctx.lineWidth = 1.5; ctx.setLineDash([5, 5]); ctx.beginPath();
-    (f.scenarioSeries || []).forEach((r, i) => i ? ctx.lineTo(px(r.year), py(r[metric])) : ctx.moveTo(px(r.year), py(r[metric]))); ctx.stroke(); ctx.setLineDash([]);
+    scenarioSeries.forEach((r, i) => i ? ctx.lineTo(px(r.year), py(r[metric])) : ctx.moveTo(px(r.year), py(r[metric]))); ctx.stroke(); ctx.setLineDash([]);
+    drawEventTicks(ctx, reference, px, top, { color });
     ctx.fillStyle = color; ctx.font = font(12); ctx.textBaseline = 'top';
     const legendX = left + index * 350;
     ctx.fillRect(legendX, y + 33, 17, 4); ctx.fillText(`Timeline ${timeline.number}`, legendX + 24, y + 27);
   });
   ctx.fillStyle = '#aaa'; ctx.font = font(12); ctx.textBaseline = 'top';
-  ctx.fillText(String(domain.firstYear), left, bottom + 12); ctx.fillText(String(domain.lastYear), right - 54, bottom + 12);
+  ctx.fillText(String(firstYear), left, bottom + 12); ctx.fillText(String(lastYear), right - 54, bottom + 12);
   ctx.restore();
 }
 
-export function drawTimelineComparison(ctx, timelines, rect, originalYear, metric = 'realNetWorth') {
+/** `opts`: {log, zoomSpan, zoomCenter} -- the same Y-axis readability controls as the Charts screen. */
+export function drawTimelineComparison(ctx, timelines, rect, originalYear, metric = 'realNetWorth', opts = {}) {
   const { x, y, w, h } = rect;
+  const { log = false, zoomSpan = null, zoomCenter } = opts;
   const selected = timelines.map((t, i) => ({ ...t, compareColor: TIMELINE_COLORS[i] }));
   const domain = comparisonDomain(selected, metric);
+  const { rows: windowRows } = windowByYear(domain.rows, zoomCenter ?? domain.firstYear, zoomSpan);
+  const firstYear = windowRows[0]?.year ?? domain.firstYear, lastYear = windowRows.at(-1)?.year ?? domain.lastYear;
+  const windowValues = selected.flatMap(t => [
+    ...(t.forecast.series || []).filter(r => r.year >= firstYear && r.year <= lastYear).flatMap(r => [r[metric]?.p10, r[metric]?.p90]),
+    ...(t.forecast.scenarioSeries || []).filter(r => r.year >= firstYear && r.year <= lastYear).map(r => r[metric]),
+  ]).filter(Number.isFinite);
+  const panelOpts = { log, windowRows, windowValues };
   const gap = 24, topH = Math.floor((h - gap) * .43), width = (w - gap) / 2;
   selected.forEach((t, i) => drawProjection(ctx, [t], { x: x + i * (width + gap), y, w: width, h: topH },
-    domain, `Timeline ${t.number} · ${t.forecast.count.toLocaleString()} paths`, metric));
+    domain, `Timeline ${t.number} · ${t.forecast.count.toLocaleString()} paths`, metric, panelOpts));
   drawProjection(ctx, selected, { x, y: y + topH + gap, w, h: h - topH - gap }, domain,
-    `Overlay · ${metric === 'realNetWorth' ? `${originalYear} buying power` : 'nominal dollars'}`, metric);
+    `Overlay · ${metric === 'realNetWorth' ? `${originalYear} buying power` : 'nominal dollars'}`, metric, panelOpts);
 }
 
 function compact(value) {

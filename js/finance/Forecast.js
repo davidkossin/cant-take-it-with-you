@@ -106,7 +106,7 @@ export function finishForecast(acc,{partial=false}={}) {
     successInterval95:wilson(acc.successes,acc.count),series,seed:acc.seed,definition:SUCCESS_DEFINITION,
     engineVersion:ENGINE_VERSION,assumptionVersion:ASSUMPTION_VERSION,taxRuleVersion:TAX_RULE_VERSION,
     assumptions,firstFailureMedian:acc.failures.length?percentile([...acc.failures].sort((a,b)=>a-b),.5):null,
-    firstWall:firstWallBands(acc),provisional:partial,revision:acc.options.revision ?? null,
+    firstWall:firstWallBands(acc),failureByYear:computeFailureByYear(acc),provisional:partial,revision:acc.options.revision ?? null,
     horizon:{startYear:acc.baseline.year,startAge:acc.baseline.age,years:acc.years,
       endYear:acc.baseline.year+acc.years,endAge:acc.baseline.age+acc.years},generatedAt:new Date().toISOString()};
   // Preliminary bands cannot select or commit a gameplay scenario.
@@ -139,9 +139,24 @@ export function finishForecast(acc,{partial=false}={}) {
       options:copy({...acc.options,paths:acc.count,seed:acc.seed})},
     scenario,scenarioSeries:reference.map(r=>({year:r.state.year,age:r.state.age,...pathMetrics(r.state,r.worth)})),
     reference:reference.slice(1).map(r=>({year:r.state.year,age:r.state.age,worth:r.worth,statement:r.statement,
+      events:r.events ?? [],
       // These costs occurred during the statement year, before year-end inflation.
       priceIndex:r.statement?.priceIndex ?? r.state.priceIndex})),
   };
+}
+/** Cumulative fraction of all run paths whose first glass wall is <= that year (never = not counted). O(count+years). */
+function computeFailureByYear(acc) {
+  const counts=new Array(acc.years+1).fill(0);
+  for (const p of acc.terminalPaths) {
+    if (p.firstFailureYear==null) continue;
+    const offset=Math.max(0,Math.min(acc.years,p.firstFailureYear-acc.baseline.year));
+    counts[offset]++;
+  }
+  let cumulative=0;
+  return counts.map((c,i)=>{
+    cumulative+=c;
+    return {year:acc.baseline.year+i,age:acc.baseline.age+i,fraction:acc.count?cumulative/acc.count:0};
+  });
 }
 const wallYear=path=>path.firstFailureYear ?? Infinity;
 /** Nearest-rank quantile over an ascending array: always an actual path's value. */
