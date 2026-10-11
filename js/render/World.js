@@ -4,7 +4,8 @@
 
 import { TILE, VIEW_W, VIEW_H, WORLD_SCALE } from '../config.js';
 import { makeLamp, makeBlueTorch } from './Assets.js';
-import { paintSurface, paintWallShadow, paintRug, paintDoor, paintDecor, paintTeller, paintEndWall, paintSouthWall, drawDeathsDoorLanterns, drawSouthDoorLanterns, wallFace } from './hiTextures.js';
+import { paintTeller, drawTellerSpill, drawTellerPaneGlow } from './tellerWindows.js';
+import { paintSurface, paintWallShadow, paintRug, paintDoor, paintDecor, paintEndWall, paintSouthWall, drawDeathsDoorLanterns, drawSouthDoorLanterns, wallFace } from './hiTextures.js';
 
 /**
  * Decision Room — north wall is doorway to a (new) Hallway of Time plus the Bank
@@ -627,6 +628,15 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
   const lampFrame = Math.floor(animTime / 8) % 4;
   const lampSpr = makeLamp(lampFrame);
 
+  // Window light on the floor goes under every sprite.
+  for (const obj of world.interactables) {
+    if (obj.kind !== 'teller') continue;
+    const sx = obj.x - camX;
+    const sy = obj.y - camY;
+    if (sx < -40 || sy < -40 || sx > VIEW_W + 40 || sy > VIEW_H + 40) continue;
+    drawTellerSpill(ctx, obj, sx, sy, animTime);
+  }
+
   for (const obj of world.interactables) {
     const sx = obj.x - camX;
     const sy = obj.y - camY;
@@ -638,6 +648,7 @@ export function drawWorld(ctx, world, camX, camY, animTime = 0) {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(spr, sx + (spr.ox || 0), sy + (spr.oy || 0), spr.lw, spr.lh);
+      drawTellerPaneGlow(ctx, spr, sx, sy, obj, animTime);
       ctx.restore();
       // No wall text — full name shows in the prompt only. Hit box is unchanged.
     } else if (obj.kind === 'year-door' || obj.kind === 'door' || obj.kind === 'end-door' || obj.kind === 'south-door' || obj.kind === 'west-door') {
