@@ -259,3 +259,29 @@ test('Charts screen: view paging, scale/zoom toggles, and camera-follow all work
     assert.equal(pause.chartScaleLog, false); assert.equal(pause.chartZoomSpan, null); assert.equal(pause.chartZoomCenter, null);
   } finally { pause.hide(); restore(); }
 });
+
+test('Opening Pause draws the main menu through the real draw() entry point, and Enter/Esc still work afterward', () => {
+  // Regression test: every other Pause test calls drawCharts/drawMap/etc. directly with
+  // hand-picked dimensions, bypassing draw()'s own box-geometry math entirely. That gap let a
+  // boxH referenced in drawMenu() without being passed in ship unnoticed -- draw() threw on the
+  // very first frame the main menu screen rendered, freezing input (nothing to click, Esc never ran).
+  browserStubs();
+  const originalDocument = globalThis.document;
+  globalThis.document = { createElement: () => ({ getContext: () => stubCanvas(), width: 0, height: 0 }) };
+  const game = createGameFromSetup({ ...createDefaultSetup(), ...household({ age: 70 }) });
+  const pause = new PauseMenu(), ctx = stubCanvas();
+  try {
+    pause.show(game);
+    assert.equal(pause.screen, 'menu');
+    assert.doesNotThrow(() => pause.draw(ctx, game));
+    assert.ok(pause._hits.length > 0, 'the main menu should register clickable rows');
+    pause.handleKey({ key: 'ArrowDown', preventDefault() {} }, game);
+    assert.equal(pause.selected, 1);
+    const result = pause.handleKey({ key: 'Escape', preventDefault() {} }, game);
+    assert.equal(result, 'close');
+    assert.equal(pause.open, false);
+  } finally {
+    pause.hide();
+    if (originalDocument === undefined) delete globalThis.document; else globalThis.document = originalDocument;
+  }
+});
