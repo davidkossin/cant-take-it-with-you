@@ -532,3 +532,83 @@ body.has-virtual-pad .hint {
 .mobile-text-input:focus {
   opacity: 0.02;
 }
+
+/* —— Mobile entry panel (touch): pinned above the OS keyboard —— */
+.mobile-entry {
+  position: fixed;
+  z-index: 60;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas: "text text" "slot slot" "btns btns";
+  gap: 12px;
+  padding: 14px;
+  overflow: hidden;
+  background: #181818;
+  border: 3px solid #d4a84b;
+  box-shadow: 0 0 0 3px #8a6830, 0 8px 24px #000, 0 0 0 100vmax rgba(0, 0, 0, 0.5);
+  color: #f0e8c8;
+  font-family: "Press Start 2P", monospace;
+  -webkit-text-size-adjust: 100%;
+}
+.mobile-entry[hidden] { display: none; }
+.mobile-entry .me-text { grid-area: text; min-width: 0; }
+.mobile-entry .me-title { color: #d4a84b; font-size: 11px; line-height: 1.4; margin-bottom: 8px; }
+.mobile-entry .me-q { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.mobile-entry .me-hint { font-size: 10px; line-height: 1.5; color: #a89878; margin-top: 6px; }
+.mobile-entry .me-hint[hidden] { display: none; }
+.mobile-entry .me-slot {
+  grid-area: slot;
+  position: relative;
+  height: 50px;
+  box-sizing: border-box;
+  background: #1e1628;
+  border: 2px solid #d4a84b;
+}
+.mobile-entry .me-slot[data-prefix]:not([data-prefix=""])::before {
+  content: attr(data-prefix);
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #fff4c8;
+  font-size: 16px;
+}
+.mobile-entry .me-btns { grid-area: btns; display: flex; gap: 10px; }
+.mobile-entry button {
+  flex: 1;
+  min-height: 44px;
+  font: 11px "Press Start 2P", monospace;
+  border: 2px solid #8a6830;
+  background: #2a2018;
+  color: #c8b878;
+  border-radius: 0;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-entry button.me-done { background: #d4a84b; color: #181818; border-color: #fff4c8; }
+/* Landscape: one compact row (question | input | buttons). */
+.mobile-entry.is-compact {
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto;
+  grid-template-areas: "text slot btns";
+  align-items: center;
+  padding: 10px 12px;
+}
+.mobile-entry.is-compact .me-title { margin-bottom: 6px; font-size: 10px; }
+.mobile-entry.is-compact .me-q { font-size: 11px; }
+.mobile-entry.is-compact .me-btns { flex-direction: column; gap: 6px; width: 112px; }
+.mobile-entry.is-compact button { min-height: 36px; font-size: 10px; }
+.mobile-entry.no-hint .me-hint { display: none; }
+
+/* The real input, shown over the panel's slot while the panel is open. */
+.mobile-text-input.in-panel,
+.mobile-text-input.in-panel:focus {
+  z-index: 61;
+  opacity: 1;
+  color: #fff4c8;
+  caret-color: #fff4c8;
+  background: transparent;
+  padding: 0 8px;
+  pointer-events: auto;
+}
+body.mobile-entry-open .virtual-pad { visibility: hidden; }

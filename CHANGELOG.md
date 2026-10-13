@@ -10,6 +10,11 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.11] — 2026-10-13
+
+### Added
+- On mobile, text fields open an entry panel above the keyboard.
+
 ## [0.7.10] — 2026-10-13
 
 ### Added

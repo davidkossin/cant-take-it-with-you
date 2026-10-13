@@ -10,6 +10,12 @@
  * So: a tap on the overlay focuses it natively; a tap on another form field
  * is focused from the canvas pointerup/touchend (main.js); the on-screen A
  * button focuses from its pointerup/touchend (VirtualPad). None auto-focus.
+ *
+ * Touch devices: once the input has focus, it becomes a visible entry panel
+ * (pixel style, double gold border) pinned to the top of window.visualViewport
+ * so the OS keyboard never covers it: the question / label, the real input,
+ * and Cancel / Done. Landscape uses a compact one-row layout. Desktop (mouse)
+ * never opens the panel; the input stays invisible over the canvas field.
  */
 
 import { FRAME_W, FRAME_H } from '../config.js';
@@ -36,6 +42,14 @@ export class MobileTextInput {
     this._press = null;
     /** set by main.js: a mouse press on the overlay, handled like a canvas press */
     this.onMousePointer = null;
+    /** touch-style device: focusing the input opens the entry panel */
+    this._touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    this.panel = null;
+    this._panelOpen = false;
+    /** field value when the panel opened (Cancel restores it) */
+    this._before = null;
+    /** prompt question text (plain) */
+    this._promptText = '';
   }
 
   mount() {
@@ -85,6 +99,7 @@ export class MobileTextInput {
       // A quick tap places the caret where the canvas text is (the overlay's
       // own font metrics do not match the canvas). Long presses keep the
       // native selection handles; selectionchange mirrors them.
+      if (this._panelOpen) return; // the visible panel input places its own caret
       if (!p || performance.now() - p.t > 450 || Math.hypot(e.clientX - p.x, e.clientY - p.y) > 12) return;
       this._placeCaretAtClient(e.clientX);
     });
@@ -100,6 +115,7 @@ export class MobileTextInput {
     // A new prompt shows its field on the next frame (layout is ready then).
     const origPrompt = this.dialog.prompt.bind(this.dialog);
     this.dialog.prompt = (text, opts = {}) => {
+      this._promptText = plainText(text);
       const p = origPrompt(text, opts);
       requestAnimationFrame(() => this.sync());
       return p;
@@ -115,6 +131,20 @@ export class MobileTextInput {
       if (this._open) this.sync();
     };
     window.addEventListener('resize', reposition);
+    // Last pointer kind decides touch vs desktop (hybrid laptops, emulators).
+    window.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch' || e.pointerType === 'pen') this._touch = true;
+      else if (e.pointerType === 'mouse') this._touch = false;
+    }, true);
+    this._buildPanel();
+    input.addEventListener('focus', () => {
+      if (this._touch && this._open) this._openPanel();
+    });
+    input.addEventListener('blur', () => {
+      // Done / Cancel keep focus (pointerdown is prevented); a blur from
+      // elsewhere (keyboard hidden, tap outside) keeps the typed value.
+      setTimeout(() => { if (!this.isFocused()) this._closePanel(); }, 0);
+    });
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', reposition);
       window.visualViewport.addEventListener('scroll', reposition);
@@ -170,8 +200,12 @@ export class MobileTextInput {
       if (this._open) this.hide();
       return;
     }
-    if (!this._open || t.owner !== this._owner || t.key !== this._key) this._bind(t);
-    this.reposition(t.rect);
+    if (!this._open || t.owner !== this._owner || t.key !== this._key) {
+      this._bind(t);
+      if (this._panelOpen) this._fillPanel(t, true);
+    }
+    if (this._panelOpen) this._layoutPanel();
+    else this.reposition(t.rect);
   }
 
   /** Point the input at a new field: value, keyboard type, Return key label. */
@@ -261,6 +295,7 @@ export class MobileTextInput {
   }
 
   hide() {
+    this._closePanel();
     this._open = false;
     this._owner = null;
     this._key = null;
@@ -324,6 +359,7 @@ export class MobileTextInput {
 
   reposition(field) {
     if (!this.input || !this._open) return;
+    if (this._panelOpen) { this._layoutPanel(); return; }
     if (!field) {
       this.hide();
       return;
@@ -385,6 +421,20 @@ export class MobileTextInput {
 
   _onKeyDown(e) {
     this._pendingCaret = null;
+    if (this._panelOpen) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        this._cancel();
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        e.stopPropagation();
+        this._stepField(e.shiftKey ? -1 : 1, true);
+        return;
+      }
+    }
     // Return on a form field that is not the last one moves to the next
     // field and keeps the keyboard up. Otherwise Enter / Escape bubble to the
     // window handler (Accept / Cancel); prevent the input's default action.
@@ -392,13 +442,169 @@ export class MobileTextInput {
         && this.dialog.fieldIndex < this.dialog.fields.length - 1) {
       e.preventDefault();
       e.stopPropagation();
-      if (this.dialog.focusField) this.dialog.focusField(this.dialog.fieldIndex + 1);
-      else this.dialog.fieldIndex += 1;
-      this.sync();
+      this._stepField(1, false);
       return;
     }
     if (e.key === 'Enter' || e.key === 'Escape') {
       e.preventDefault();
     }
   }
+
+  /** Next / previous form field, keeping the keyboard (and panel) up. */
+  _stepField(dir, wrap) {
+    const d = this.dialog;
+    if (!d.active || d.mode !== 'form') return false;
+    const n = d.fields.length;
+    let next = d.fieldIndex + dir;
+    if (wrap) next = (next + n) % n;
+    if (next < 0 || next >= n) return false;
+    if (d.focusField) d.focusField(next, 'all');
+    else d.fieldIndex = next;
+    this.sync();
+    if (this._panelOpen) {
+      const t = this._target();
+      if (t) this._fillPanel(t, true);
+      try { this.input.select(); } catch (_) { /* ignore */ }
+    }
+    return true;
+  }
+
+  // ── Entry panel (touch) ───────────────────────────────────────────────
+
+  _buildPanel() {
+    const panel = document.createElement('div');
+    panel.id = 'mobile-entry-panel';
+    panel.className = 'mobile-entry';
+    panel.hidden = true;
+    panel.setAttribute('role', 'dialog');
+    panel.innerHTML =
+      '<div class="me-text"><div class="me-title"></div><div class="me-q"></div><div class="me-hint"></div></div>' +
+      '<div class="me-slot"></div>' +
+      '<div class="me-btns"><button type="button" class="me-cancel">Cancel</button>' +
+      '<button type="button" class="me-done">Done</button></div>';
+    document.body.appendChild(panel);
+    this.panel = panel;
+    this._els = {
+      title: panel.querySelector('.me-title'),
+      q: panel.querySelector('.me-q'),
+      hint: panel.querySelector('.me-hint'),
+      slot: panel.querySelector('.me-slot'),
+      done: panel.querySelector('.me-done'),
+      cancel: panel.querySelector('.me-cancel'),
+    };
+    // Keep focus in the input (and the keyboard up) while a button is pressed.
+    for (const b of [this._els.done, this._els.cancel]) {
+      b.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); });
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      b.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+    }
+    this._els.done.addEventListener('click', (e) => { e.stopPropagation(); this._done(); });
+    this._els.cancel.addEventListener('click', (e) => { e.stopPropagation(); this._cancel(); });
+    // Taps on the panel itself are not game taps.
+    panel.addEventListener('pointerdown', (e) => e.stopPropagation());
+    panel.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+  }
+
+  _openPanel() {
+    const t = this._target();
+    if (!t || !this.panel) return;
+    this._panelOpen = true;
+    this.panel.hidden = false;
+    this.input.classList.add('in-panel');
+    document.body.classList.add('mobile-entry-open');
+    this._fillPanel(t, true);
+    this._layoutPanel();
+  }
+
+  _closePanel() {
+    if (!this._panelOpen) return;
+    this._panelOpen = false;
+    this._before = null;
+    if (this.panel) this.panel.hidden = true;
+    this.input?.classList.remove('in-panel');
+    document.body.classList.remove('mobile-entry-open');
+    const t = this._open ? this._target() : null;
+    if (t?.rect) this.reposition(t.rect);
+  }
+
+  /** Text for the panel: dialog title, question / field label, hint. */
+  _fillPanel(t, resetBefore) {
+    const d = this.dialog;
+    if (resetBefore) this._before = t.get();
+    let q = '', hint = '', prefix = '';
+    if (t.key === 'prompt') {
+      q = this._promptText || '';
+      hint = d.subtitle || '';
+      prefix = d.promptPrefix || '';
+    } else {
+      const i = d.fieldIndex;
+      const f = d.fields[i] || {};
+      q = f.label || '';
+      hint = f.subtitle || d.subtitle || '';
+      prefix = f.prefix || '';
+      if (d.fields.length > 1) hint = `Field ${i + 1}/${d.fields.length}` + (hint ? ` · ${hint}` : '');
+    }
+    this._els.title.textContent = plainText(d.title || 'Enter');
+    this._els.q.textContent = plainText(q);
+    this._els.hint.textContent = plainText(hint);
+    this._els.hint.hidden = !hint;
+    this._els.slot.dataset.prefix = prefix;
+    this._els.done.textContent = t.last || t.key === 'prompt' ? 'Done' : 'Next';
+  }
+
+  /** Pin the panel to the top of the visual viewport, input over its slot. */
+  _layoutPanel() {
+    if (!this._panelOpen || !this.panel) return;
+    const vv = window.visualViewport;
+    const vx = vv ? vv.offsetLeft : 0, vy = vv ? vv.offsetTop : 0;
+    const vw = vv ? vv.width : window.innerWidth, vh = vv ? vv.height : window.innerHeight;
+    const compact = vw > vh;
+    const p = this.panel;
+    p.classList.toggle('is-compact', compact);
+    // Short visible strip (landscape with the keyboard up): drop the hint.
+    p.classList.toggle('no-hint', compact && vh < 200);
+    const m = 8;
+    p.style.left = `${vx + m}px`;
+    p.style.top = `${vy + m}px`;
+    p.style.width = `${Math.max(200, vw - m * 2)}px`;
+    p.style.maxHeight = `${Math.max(80, vh - m * 2)}px`;
+    const r = this._els.slot.getBoundingClientRect();
+    const el = this.input;
+    const pre = this._els.slot.dataset.prefix ? 22 : 0;
+    el.style.left = `${r.left + pre}px`;
+    el.style.top = `${r.top}px`;
+    el.style.width = `${Math.max(40, r.width - pre)}px`;
+    el.style.height = `${r.height}px`;
+    el.style.fontSize = '16px';
+    el.tabIndex = 0;
+  }
+
+  /** Done / Next: the value is already live in the game field. */
+  _done() {
+    if (!this._panelOpen) return;
+    const t = this._target();
+    if (t && t.key !== 'prompt' && !t.last && this._stepField(1, false)) return;
+    this._before = null;
+    this.input.blur();
+    this._closePanel();
+  }
+
+  /** Cancel: put back the value from when the panel opened. */
+  _cancel() {
+    const t = this._target();
+    if (t && this._before != null) {
+      t.set(this._before);
+      this._seed(t);
+      const n = this._before.length;
+      this.dialog.setTextSelection?.(n, n);
+    }
+    this._before = null;
+    this.input.blur();
+    this._closePanel();
+  }
+}
+
+/** Plain text from a dialog string (drops **bold** / _italic_ markers and newlines). */
+function plainText(s) {
+  return String(s ?? '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/(^|\s)_(.+?)_(?=\s|$|[.,!?])/g, '$1$2').replace(/\s*\n\s*/g, ' ').trim();
 }
