@@ -19,6 +19,14 @@ export function rothLimit(year, age, magi, married, compensation, inflation = .0
   const cap = fraction === 0 ? 0 : fraction === 1 ? limit : Math.max(200, Math.ceil(limit * fraction / 10) * 10);
   return Math.max(0, Math.min(limit, cap, compensation));
 }
+/** Roth IRA contribution style: 'fixed' (player's dollar amount, default for old saves)
+ * or 'max' ("Rise with limit": the full yearly IRS IRA limit incl. age-50 catch-up). */
+export function rothContributionMode(p) { return p?.rothContributionMode === 'max' ? 'max' : 'fixed'; }
+/** The yearly amount the player asked for, before MAGI phase-out, compensation and Cash caps. */
+export function rothContributionTarget(p, year = p.year, age = p.age, inflation = p.taxInflation ?? .025) {
+  return rothContributionMode(p) === 'max' ? contributionLimits(year, age ?? 0, inflation).ira
+    : nonnegative(p.rothAnnualContribution);
+}
 export function fullRetirementAge(birthYear) {
   if (birthYear <= 1937) return 65;
   if (birthYear <= 1942) return 65 + (birthYear - 1937) * 2 / 12;

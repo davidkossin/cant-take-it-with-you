@@ -7,7 +7,7 @@ import { GAME_VERSION } from '../config.js';
 
 const FETCH_URLS = ['./CHANGELOG.md', 'CHANGELOG.md'];
 
-/** Max wrapped lines per dialog page (keeps LTTP box under the 210px cap). */
+/** Max wrapped lines per dialog page (keeps the dialog box under the 210px cap). */
 export const CHANGELOG_PAGE_LINES = 8;
 
 /** Versions shown per picker page (plus Older / Newer / Back). */

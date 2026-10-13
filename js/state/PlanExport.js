@@ -111,6 +111,9 @@ function validatePortfolio(portfolio) {
         throw new Error(`The portfolio field ${key}.${field} must be a finite number.`);
     }
   }
+  for (const key of ['rothContributionMode', 'spouseRothContributionMode'])
+    if (portfolio[key] != null && portfolio[key] !== 'fixed' && portfolio[key] !== 'max')
+      throw new Error(`The portfolio field ${key} must be 'fixed' or 'max'.`);
   for (const key of ['k401Allocation', 'rothAllocation', 'spouseK401Allocation', 'spouseRothAllocation', 'rateOverrides']) {
     const value = portfolio[key];
     if (value != null && (!dictionary(value) || Object.values(value).some(item => !Number.isFinite(item))))

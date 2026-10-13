@@ -10,13 +10,25 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
-### Fixed
-- Opening Pause froze the game entirely (no menu option could be selected, Esc did not close it): `drawMenu()` referenced `boxH` without it being passed in, throwing on the very first frame the Pause main menu rendered. Introduced in the Charts redesign's box-geometry change, and not caught at the time because every existing Pause test called a sub-screen's draw method directly (`drawCharts`/`drawMap`/etc. with hand-picked dimensions) rather than through the real `draw()` entry point that main-menu players actually hit. Added a regression test that calls `draw()` for the main menu screen and confirms Enter/Esc still work afterward.
-- The in-game title-screen Changelog viewer showed a menu entry literally labeled "Unreleased" (and a dialog titled that) for this section, since it parses `CHANGELOG.md` headings verbatim. It now displays the live `GAME_VERSION` there instead, matching the version already shown on the canvas; already-published, dated sections are unaffected.
+## [0.7.10] — 2026-10-13
 
 ### Added
 - Pause menu Charts redesigned. The forecast chart's drawing area is roughly 60% taller (the box itself grew to the same HUD-aware sizing `Dialog.js` already used, and the surrounding text was cut from 9 mostly-static lines to one headline, one contextual line and one small badges row). Three new chart views join the original percentile-band fan chart, all paged with clickable/tappable "‹ ›" buttons or `[`/`]`: Composition (the played Hallway path's asset mix over time — cash, savings, stocks, retirement, home equity), Cashflow (the Hallway path's grouped income vs. expenses per year, shortfall years outlined), and Risk (the cumulative share of all simulated paths that have hit a glass wall by each year). Small tick marks now mark life-event years (retirement, marriage, a kid, etc.) on every chart. A new `S` hotkey (and options-menu row) toggles a log Y-axis, and a new `Z` hotkey opens a 15-year zoom window that follows the year cursor; both compose with every view and reset when the Charts screen is left.
 - Map → Compare two timelines gains the same Y-axis readability controls (`S` log scale, `Z` zoom window) and life-event tick marks, reusing the exact rendering helpers built for the Charts screen above instead of its own separate math.
+- Roth IRA contributions can be set to 'Rise with limit', contributing the full yearly IRS limit as it grows (still limited by income and Cash).
+- Text fields support click-to-place caret, selection (drag, Shift+arrows, double-click, Ctrl+A), typing over selections, copy/paste, and Tab/Shift+Tab between fields.
+- The 'Objects in Space' link asks before leaving the game.
+- Family Planning 'Change Name/Appearance' for the player or the spouse.
+- Custom Setup's stock holding form links '$ amount' and '# of shares' live: typing in either fills the other at the entered share price, and the field typed in last is used.
+- Pause Menu profile shows mortgage payments and property taxes.
+
+### Changed
+- 'Remove a Spouse' moved to the bottom of the Family menu.
+
+### Fixed
+- Portfolio page titles no longer touch the first row or border.
+- Opening Pause froze the game entirely (no menu option could be selected, Esc did not close it): `drawMenu()` referenced `boxH` without it being passed in, throwing on the very first frame the Pause main menu rendered. Introduced in the Charts redesign's box-geometry change, and not caught at the time because every existing Pause test called a sub-screen's draw method directly (`drawCharts`/`drawMap`/etc. with hand-picked dimensions) rather than through the real `draw()` entry point that main-menu players actually hit. Added a regression test that calls `draw()` for the main menu screen and confirms Enter/Esc still work afterward.
+- The in-game title-screen Changelog viewer showed a menu entry literally labeled "Unreleased" (and a dialog titled that) for this section, since it parses `CHANGELOG.md` headings verbatim. It now displays the live `GAME_VERSION` there instead, matching the version already shown on the canvas; already-published, dated sections are unaffected.
 
 ## [0.7.7] — 2026-10-10
 
@@ -303,7 +315,7 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 ## [0.5.10] — 2026-09-29
 
 ### Added
-- Title **Changelog**: open release notes from the startup menu (near How to Play); fetches `CHANGELOG.md` at runtime, lists versions newest-first, and pages through each section in LTTP dialogs
+- Title **Changelog**: open release notes from the startup menu (near How to Play); fetches `CHANGELOG.md` at runtime, lists versions newest-first, and pages through each section in dialog boxes
 - Decision Rooms entered after a Hallway of Time gain a **west-wall center door** that returns to that prior Hallway timeline node (same instance / year stretch), mirroring the hallway south-return-to-Decision-Room pattern; the root/start Decision Room has no west return door
 - Hallway of Time **mortgage paid-off milestone**: when a home’s mortgage clears during year projection, a one-shot aura portal / banner fires per home (e.g. “Mortgage paid off: Primary Residence”)
 

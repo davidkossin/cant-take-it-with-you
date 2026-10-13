@@ -14,7 +14,7 @@ import { getSaveStatus, flushSaves, autoSave } from '../state/SaveSystem.js';
 import { downloadForecastBundle } from '../state/PlanExport.js';
 import { loadFromFile, loadedFileMessage, saveGameToFile, savedFileMessage } from '../state/SaveFile.js';
 import { editInflationSettings, inflationToggleLabel, moneyUnitSubtitle } from './PlanningInputs.js';
-import { computeWorth } from '../finance/Engine.js';
+import { computeWorth, annualMortgagePayment, annualPropertyTax } from '../finance/Engine.js';
 import { drawWorthChart, drawForecastChart, drawCompositionChart, drawCashflowChart, drawRiskChart, groupIncome, groupExpenses } from '../render/Charts.js';
 import { makeDialogChrome } from '../render/Assets.js';
 import { formatMoneyDisplay } from '../render/Dialog.js';
@@ -688,7 +688,9 @@ export class PauseMenu {
         : this.screen === 'map'
           ? 'Timeline Map'
           : this.screen === 'settings' ? 'Settings' : this.chartTitle(game);
-    ctx.fillText(title, x + 12, y + 10);
+    // Portfolio pages: title inset from the gold border, aligned with the row column (x + 36).
+    if (this.screen === 'portfolio') ctx.fillText(title, x + 36, y + 24);
+    else ctx.fillText(title, x + 12, y + 10);
     ctx.fillStyle = '#666';
     ctx.font = '14px "Press Start 2P", monospace';
     this.drawLinks(ctx, [
@@ -881,7 +883,8 @@ export class PauseMenu {
       this.portfolioPage === 0
         ? this.portfolioSummaryRows(p, worth)
         : this.portfolioDetailPages(p)[this.portfolioDetailPage] || [];
-    let ry = y + 32;
+    // Rows start below the portfolio title (y + 24, 22px) with ~14px clearance.
+    let ry = y + 60;
     for (const row of rows) {
       ctx.fillStyle = row.heading ? PALETTE.gold : PALETTE.uiText;
       ctx.fillText(row.text, x + 36, ry);
@@ -924,6 +927,16 @@ export class PauseMenu {
       p.housing === 'rent'
         ? `Rent ${money(p.monthlyRent)}/mo`
         : `Own · ${(p.homes || []).length} home(s)`;
+    const ownedHomes = p.housing === 'rent' ? [] : p.homes || [];
+    const mortgagedHomes = ownedHomes.filter((h) => (h.mortgageOwed || 0) > 0);
+    const mortgageYr = mortgagedHomes.reduce((sum, h) => sum + annualMortgagePayment(h), 0);
+    const propTaxYr = ownedHomes.reduce((sum, h) => sum + annualPropertyTax(h), 0);
+    const homeCostRows = ownedHomes.length
+      ? [
+          { text: mortgagedHomes.length ? `Mortgage ${money(mortgageYr / 12)}/mo (${money(mortgageYr)}/yr)` : 'Mortgage none' },
+          { text: `Prop tax ${money(propTaxYr)}/yr` },
+        ]
+      : [];
     const filing = p.filingStatus === 'married' || p.married ? 'MFJ' : 'Single';
     const zipLine = p.zip ? `ZIP ${p.zip}` : 'ZIP blank (national avg)';
     const holdings = p.stocksHoldings || [];
@@ -947,6 +960,7 @@ export class PauseMenu {
       { text: `Roth IRA ${money(worth.rothBalance || p.rothBalance || 0)}` },
       { text: `Retire @ ${p.retirementAge || 65}` },
       { text: housing },
+      ...homeCostRows,
       { text: `Equity ${money(worth.homeEquity)}` },
       { text: `Loans ${money(loanTotal)}` },
       { text: kidsLine },
@@ -985,9 +999,10 @@ export class PauseMenu {
         rows.push({ text: `${label}` });
         rows.push({ text: `Value ${money(home.value)}` });
         rows.push({ text: `Mortgage ${money(home.mortgageOwed)}` });
-        if (home.annualPropertyTax != null) {
-          rows.push({ text: `Prop tax ${money(home.annualPropertyTax)}/yr` });
+        if ((home.mortgageOwed || 0) > 0) {
+          rows.push({ text: `Payment ${money(annualMortgagePayment(home) / 12)}/mo` });
         }
+        rows.push({ text: `Prop tax ${money(annualPropertyTax(home))}/yr` });
         if (home.monthlyRevenue) {
           rows.push({ text: `Revenue ${money(home.monthlyRevenue)}/mo` });
         }

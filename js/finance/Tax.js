@@ -4,7 +4,7 @@
 import { getFederalTable } from '../data/tax-brackets.js';
 import { stateFromZip } from '../data/state-from-zip.js';
 import { emptyIncome, money, nonnegative, copy } from './Books.js';
-import { rothLimit } from './Retirement.js';
+import { rothLimit, rothContributionTarget } from './Retirement.js';
 import { incomeSchedule } from './IncomeSchedule.js';
 import { ownerState } from './Household.js';
 import { projectOneYear } from './Engine.js';
@@ -32,7 +32,7 @@ export function rothAnnualContribution(state, magi = nonnegative(state.salary) +
   if (state.hasRoth === false) return 0;
   const cap = rothLimit(state.year, state.age, magi, filingStatus(state) === 'married',
     nonnegative(state.salary) + nonnegative(state.spouseSalary), state.taxInflation ?? .025);
-  return money(Math.min(nonnegative(state.rothAnnualContribution), cap));
+  return money(Math.min(rothContributionTarget(state), cap));
 }
 export function taxableSocialSecurity(benefit, otherIncome, married, exemptInterest = 0) {
   const provisional = otherIncome + exemptInterest + benefit / 2;

@@ -1,6 +1,6 @@
 # You Can't Take It With You
 
-A 16-bit, top-down life & finance RPG (A Link to the Past vibe) playable in the browser.
+A 16-bit, top-down life & finance RPG playable in the browser.
 
 **Live:** [https://davidkossin.github.io/cant-take-it-with-you/](https://davidkossin.github.io/cant-take-it-with-you/) · [https://dkossin.com/cant-take-it-with-you/](https://dkossin.com/cant-take-it-with-you/)
 
@@ -63,8 +63,8 @@ cant-take-it-with-you/
       PauseMenu.js    # Map + Charts
     render/
       Assets.js       # procedural pixel sprites (walk cycle, void, lamps)
-      Dialog.js       # SNES-style boxes (money commas, %)
-      Hud.js          # floating LTTP icon clusters
+      Dialog.js       # Retro-style dialog boxes (money commas, %)
+      Hud.js          # floating icon clusters
       Player.js       # 4-dir walk animation
       World.js        # tilemaps, wall windows, hallway void
       Charts.js       # net-worth line charts

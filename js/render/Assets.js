@@ -1,6 +1,6 @@
 /**
- * Procedural LTTP-inspired pixel sprites (canvas → Image / pattern).
- * No Nintendo assets — original tiny sprites in muted earthy palette.
+ * Procedural pixel sprites (canvas → Image / pattern).
+ * Original tiny sprites in muted earthy palette.
  */
 
 import {
@@ -642,7 +642,7 @@ export function makeHudIcon(kind) {
   return c;
 }
 
-/** Small gold-framed item box like LTTP */
+/** Small gold-framed item box */
 export function makeHudBox(w, h) {
   const key = `hudbox-${w}x${h}`;
   if (cache.has(key)) return cache.get(key);

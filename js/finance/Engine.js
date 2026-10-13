@@ -8,7 +8,7 @@ import { money, nonnegative, copy, stockBook, syncBook, ensureHoldings,
   liquidate, invest, incomeFor, addIncome, post, isLongTerm } from './Books.js';
 import { monthlyPayment, loanDue, payLoan } from './Loans.js';
 import { economicYear, holdingReturn, accountGross, availableStocks, randomVariationEnabled } from './Market.js';
-import { requiredDistribution, rothLimit } from './Retirement.js';
+import { requiredDistribution, rothLimit, rothContributionTarget } from './Retirement.js';
 import { incomeSchedule, monthlyAmount } from './IncomeSchedule.js';
 import { ownerKey, ownerAge, ownerState, ownerWorking } from './Household.js';
 import { hashSeed, mulberry32 } from './rng.js';
@@ -67,6 +67,10 @@ export const liquidTotal = s => computeWorth(s).availableLiquid;
 export const annualAmortizingPayment = (p,r,t) => monthlyPayment(p,r,Math.max(0,Math.round(t*12))) * 12;
 export const annualMortgagePayment = h => (h.monthlyPayment ?? monthlyPayment(h.mortgageOwed,h.rate,
   h.remainingMonths ?? Math.round(h.remainingTerm*12))) * 12;
+/** Annual property tax for a home. `fallbackValue` is the assessed-value fallback (engine: value at start of month). */
+export const annualPropertyTax = (home, fallbackValue) => home.annualPropertyTax != null
+  ? nonnegative(home.annualPropertyTax)
+  : nonnegative(home.assessedValue, fallbackValue ?? home.value) * nonnegative(home.propertyTaxRate, .01);
 export const annualLoanPayment = l => (l.monthlyPayment ?? monthlyPayment(l.principal,l.rate,
   l.remainingMonths ?? Math.round(l.remainingTerm*12))) * 12;
 /** `early`: the player accepted the 10% early-withdrawal penalty for this withdrawal. */
@@ -286,8 +290,7 @@ export function projectOneYear(state,difficultyId,opts={}) {
       const rental=(home.type==='rental' || home.type==='investment');
       const revenue=rental?money(nonnegative(home.monthlyRevenue)*(1-Math.min(1,nonnegative(home.vacancyRate,.05)))):0;
       s.cash=money(s.cash+revenue); statement.rentalRevenue=money((statement.rentalRevenue || 0)+revenue);
-      const propertyTax=money((home.annualPropertyTax!=null?nonnegative(home.annualPropertyTax)
-        : nonnegative(home.assessedValue,before)*nonnegative(home.propertyTaxRate,.01))/12);
+      const propertyTax=money(annualPropertyTax(home,before)/12);
       const operating=money((nonnegative(home.annualMaintenance,before*.01)
         +nonnegative(home.annualInsurance,before*.003)+nonnegative(home.annualHOA))/12);
       const paidProperty=payCost(s,propertyTax,'propertyTax',statement,{age:currentAge});
@@ -371,13 +374,14 @@ export function projectOneYear(state,difficultyId,opts={}) {
   const preview=estimateAnnualTax(s,difficulty,income);
   // Year-end Roth funding from Cash only (after reserving tax due), legal compensation/MAGI caps,
   // and an explicit five-year clock. Optional: skipped quietly when Cash is short.
+  // 'max' mode ("Rise with limit") targets the full yearly IRA limit; 'fixed' the player's amount.
   let remainingCompensation=income.wages+income.spouseWages;
   for (const owner of ['primary','spouse']) {
     if (owner==='spouse' && !s.married) continue;
     const p=ownerState(s,owner),personAge=ownerAge(s,owner);
     if (personAge==null) continue;
     const cap=rothLimit(year,personAge,preview.meta.agi,s.married,remainingCompensation,s.taxInflation ?? .025);
-    const roth=money(Math.min(nonnegative(p.rothAnnualContribution),cap,
+    const roth=money(Math.min(rothContributionTarget(p,year,personAge,s.taxInflation ?? .025),cap,
       Math.max(0,nonnegative(s.cash)-Math.max(0,preview.total+nonnegative(s.taxPayable)-income.taxPaid))));
     if (p.hasRoth!==false && roth>0) {
       s.cash=money(s.cash-roth);remainingCompensation=money(remainingCompensation-roth);

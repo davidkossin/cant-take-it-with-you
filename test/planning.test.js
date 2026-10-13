@@ -5,7 +5,7 @@ import { projectOneYear, projectYears, sellStock, buyHome, refinanceHome, largeP
   computeWorth, applySecuritiesMarginCall, findBankInsolvencyIndex, raiseCash, transferSavings,
   withdrawRetirement, retirementAccess, setRetirementWithdrawalPlan, setStockSalePlan, setSavingsTransferPlan,
   NOT_ENOUGH_CASH, FUNDING_RULE } from '../js/finance/Engine.js';
-import { estimateAnnualTax, capitalNet, taxableSocialSecurity, payrollTax } from '../js/finance/Tax.js';
+import { estimateAnnualTax, capitalNet, taxableSocialSecurity, payrollTax, rothAnnualContribution } from '../js/finance/Tax.js';
 import { monthlyPayment, loanDue, payLoan } from '../js/finance/Loans.js';
 import { contributionLimits, rothLimit, claimFactor, requiredDistribution, benefitEarningsReduction } from '../js/finance/Retirement.js';
 import { createGameFromSetup, createDefaultSetup, enterYearRoom, completeJourney, reconstructWorthAlongPath,
@@ -305,4 +305,37 @@ test('Roth contributions come from Cash only and are skipped quietly when Cash i
   const r=projectOneYear(p,'standard',{deterministic:true});
   assert.ok(r.statement.rothContribution<1000);assert.equal(r.state.savings,20000);
   assert.equal(r.statement.fundingSuccess,true);assert.ok(r.state.cash>=0);
+});
+test("Roth 'Rise with limit' contributes the full yearly IRA limit as it grows, with the age-50 catch-up",()=>{
+  let s=household({cash:50000,salary:80000,annualSpending:20000,hasRoth:true,rothContributionMode:'max',age:45,retirementAge:70});
+  const paid=[];
+  for (let i=0;i<8;i++) { const r=projectOneYear(s,'standard',{deterministic:true});paid.push(r.statement.rothContribution);s=r.state;s.cash=50000; }
+  // Ages 45-52 in 2026-2033: limit rises in $500 steps at 2.5%/yr; catch-up from age 50 rises in $100 steps.
+  for (let i=0;i<paid.length;i++) assert.equal(paid[i],contributionLimits(2026+i,45+i).ira);
+  assert.equal(paid[0],7500);assert.equal(paid[3],8000);assert.equal(paid[5],8000+1200);
+  assert.ok(paid[7]>paid[0]);assert.equal(s.rothContributionMode,'max');
+  assert.equal(rothAnnualContribution(household({year:2031,age:50,salary:80000,hasRoth:true,rothContributionMode:'max'})),contributionLimits(2031,50).ira);
+});
+test("Roth 'Rise with limit' still applies the MAGI phase-out, compensation and Cash caps",()=>{
+  const year=(o)=>projectOneYear(household({cash:200000,hasRoth:true,rothContributionMode:'max',...o}),'standard',{deterministic:true}).statement.rothContribution;
+  assert.equal(year({salary:150000}),7500);
+  const partial=year({salary:160000});assert.ok(partial>0 && partial<7500);
+  assert.equal(partial,rothAnnualContribution(household({salary:160000,hasRoth:true,rothContributionMode:'max'})));
+  assert.equal(year({salary:170000}),0);
+  assert.equal(year({salary:4000}),4000);
+  const short=projectOneYear(household({cash:0,salary:20000,annualSpending:18000,savings:20000,savingsRate:0,hasRoth:true,rothContributionMode:'max'}),'standard',{deterministic:true});
+  assert.ok(short.statement.rothContribution<1000);assert.equal(short.state.savings,20000);assert.ok(short.state.cash>=0);
+  // No compensation after retirement means no contribution, even in 'max' mode.
+  assert.equal(year({age:66,salary:80000,retirementAge:65}),0);
+});
+test("Roth contribution mode is per person and old saves default to 'fixed'",()=>{
+  const p=household({married:true,spouseAge:50,salary:60000,spouseSalary:60000,cash:60000,hasRoth:true,spouseHasRoth:true,
+    rothAnnualContribution:3000,spouseRothContributionMode:'max'});
+  const r=projectOneYear(p,'standard',{deterministic:true});
+  assert.equal(r.state.rothBalance,3000);assert.equal(r.state.spouseRothBalance,contributionLimits(2026,50).ira);
+  assert.equal(normalizePortfolio({year:2026,age:40}).rothContributionMode,'fixed');
+  assert.equal(normalizePortfolio({year:2026,age:40}).spouseRothContributionMode,'fixed');
+  assert.equal(normalizePortfolio({year:2026,age:40,rothContributionMode:'max'}).rothContributionMode,'max');
+  const fixedLater=projectOneYear(household({year:2031,cash:50000,salary:80000,hasRoth:true,rothAnnualContribution:3000}),'standard',{deterministic:true});
+  assert.equal(fixedLater.statement.rothContribution,3000);
 });

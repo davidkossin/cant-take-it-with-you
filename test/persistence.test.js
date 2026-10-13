@@ -180,6 +180,22 @@ test('portable plan round-trip preserves exact financial inputs, immutable forec
   assert.ok(plan.versions.taxRules); assert.ok(plan.model.coverage.length > 3);
 });
 
+test("Roth 'Rise with limit' mode round-trips through a plan file; files without it import as 'fixed'", () => {
+  const game = createGameFromSetup({ ...createDefaultSetup(), hasRoth: true, rothContributionMode: 'max',
+    married: true, spouseHasRoth: true, spouseRothContributionMode: 'max' });
+  assert.equal(game.portfolio.rothContributionMode, 'max');
+  const imported = importPlan(serializePlan(game));
+  assert.equal(imported.game.portfolio.rothContributionMode, 'max');
+  assert.equal(imported.game.portfolio.spouseRothContributionMode, 'max');
+  const legacy = exportPlan(game);
+  delete legacy.game.portfolio.rothContributionMode; delete legacy.game.portfolio.spouseRothContributionMode;
+  const old = importPlan(JSON.stringify(legacy));
+  assert.equal(old.game.portfolio.rothContributionMode, 'fixed');
+  assert.equal(old.game.portfolio.spouseRothContributionMode, 'fixed');
+  const bad = exportPlan(game); bad.game.portfolio.rothContributionMode = 'all';
+  assert.throws(() => importPlan(JSON.stringify(bad)), /rothContributionMode/);
+});
+
 test('portable imports reject malformed numbers, missing snapshots, cycles and prototype keys before any writes', () => {
   const game = createGameFromSetup(createDefaultSetup()), plan = exportPlan(game);
   assert.throws(() => importPlan('{'), /valid JSON/);

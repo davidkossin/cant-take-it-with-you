@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SetupScene } from '../js/scenes/SetupScene.js';
-import { RoomScene, transactionReason } from '../js/scenes/RoomScene.js';
+import { RoomScene, transactionReason, familyMenuOptions } from '../js/scenes/RoomScene.js';
 import { Hud } from '../js/render/Hud.js';
 import { Dialog, formatMoneyInput } from '../js/render/Dialog.js';
 import { editFamilyIncome, editSpouseIdentity, editRetirementAccounts, householdSalary } from '../js/scenes/FamilyInputs.js';
@@ -101,7 +101,7 @@ test('Custom Setup asks Family after Difficulty and keeps salaries/accounts pers
     1, 'Alex', 2, 'continue', '75001', 12000, { savings: 20000, rate: 2 },
     { salary: 150000, spouseSalary: 90000 }, { retirementAge: 70, spouseRetirementAge: 65 },
     ['k401', 'roth'], { balance: 100000, contrib: 8, match: 100, onFirst: 4, equity: 80 },
-    { balance: 30000, contrib: 5000, basis: 22000, opened: 2020, equity: 75 },
+    'fixed', { balance: 30000, contrib: 5000, basis: 22000, opened: 2020, equity: 75 },
     ['k401'], { balance: 70000, contrib: 6, match: 50, onFirst: 6, equity: 60 },
     'total', 100000, 80000, '2020-01-01', 'rent', 2000, 50000, 'go',
   ]);
@@ -120,6 +120,8 @@ test('Custom Setup asks Family after Difficulty and keeps salaries/accounts pers
   assert.equal(setup.k401Balance, 100000);
   assert.equal(setup.spouseK401Balance, 70000);
   assert.equal(setup.rothContributionBasis, 22000);
+  assert.equal(setup.rothAnnualContribution, 5000);
+  assert.equal(setup.rothContributionMode, 'fixed');
   assert.equal(setup.salaryOwnershipConfirmed, true);
   assert.equal(householdSalary(setup), 240000);
 });
@@ -172,6 +174,28 @@ test('Spouse account form never changes the primary retirement balance', async (
   assert.equal(p.spouseK401ContribRate, .1);
   assert.equal(p.spouseK401Allocation.equity, .8);
   assert.ok(Math.abs(p.spouseK401Allocation.bond - .2) < 1e-12);
+});
+
+test("Roth 'Rise with limit' skips the amount field and is set per person", async () => {
+  const p = household({ married: true, age: 52, spouseAge: 40, rothAnnualContribution: 2000 });
+  const dialog = scriptedDialog([['roth'], 'max', { balance: 1000, basis: 1000, opened: 2020, equity: 100 }]);
+  assert.equal(await editRetirementAccounts(p, dialog, { owner: 'spouse' }), true);
+  const menu = dialog.seen.find(x => x.kind === 'menu');
+  assert.deepEqual(menu.options.map(o => o.label), ['Fixed amount', 'Rise with limit ($7,500 in 2026)', 'Back']);
+  assert.ok(!dialog.seen.find(x => x.kind === 'form').fields.some(f => f.key === 'contrib'));
+  assert.equal(p.spouseRothContributionMode, 'max');
+  assert.equal(p.spouseHasRoth, true);
+  assert.equal(p.rothContributionMode, 'fixed');
+  assert.equal(p.rothAnnualContribution, 2000);
+  const primary = scriptedDialog([['roth'], 'max', { balance: 0, basis: 0, opened: 2026, equity: 100 }]);
+  await editRetirementAccounts(p, primary);
+  // Age 52: the 2026 limit includes the $1,100 catch-up.
+  assert.ok(primary.seen.find(x => x.kind === 'menu').options[1].label.includes('$8,600'));
+  assert.equal(p.rothContributionMode, 'max');
+  // Back at the style menu cancels without changing anything.
+  const before = structuredClone(p);
+  assert.equal(await editRetirementAccounts(p, scriptedDialog([['roth'], null])), false);
+  assert.deepEqual(p, before);
 });
 
 test('Cancelling marriage leaves household finances and filing status unchanged', async () => {
@@ -323,3 +347,61 @@ test('Cancelling the new job retirement date leaves employment and salaries unch
   await new RoomScene().handleTeller(game,scriptedDialog(['start',50000,false,null]),'job');
   assert.deepEqual(game.portfolio,before);
 });
+
+test('Family menu: Change Name/Appearance is offered and Remove a Spouse is last, just above Done', async () => {
+  assert.deepEqual(familyMenuOptions(household({ married: false })).map(o => o.label),
+    ['Add a Spouse', 'Have a Kid', 'Child Care', 'Change Name/Appearance', 'Done']);
+  assert.deepEqual(familyMenuOptions(household({ married: true, spouseName: 'Ben' })).map(o => o.label),
+    ['Have a Kid', 'Child Care', 'Change Name/Appearance', 'Remove a Spouse', 'Done']);
+  // The teller shows exactly these rows.
+  const dialog = scriptedDialog([null]);
+  await new RoomScene().handleTeller({ portfolio: household({ married: true, spouseName: 'Ben' }) }, dialog, 'kid');
+  const rows = dialog.seen[0].options.map(o => o.label);
+  assert.equal(rows.at(-2), 'Remove a Spouse');
+  assert.equal(rows.at(-1), 'Done');
+});
+
+test('Change Name/Appearance: who is asked by name; the spouse gets name, hair length, then hair + shirt colors', async () => {
+  const game = { portfolio: household({ married: true, playerName: 'Ada', spouseName: 'Ben', spouseAge: 40,
+    spouseHairColor: 'dark', spouseHairLength: 'short', spouseShirtColor: 'blue',
+    hairColor: 'blonde', hairLength: 'long', shirtColor: 'red' }) };
+  const dialog = scriptedDialog(['appearance', 'spouse', 'Benji', 'long', { hairColor: 'red', shirtColor: 'teal' }, null]);
+  await new RoomScene().handleTeller(game, dialog, 'kid');
+  const who = dialog.seen.find(x => x.text === 'Whose name or look?');
+  assert.deepEqual(who.options.map(o => o.label), ['Ada', 'Ben', 'Back']);
+  const kinds = dialog.seen.map(x => x.kind);
+  assert.deepEqual(kinds, ['menu', 'menu', 'prompt', 'menu', 'palette', 'menu']);
+  assert.equal(dialog.seen[2].defaultValue, 'Ben');
+  assert.deepEqual(dialog.seen[4].groups.map(g => g.key), ['hairColor', 'shirtColor']);
+  assert.equal(dialog.seen[4].hairLength, 'long', 'preview uses the length just chosen');
+  const p = game.portfolio;
+  assert.equal(p.spouseName, 'Benji');
+  assert.equal(p.spouseHairLength, 'long');
+  assert.equal(p.spouseHairColor, 'red');
+  assert.equal(p.spouseShirtColor, 'teal');
+  // The player is untouched.
+  assert.deepEqual([p.playerName, p.hairColor, p.hairLength, p.shirtColor], ['Ada', 'blonde', 'long', 'red']);
+});
+
+test('Change Name/Appearance while single goes straight to the player and saves to the sprite fields', async () => {
+  const game = { portfolio: household({ married: false, playerName: 'Ada', hairColor: 'dark', hairLength: 'short', shirtColor: 'blue' }) };
+  const dialog = scriptedDialog(['appearance', 'Grace', 'short', { hairColor: 'platinum', shirtColor: 'orange' }, null]);
+  await new RoomScene().handleTeller(game, dialog, 'kid');
+  assert.ok(!dialog.seen.some(x => x.text === 'Whose name or look?'));
+  assert.equal(dialog.seen[1].defaultValue, 'Ada');
+  assert.deepEqual([game.portfolio.playerName, game.portfolio.hairLength, game.portfolio.hairColor, game.portfolio.shirtColor],
+    ['Grace', 'short', 'platinum', 'orange']);
+});
+
+test('Change Name/Appearance: Back steps back one question; Back from the name changes nothing', async () => {
+  const p0 = household({ married: true, playerName: 'Ada', spouseName: 'Ben', hairColor: 'dark', hairLength: 'short', shirtColor: 'blue' });
+  const game = { portfolio: p0 };
+  const before = structuredClone(p0);
+  // Player: name, length, palette Back -> length again, Back -> name again, Back -> who, Back -> Family, Done.
+  const dialog = scriptedDialog(['appearance', 'primary', 'Zed', 'long', null, null, null, null, null]);
+  await new RoomScene().handleTeller(game, dialog, 'kid');
+  assert.deepEqual(dialog.seen.map(x => x.kind),
+    ['menu', 'menu', 'prompt', 'menu', 'palette', 'menu', 'prompt', 'menu', 'menu']);
+  assert.deepEqual(game.portfolio, before);
+});
+

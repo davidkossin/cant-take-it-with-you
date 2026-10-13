@@ -44,6 +44,7 @@ export function createDefaultSetup() {
     hasRoth: false,
     rothBalance: 0,
     rothAnnualContribution: 0,
+    rothContributionMode: 'fixed', // 'fixed' | 'max' (Rise with limit)
     retirementAge: 65,
     married: false,
     filingStatus: 'single', // 'single' | 'married'
@@ -149,6 +150,7 @@ export function createStandardPortfolioSetup() {
     hasRoth: false,
     rothBalance: 0,
     rothAnnualContribution: 0,
+    rothContributionMode: 'fixed', // 'fixed' | 'max' (Rise with limit)
     retirementAge: 65,
     married: true,
     filingStatus: 'married',
@@ -220,6 +222,8 @@ export function createGameFromSetup(setup) {
     hasRoth: !!setup.hasRoth || (Number(setup.rothBalance) || 0) > 0,
     rothBalance: Math.max(0, Number(setup.rothBalance) || 0),
     rothAnnualContribution: Math.max(0, Number(setup.rothAnnualContribution) || 0),
+    rothContributionMode: setup.rothContributionMode === 'max' ? 'max' : 'fixed',
+    spouseRothContributionMode: setup.spouseRothContributionMode === 'max' ? 'max' : 'fixed',
     retirementAge: Math.max(40, Math.min(100, Number(setup.retirementAge) || 65)),
     married,
     filingStatus: married ? 'married' : 'single',

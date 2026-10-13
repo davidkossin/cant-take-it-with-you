@@ -1,5 +1,5 @@
 /**
- * SNES / LTTP-styled dialog & menu boxes (logical canvas space).
+ * Retro-styled dialog & menu boxes (logical canvas space).
  * Supports keyboard and mouse/pointer hit-testing for options.
  */
 
@@ -8,17 +8,11 @@ import { makeDialogChrome, makePlayerSprite, hairTones, shirtTones } from './Ass
 import { captureMoneyContext, toDisplayMoney, fromDisplayMoney, moneyUnitSubtitle } from '../finance/DollarBasis.js';
 export { formatMoneyDisplay } from '../finance/DollarBasis.js';
 
-export function formatMoneyInput(raw) {
-  const neg = String(raw).trim().startsWith('-');
-  const cleaned = String(raw).replace(/[^\d.]/g, '');
-  if (!cleaned) return neg ? '-' : '';
-  const parts = cleaned.split('.');
-  const intPart = parts[0].replace(/^0+(?=\d)/, '') || '0';
-  const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  let out = (neg ? '-' : '') + withCommas;
-  if (parts.length > 1) out += '.' + parts[1].replace(/\D/g, '').slice(0, 2);
-  return out;
-}
+import {
+  formatMoneyInput, TEXT_MAX_LEN, normalizeSel, caretSel, selRange, hasSelection, selectedText,
+  selectAll, wordAt, moveSel, insertText, deleteText, caretFromX, scrollToCaret, tabIndex,
+} from '../ui/TextEdit.js';
+export { formatMoneyInput };
 
 export function parseMoneyInput(raw) {
   const n = parseFloat(String(raw).replace(/,/g, ''));
@@ -58,7 +52,7 @@ const PAL = {
 };
 
 export function sanitizeTextInput(raw) {
-  return String(raw ?? '').slice(0, 28);
+  return String(raw ?? '').slice(0, TEXT_MAX_LEN);
 }
 
 /**
@@ -160,6 +154,20 @@ export class Dialog {
     this.palHover = null;
     this.paletteBack = null;
     this.paletteHairLength = 'short';
+    /** prompt/form: caret + selection of the focused text field (see ui/TextEdit.js) */
+    this.textSel = caretSel(0);
+    /** first visible char of the focused field when its value is wider than the box */
+    this.textScroll = 0;
+    /** last edit / caret move (performance.now()); the caret stays solid briefly after one */
+    this._caretT = 0;
+    /** mouse drag-select in progress: { key } of the field being dragged in */
+    this._drag = null;
+    /** previous click on a text field, for double / triple click */
+    this._lastClick = null;
+    /** text geometry of drawn fields, keyed 'prompt' or form index: { textX, charW, scroll, len, box } */
+    this._textGeom = {};
+    /** text last copied / cut, handed to the browser's copy / cut event */
+    this._clipText = null;
   }
 
   show(text, { title = '', subtitle = '' } = {}) {
@@ -213,6 +221,25 @@ export class Dialog {
   }
 
   /**
+   * Yes / No question shown on top of whatever dialog is open (or none); the
+   * dialog underneath, with its pending answer, comes back unchanged after.
+   * No is highlighted first and Escape / B answers No.
+   * @returns {Promise<boolean>}
+   */
+  async confirmOver(text, { title = 'Confirm', subtitle = '', yes = 'Yes', no = 'No' } = {}) {
+    const under = this.active ? { ...this } : null;
+    const answer = await this.menu(text, [
+      { label: yes, value: true },
+      { label: no, value: false },
+    ], { title, subtitle, selected: 1, escValue: false });
+    if (under) {
+      Object.assign(this, under);
+      this.chrome = null;
+    }
+    return answer === true;
+  }
+
+  /**
    * @param {object} opts
    * @param {'text'|'number'|'money'|'percent'} [opts.type]
    * @param {string} [opts.prefix] — shown left of field (e.g. '$')
@@ -235,6 +262,7 @@ export class Dialog {
       if (type === 'money' && initial !== '') initial = displayMoneyInput(this.promptInitialMoneyValue, this._moneyContext, amountScale);
       this.promptInitialDisplay = initial;
       this.promptValue = initial;
+      this._resetTextFocus();
       this.options = [
         { label: 'Accept', value: '__accept' },
         { label: 'Back', value: '__back' },
@@ -284,6 +312,7 @@ export class Dialog {
         };
       });
       this.fieldIndex = 0;
+      this._resetTextFocus();
       this.options = [
         { label: 'Accept', value: '__accept' },
         { label: 'Back', value: '__back' },
@@ -465,6 +494,8 @@ export class Dialog {
       fields: this.fields,
       fieldIndex: this.fieldIndex,
       multiValues: this.multiValues,
+      textSel: this.textSel,
+      textScroll: this.textScroll,
       resolve: this.resolve,
     };
     this.active = true;
@@ -547,7 +578,7 @@ export class Dialog {
     if (this.subtitle) ty += subH;
     ty += textH;
     let promptY = ty;
-    if (this.mode === 'prompt') promptY = ty + 8;
+    if (this.mode === 'prompt') promptY = ty + 4; // matches the box drawn in draw()
     return { boxW, boxH, pad, lineH, optH: OPTION_BASE_H, titleH, textH, subH, x, y, promptY, formH };
   }
 
@@ -564,14 +595,31 @@ export class Dialog {
    * Mouse / pointer hit-test in logical canvas coords.
    * @returns {boolean} whether the event was handled
    */
-  handlePointer(lx, ly) {
+  handlePointer(lx, ly, { shift = false, now = (typeof performance !== 'undefined' ? performance.now() : 0),
+    drag = true } = {}) {
     if (!this.active || this.mode === 'loading') return false;
     if (this.mode === 'palette') return this._palPointer(lx, ly, true);
+
+    if (this.mode === 'prompt') {
+      const r = this.getPromptFieldRect();
+      if (r && lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) {
+        this._textPointerDown(lx, { shift, now, drag });
+        return true;
+      }
+    }
 
     if (this.mode === 'form') {
       for (const hit of this._fieldHitRects) {
         if (lx >= hit.x && lx <= hit.x + hit.w && ly >= hit.y && ly <= hit.y + hit.h) {
-          this.fieldIndex = hit.index;
+          if (hit.index !== this.fieldIndex) {
+            this.fieldIndex = hit.index;
+            this._resetTextFocus();
+            this._lastClick = null;
+            shift = false;
+          }
+          // On the label line: caret at the end; on the box: caret where pressed.
+          const box = this._fieldBoxRects[hit.index];
+          if (box && ly >= box.y) this._textPointerDown(lx, { shift, now, drag });
           return true;
         }
       }
@@ -686,63 +734,33 @@ export class Dialog {
         e.preventDefault();
         return true;
       }
+      if (e.key === 'Tab') {
+        // Keep focus in the game: Tab walks the form's fields, not the page.
+        this._tabField(e.shiftKey ? -1 : 1);
+        e.preventDefault();
+        return true;
+      }
+      // The hidden input edits natively; MobileTextInput mirrors value + selection.
       return true;
     }
 
+    if ((this.mode === 'prompt' || this.mode === 'form') && !fromNativeInput) {
+      if (this._handleTextKey(e)) return true;
+    }
+
     if (this.mode === 'form' && !fromNativeInput) {
-      const f = this.fields[this.fieldIndex];
-      if (f && e.key === 'Backspace') {
-        let v = f.value.slice(0, -1);
-        if (f.type === 'money') v = formatMoneyInput(v);
-        this.setFieldValue(this.fieldIndex, v);
-        e.preventDefault();
-        return true;
-      }
-      if (f && e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-        this._typeInto(f, e.key);
-        e.preventDefault();
-        return true;
-      }
       if (KEYS.up.includes(e.key)) {
-        if (this.fieldIndex > 0) this.fieldIndex--;
+        if (this.fieldIndex > 0) this.focusField(Math.min(this.fieldIndex, this.fields.length) - 1);
         else this.selected = (this.selected - 1 + this.options.length) % this.options.length;
         e.preventDefault();
         return true;
       }
       if (KEYS.down.includes(e.key)) {
-        if (this.fieldIndex < this.fields.length - 1) this.fieldIndex++;
+        if (this.fieldIndex < this.fields.length - 1) this.focusField(this.fieldIndex + 1);
         else {
           // move into Accept/Back
           this.fieldIndex = this.fields.length; // past fields
           this.selected = 0;
-        }
-        e.preventDefault();
-        return true;
-      }
-    }
-
-    if (this.mode === 'prompt' && !fromNativeInput) {
-      if (e.key === 'Backspace') {
-        this.promptValue = this.promptValue.slice(0, -1);
-        if (this.promptType === 'money') {
-          this.promptValue = formatMoneyInput(this.promptValue);
-        }
-        e.preventDefault();
-        return true;
-      }
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-        const ch = e.key;
-        if (this.promptType === 'money') {
-          if (/[0-9.,\-]/.test(ch)) {
-            const raw = (this.promptValue + ch).replace(/,/g, '');
-            if (/^-?\d*\.?\d*$/.test(raw) || raw === '-' || raw === '.') {
-              this.promptValue = formatMoneyInput(raw);
-            }
-          }
-        } else if (this.promptType === 'number' || this.promptType === 'percent') {
-          if (/[0-9.\-]/.test(ch)) this.promptValue += ch;
-        } else if (this.promptValue.length < 28) {
-          this.promptValue += ch;
         }
         e.preventDefault();
         return true;
@@ -797,20 +815,12 @@ export class Dialog {
     return true;
   }
 
+  /** Type `ch` into form field `f` at its caret (kept for callers of the old API). */
   _typeInto(f, ch) {
     const i = this.fields.indexOf(f);
-    if (f.type === 'money') {
-      if (/[0-9.,\-]/.test(ch)) {
-        const raw = (f.value + ch).replace(/,/g, '');
-        if (/^-?\d*\.?\d*$/.test(raw) || raw === '-' || raw === '.') {
-          this.setFieldValue(i, formatMoneyInput(raw));
-        }
-      }
-    } else if (f.type === 'number' || f.type === 'percent') {
-      if (/[0-9.\-]/.test(ch)) this.setFieldValue(i, f.value + ch);
-    } else if (f.value.length < 28) {
-      this.setFieldValue(i, f.value + ch);
-    }
+    if (i < 0) return;
+    if (i !== this.fieldIndex) this.focusField(i);
+    this.insertTextAtCaret(ch);
   }
 
   /**
@@ -823,6 +833,345 @@ export class Dialog {
     if (!f) return;
     f.value = value;
     this.onFieldChange?.(this.fields, index);
+  }
+
+  // ── Text field editing (prompt / form) ────────────────────────────────
+
+  /**
+   * The focused text field, or null (no prompt/form, or the form cursor is on
+   * Accept / Back).
+   * @returns {{key:string|number, type:string, get:() => string, set:(v:string) => void}|null}
+   */
+  _activeText() {
+    if (!this.active) return null;
+    if (this.mode === 'prompt') {
+      return {
+        key: 'prompt',
+        type: this.promptType || 'text',
+        get: () => String(this.promptValue ?? ''),
+        set: (v) => { this.promptValue = v; },
+      };
+    }
+    if (this.mode === 'form') {
+      const i = this.fieldIndex;
+      const f = this.fields[i];
+      if (!f) return null;
+      return {
+        key: i,
+        type: f.type || 'text',
+        get: () => String(f.value ?? ''),
+        set: (v) => this.setFieldValue(i, v),
+      };
+    }
+    return null;
+  }
+
+  /** Caret at the end of the focused field (a new prompt/form, or arrow-key field moves). */
+  _resetTextFocus(how = 'end') {
+    const t = this._activeText();
+    const v = t ? t.get() : '';
+    this.textSel = how === 'all' ? selectAll(v) : caretSel(v.length);
+    this.textScroll = 0;
+    this._drag = null;
+    this._caretT = typeof performance !== 'undefined' ? performance.now() : 0;
+  }
+
+  /** Current selection of the focused field, clamped to its value (values can change underneath). */
+  getTextSelection() {
+    const t = this._activeText();
+    if (!t) return null;
+    this.textSel = normalizeSel(this.textSel, t.get().length);
+    const [start, end] = selRange(this.textSel);
+    return { start, end, anchor: this.textSel.anchor, caret: this.textSel.caret,
+      direction: this.textSel.caret < this.textSel.anchor ? 'backward' : 'forward' };
+  }
+
+  /** Set the focused field's selection (mobile hidden input mirrors its selectionStart/End here). */
+  setTextSelection(start, end = start, direction = 'forward') {
+    const t = this._activeText();
+    if (!t) return;
+    const backward = direction === 'backward';
+    this.textSel = normalizeSel(backward ? { anchor: end, caret: start } : { anchor: start, caret: end }, t.get().length);
+    this._touchCaret();
+  }
+
+  /** Focus form field `i` ('end' = caret at end, 'all' = select everything, as Tab does). */
+  focusField(i, how = 'end') {
+    if (this.mode !== 'form' || !this.fields[i]) return;
+    this.fieldIndex = i;
+    this._resetTextFocus(how);
+  }
+
+  /** Tab / Shift+Tab: next / previous form field, wrapping, with its text selected. */
+  _tabField(dir) {
+    if (this.mode === 'prompt') { this._resetTextFocus('all'); return; }
+    if (this.mode !== 'form') return;
+    const next = tabIndex(this.fieldIndex, this.fields.length, dir);
+    if (next >= 0) this.focusField(next, 'all');
+  }
+
+  _touchCaret() {
+    this._caretT = typeof performance !== 'undefined' ? performance.now() : 0;
+  }
+
+  /** Apply an edit result from TextEdit ({value, sel} or null = rejected). */
+  _applyEdit(t, result) {
+    if (!result) return false;
+    if (result.value !== t.get()) t.set(result.value);
+    this.textSel = normalizeSel(result.sel, t.get().length);
+    this._touchCaret();
+    return true;
+  }
+
+  /** Type or paste `text` into the focused field, replacing any selection. */
+  insertTextAtCaret(text) {
+    const t = this._activeText();
+    if (!t) return false;
+    this.getTextSelection();
+    return this._applyEdit(t, insertText(t.type, t.get(), this.textSel, text));
+  }
+
+  /** Selected text of the focused field ('' when the selection is empty). */
+  selectedFieldText() {
+    const t = this._activeText();
+    if (!t) return '';
+    this.getTextSelection();
+    return selectedText(t.get(), this.textSel);
+  }
+
+  /** Delete the selection (if any) of the focused field; returns the removed text. */
+  _deleteSelection() {
+    const t = this._activeText();
+    if (!t) return '';
+    const text = this.selectedFieldText();
+    if (text) this._applyEdit(t, deleteText(t.type, t.get(), this.textSel, 'back'));
+    return text;
+  }
+
+  _writeClipboard(text) {
+    this._clipText = text;
+    try {
+      const clip = typeof navigator !== 'undefined' ? navigator.clipboard : null;
+      clip?.writeText?.(text)?.catch?.(() => {});
+    } catch (_) { /* clipboard unavailable: the copy / cut event below still carries it */ }
+  }
+
+  /**
+   * Keys for the focused text field: Tab, caret moves, selection, deletion,
+   * clipboard shortcuts and typing. Returns false for keys it leaves to the
+   * rest of handleKeyDown (Enter, Escape, Up/Down, ...).
+   */
+  _handleTextKey(e) {
+    if (e.key === 'Tab') {
+      this._tabField(e.shiftKey ? -1 : 1);
+      e.preventDefault();
+      return true;
+    }
+    const t = this._activeText();
+    if (!t) return false;
+    const mod = e.ctrlKey || e.metaKey;
+    const value = t.get();
+    this.getTextSelection();
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+
+    if (mod && !e.altKey && k === 'a') {
+      this.textSel = selectAll(value);
+      this._touchCaret();
+      e.preventDefault();
+      return true;
+    }
+    if (mod && !e.altKey && (k === 'c' || k === 'x')) {
+      const text = selectedText(value, this.textSel);
+      if (text) {
+        this._writeClipboard(text);
+        if (k === 'x') this._deleteSelection();
+      }
+      // No preventDefault: the browser still fires copy / cut (handleClipboardEvent).
+      return true;
+    }
+    if (mod && !e.altKey && k === 'v') {
+      // No preventDefault: the browser fires a paste event (handleClipboardEvent).
+      // If it never arrives, fall back to the async clipboard API.
+      this._pasteSeen = false;
+      const clip = typeof navigator !== 'undefined' ? navigator.clipboard : null;
+      if (clip?.readText && typeof setTimeout === 'function') {
+        const owner = this.resolve;
+        setTimeout(() => {
+          if (this._pasteSeen || this.resolve !== owner) return;
+          clip.readText().then((text) => {
+            if (!this._pasteSeen && this.resolve === owner && text) this.insertTextAtCaret(text);
+          }).catch(() => {});
+        }, 80);
+      }
+      return true;
+    }
+
+    const dir = e.key === 'ArrowLeft' ? 'left' : e.key === 'ArrowRight' ? 'right'
+      : e.key === 'Home' ? 'home' : e.key === 'End' ? 'end' : null;
+    if (dir) {
+      // Cmd+Left/Right = line start/end on macOS; Ctrl or Alt+Left/Right = by word.
+      const d = e.metaKey && (dir === 'left' || dir === 'right') ? (dir === 'left' ? 'home' : 'end') : dir;
+      this.textSel = moveSel(value, this.textSel, d, { extend: e.shiftKey, word: (e.ctrlKey || e.altKey) && !e.metaKey });
+      this._touchCaret();
+      e.preventDefault();
+      return true;
+    }
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      this._applyEdit(t, deleteText(t.type, value, this.textSel, e.key === 'Backspace' ? 'back' : 'forward',
+        { word: e.ctrlKey || e.altKey }));
+      e.preventDefault();
+      return true;
+    }
+    if (e.key.length === 1 && !mod) {
+      this._applyEdit(t, insertText(t.type, value, this.textSel, e.key));
+      e.preventDefault();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Browser copy / cut / paste events while a text field is focused (main.js
+   * routes document events here). Returns whether the event was used.
+   * @param {ClipboardEvent} e
+   */
+  handleClipboardEvent(e) {
+    if (!this._activeText()) return false;
+    if (e.type === 'paste') {
+      this._pasteSeen = true;
+      const text = e.clipboardData?.getData?.('text/plain') ?? e.clipboardData?.getData?.('text') ?? '';
+      if (text) this.insertTextAtCaret(text);
+      e.preventDefault?.();
+      return true;
+    }
+    // copy / cut: the keydown already copied (and for cut, deleted) the selection.
+    const text = this.selectedFieldText() || this._clipText;
+    if (text && e.clipboardData?.setData) {
+      e.clipboardData.setData('text/plain', text);
+      e.preventDefault?.();
+    }
+    this._clipText = null;
+    return true;
+  }
+
+  /** Text geometry for field `key` from the last draw (or a font-size estimate before the first draw). */
+  _geomFor(key) {
+    const g = this._textGeom[key];
+    if (g) return g;
+    const box = key === 'prompt' ? this.getPromptFieldRect() : this._fieldBoxRects[key];
+    if (!box) return null;
+    const px = key === 'prompt' ? 18 : 16;
+    const t = key === 'prompt' ? { prefix: this.promptPrefix, value: this.promptValue }
+      : { prefix: this.fields[key]?.prefix, value: this.fields[key]?.value };
+    const prefixLen = t.prefix ? t.prefix.length + 1 : 0;
+    return { textX: box.x + (key === 'prompt' ? 12 : 10) + prefixLen * px, charW: px, scroll: 0,
+      len: String(t.value ?? '').length, box };
+  }
+
+  /** Caret index under frame point (lx, ly) for the focused field, or null when not over it. */
+  caretIndexAt(lx) {
+    const t = this._activeText();
+    if (!t) return null;
+    const g = this._geomFor(t.key);
+    if (!g) return null;
+    return caretFromX(lx, { textX: g.textX, charW: g.charW, scroll: this.textScroll, len: t.get().length });
+  }
+
+  /**
+   * Pointer press on the focused field's text: place the caret (Shift extends),
+   * double press selects a word, triple selects all; starts a drag selection.
+   */
+  _textPointerDown(lx, { shift = false, now = 0, drag = true } = {}) {
+    const t = this._activeText();
+    if (!t) return;
+    const idx = this.caretIndexAt(lx) ?? t.get().length;
+    const value = t.get();
+    const prev = this._lastClick;
+    const multi = prev && prev.key === t.key && now - prev.t < 450 && Math.abs(prev.x - lx) < 24;
+    const count = multi ? prev.count + 1 : 1;
+    this._lastClick = { key: t.key, t: now, x: lx, count };
+    this.getTextSelection();
+    if (count === 2) {
+      const [s, e] = wordAt(value, idx);
+      this.textSel = { anchor: s, caret: e };
+      this._drag = null;
+    } else if (count >= 3) {
+      this.textSel = selectAll(value);
+      this._drag = null;
+    } else {
+      this.textSel = shift ? { anchor: this.textSel.anchor, caret: idx } : caretSel(idx);
+      this._drag = drag ? { key: t.key } : null;
+    }
+    this._touchCaret();
+  }
+
+  /** True while a mouse drag-select is in progress. */
+  isDraggingText() {
+    return !!this._drag;
+  }
+
+  /** Mouse moved with the button held: extend the selection to the pointer. */
+  dragPointer(lx) {
+    const t = this._activeText();
+    if (!this._drag || !t || t.key !== this._drag.key) return false;
+    const idx = this.caretIndexAt(lx);
+    if (idx == null) return false;
+    this.textSel = { anchor: normalizeSel(this.textSel, t.get().length).anchor, caret: idx };
+    this._touchCaret();
+    return true;
+  }
+
+  endPointer() {
+    this._drag = null;
+  }
+
+  /**
+   * Draw a field's value with selection highlight and caret, clipped to the box.
+   * @returns the geometry stored for hit-testing
+   */
+  _drawFieldText(ctx, { key, box, padX, textY, px, prefix, value, suffix, focused, lineH }) {
+    ctx.font = `${px}px "Press Start 2P", monospace`;
+    const charW = ctx.measureText('0').width || px;
+    const prefixStr = prefix ? prefix + ' ' : '';
+    const startX = box.x + padX;
+    const textX = startX + (prefixStr ? ctx.measureText(prefixStr).width : 0);
+    const v = String(value ?? '');
+    const visible = Math.max(1, Math.floor((box.x + box.w - padX - textX) / charW) - (suffix ? suffix.length : 0) - 1);
+    let scroll = 0;
+    let sel = null;
+    if (focused) {
+      sel = normalizeSel(this.textSel, v.length);
+      this.textSel = sel;
+      scroll = this.textScroll = scrollToCaret(this.textScroll, sel.caret, visible, v.length);
+    }
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(box.x + 2, box.y + 2, box.w - 4, box.h - 4);
+    ctx.clip();
+    if (sel && hasSelection(sel)) {
+      const [s, e] = selRange(sel);
+      const a = Math.max(s, scroll), b = Math.min(e, scroll + visible + 1);
+      if (b > a) {
+        ctx.fillStyle = 'rgba(70, 110, 200, 0.75)';
+        ctx.fillRect(Math.round(textX + (a - scroll) * charW), textY - 4, Math.round((b - a) * charW), lineH);
+      }
+    }
+    ctx.fillStyle = PALETTE.uiText;
+    if (prefixStr) ctx.fillText(prefixStr, startX, textY);
+    const shown = v.slice(scroll) + (suffix && v !== '' ? suffix : '');
+    ctx.fillText(shown, textX, textY);
+    if (sel) {
+      const now = typeof performance !== 'undefined' ? performance.now() : 0;
+      const blinkOn = now - this._caretT < 500 || Math.floor((now - this._caretT) / 500) % 2 === 1;
+      if (blinkOn && !hasSelection(sel)) {
+        ctx.fillStyle = PALETTE.gold;
+        ctx.fillRect(Math.round(textX + (sel.caret - scroll) * charW) - 1, textY - 3, 3, lineH - 2);
+      }
+    }
+    ctx.restore();
+    const geom = { textX, charW, scroll, len: v.length, box };
+    this._textGeom[key] = geom;
+    return geom;
   }
 
   draw(ctx) {
@@ -853,6 +1202,7 @@ export class Dialog {
     this._fieldHitRects = [];
     this._fieldBoxRects = [];
     this._optionHitRects = [];
+    this._textGeom = {};
 
     if (this.mode === 'loading') {
       ctx.fillStyle = PALETTE.gold;
@@ -872,12 +1222,11 @@ export class Dialog {
       ctx.fillRect(x + pad, ty, boxW - pad * 2, 44);
       ctx.strokeStyle = PALETTE.uiBorder;
       ctx.strokeRect(x + pad + 0.5, ty + 0.5, boxW - pad * 2 - 1, 43);
-      ctx.fillStyle = PALETTE.uiText;
-      const caret = Math.floor(performance.now() / 400) % 2 === 0 ? '▌' : '';
-      let display = String(this.promptValue);
-      if (this.promptType === 'percent' && display !== '') display += '%';
-      const prefix = this.promptPrefix ? this.promptPrefix + ' ' : '';
-      ctx.fillText(prefix + display + caret, x + pad + 12, ty + 12);
+      this._drawFieldText(ctx, {
+        key: 'prompt', box: { x: x + pad, y: ty, w: boxW - pad * 2, h: 44 }, padX: 12, textY: ty + 12, px: 18,
+        prefix: this.promptPrefix, value: this.promptValue, suffix: this.promptType === 'percent' ? '%' : '',
+        focused: true, lineH: 26,
+      });
       ty += 56;
     } else if (this.mode === 'form') {
       ty += 4;
@@ -889,13 +1238,10 @@ export class Dialog {
         ctx.fillRect(x + pad, ty, boxW - pad * 2, 36);
         ctx.strokeStyle = focused ? PALETTE.gold : PALETTE.uiBorder;
         ctx.strokeRect(x + pad + 0.5, ty + 0.5, boxW - pad * 2 - 1, 35);
-        ctx.fillStyle = PALETTE.uiText;
-        ctx.font = '16px "Press Start 2P", monospace';
-        const caret = focused && Math.floor(performance.now() / 400) % 2 === 0 ? '▌' : '';
-        let display = String(f.value);
-        if (f.type === 'percent' && display !== '') display += '%';
-        const prefix = f.prefix ? f.prefix + ' ' : '';
-        ctx.fillText(prefix + display + caret, x + pad + 10, ty + 8);
+        this._drawFieldText(ctx, {
+          key: i, box: { x: x + pad, y: ty, w: boxW - pad * 2, h: 36 }, padX: 10, textY: ty + 8, px: 16,
+          prefix: f.prefix, value: f.value, suffix: f.type === 'percent' ? '%' : '', focused, lineH: 24,
+        });
         this._fieldHitRects.push({
           index: i,
           x: x + pad,

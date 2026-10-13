@@ -1,6 +1,8 @@
 /** Shared household questions for Custom Setup and the Family/Portfolio tellers. */
 import { ownerAge, ownerWorking } from '../finance/Household.js';
 import { HAIR_PALETTE, SHIRT_PALETTE, normalizeHairColor, normalizeShirtColor } from '../config.js';
+import { contributionLimits, rothContributionMode } from '../finance/Retirement.js';
+import { formatMoneyDisplay } from '../finance/DollarBasis.js';
 
 export function personName(p, owner = 'primary') {
   return owner === 'spouse' ? p.spouseName || 'Spouse' : p.playerName || 'You';
@@ -11,6 +13,34 @@ export function householdSalary(p) {
   const spouse = ownerWorking(p, ownerAge(p, 'spouse'), 'spouse')
     ? Math.max(0, p.spouseSalary || 0) : 0;
   return primary + spouse;
+}
+
+/** This year's IRS IRA limit (with age-50 catch-up) for one person. */
+export function rothYearLimit(p, owner = 'primary') {
+  return contributionLimits(p.year, ownerAge(p, owner) ?? 0, p.taxInflation ?? .025).ira;
+}
+/** Player-facing description of a person's Roth contribution setting. */
+export function rothContributionLabel(p, owner = 'primary') {
+  const key = field => owner === 'spouse' ? `spouse${field[0].toUpperCase()}${field.slice(1)}` : field;
+  return rothContributionMode({ rothContributionMode: p[key('rothContributionMode')] }) === 'max'
+    ? `rises with limit (${formatMoneyDisplay(rothYearLimit(p, owner), p)} in ${p.year})`
+    : `${formatMoneyDisplay(p[key('rothAnnualContribution')] || 0, p)}/yr`;
+}
+/** Roth contribution style menu: 'fixed', 'max' (Rise with limit) or null on Back. */
+export async function chooseRothContributionMode(p, dialog, { owner = 'primary', title = 'Retirement' } = {}) {
+  const current = owner === 'spouse' ? p.spouseRothContributionMode : p.rothContributionMode;
+  const limit = formatMoneyDisplay(rothYearLimit(p, owner), p);
+  const choice = await dialog.menu(
+    `**${personName(p, owner)} Roth IRA** from Cash (now ${rothContributionLabel(p, owner)}).\n` +
+      '**Fixed amount**: the same amount every year.\n' +
+      '**Rise with limit**: the full IRS limit each year, incl. the age-50 catch-up. Income limits and Cash still apply.',
+    [
+      { label: 'Fixed amount', value: 'fixed' },
+      { label: `Rise with limit (${limit} in ${p.year})`, value: 'max' },
+      { label: 'Back', value: null },
+    ],
+    { title, selected: current === 'max' ? 1 : 0, escValue: null });
+  return choice ?? null;
 }
 
 /** Cancel leaves the original household unchanged. */
@@ -44,6 +74,60 @@ export async function editSpouseIdentity(p, dialog, { title = 'Family' } = {}) {
   p.spouseShirtColor = normalizeShirtColor(look.shirtColor);
   p.spouseHairLength = length;
   return true;
+}
+
+/** Portfolio fields holding one person's name and look (what the room sprites read). */
+export function appearanceKeys(owner = 'primary') {
+  return owner === 'spouse'
+    ? { name: 'spouseName', hairLength: 'spouseHairLength', hairColor: 'spouseHairColor', shirtColor: 'spouseShirtColor' }
+    : { name: 'playerName', hairLength: 'hairLength', hairColor: 'hairColor', shirtColor: 'shirtColor' };
+}
+
+/**
+ * Change Name/Appearance for the player or the spouse: name, then hair length,
+ * then the hair + shirt color page (the same questions Custom Setup and spouse
+ * details use). Back on any step returns to the previous one; Back on the name
+ * returns false with nothing changed. On success returns the updated values
+ * ({ [portfolioKey]: value }) for the caller to apply.
+ * @returns {Promise<object|false>}
+ */
+export async function editPersonAppearance(p, dialog, { owner = 'primary', title = 'Change Name/Appearance' } = {}) {
+  const keys = appearanceKeys(owner);
+  const spouse = owner === 'spouse';
+  const fallback = spouse ? 'Spouse' : 'Traveler';
+  let name = String(p[keys.name] || fallback);
+  let length = p[keys.hairLength] === 'long' ? 'long' : 'short';
+  let step = 0;
+  while (true) {
+    if (step === 0) {
+      const result = await dialog.prompt(spouse ? 'Spouse name' : 'What is your name?', { title, defaultValue: name });
+      if (result == null) return false;
+      name = String(result).trim().slice(0, 28) || name;
+      step = 1;
+    } else if (step === 1) {
+      const result = await dialog.menu(`${name}: hair length?`, [
+        { label: 'Short', value: 'short' }, { label: 'Long', value: 'long' }, { label: 'Back', value: null },
+      ], { title, selected: length === 'long' ? 1 : 0 });
+      if (result == null) { step = 0; continue; }
+      length = result;
+      step = 2;
+    } else {
+      // Preview uses the length just chosen.
+      const look = await dialog.palette(`${name}: choose a look.`, [
+        { key: 'hairColor', label: 'Hair color', kind: 'hair', colors: HAIR_PALETTE,
+          selected: normalizeHairColor(p[keys.hairColor]) },
+        { key: 'shirtColor', label: 'Shirt color', kind: 'shirt', colors: SHIRT_PALETTE,
+          selected: normalizeShirtColor(p[keys.shirtColor]) },
+      ], { title, hairLength: length, backLabel: '← Back', backValue: null });
+      if (look == null) { step = 1; continue; }
+      return {
+        [keys.name]: name,
+        [keys.hairLength]: length,
+        [keys.hairColor]: normalizeHairColor(look.hairColor),
+        [keys.shirtColor]: normalizeShirtColor(look.shirtColor),
+      };
+    }
+  }
 }
 
 export async function editFamilyIncome(p, dialog, { title = 'Finances' } = {}) {
@@ -115,28 +199,35 @@ export async function editRetirementAccounts(p, dialog, { owner = 'primary', loc
     draft[key('k401ContribRate')] = draft[key('k401MatchRate')] = draft[key('k401MatchOnFirst')] = 0;
   }
   if (draft[key('hasRoth')]) {
+    const mode = await chooseRothContributionMode(p, dialog, { owner, title });
+    if (!mode) return false;
     const fields = [
       ...(!lockBalances ? [{ key: 'balance', label: 'Roth IRA balance', type: 'money', prefix: '$', defaultValue: String(p[key('rothBalance')] || 0) }] : []),
-      { key: 'contrib', label: 'Annual contribution from Cash', type: 'money', prefix: '$', defaultValue: String(p[key('rothAnnualContribution')] || 0) },
+      ...(mode === 'fixed' ? [{ key: 'contrib', label: 'Annual contribution from Cash', type: 'money', prefix: '$', defaultValue: String(p[key('rothAnnualContribution')] || 0) }] : []),
       ...(!lockBalances ? [
         { key: 'basis', label: 'Verified remaining contribution basis', type: 'money', prefix: '$', defaultValue: String(p[key('rothContributionBasis')] ?? 0) },
         { key: 'opened', label: 'Roth first opened year', type: 'number', defaultValue: String(p[key('rothOpenedYear')] ?? p.year) },
       ] : []),
       { key: 'equity', label: 'Stocks % (remainder bonds)', type: 'percent', defaultValue: String((p[key('rothAllocation')]?.equity ?? 1) * 100) },
     ];
-    const form = await dialog.form(`${personName(p, owner)} Roth IRA`, fields, { title, portfolio: p });
+    const heading = mode === 'max'
+      ? `${personName(p, owner)} Roth IRA · contribution rises with limit (${formatMoneyDisplay(rothYearLimit(p, owner), p)} in ${p.year})`
+      : `${personName(p, owner)} Roth IRA`;
+    const form = await dialog.form(heading, fields, { title, portfolio: p });
     if (!form) return false;
     if (!lockBalances) {
       draft[key('rothBalance')] = Math.max(0, Number(form.balance) || 0);
       draft[key('rothContributionBasis')] = Math.max(0, Number(form.basis) || 0);
       draft[key('rothOpenedYear')] = Math.min(p.year, Math.round(Number(form.opened) || p.year));
     }
-    draft[key('rothAnnualContribution')] = Math.max(0, Number(form.contrib) || 0);
+    draft[key('rothContributionMode')] = mode;
+    if (mode === 'fixed') draft[key('rothAnnualContribution')] = Math.max(0, Number(form.contrib) || 0);
     const equity = Math.max(0, Math.min(1, (Number(form.equity) || 0) / 100));
     draft[key('rothAllocation')] = { equity, bond: 1 - equity };
   } else {
     if (!lockBalances) draft[key('rothBalance')] = draft[key('rothContributionBasis')] = 0;
     draft[key('rothAnnualContribution')] = 0;
+    draft[key('rothContributionMode')] = 'fixed';
   }
   Object.assign(p, draft);
   return true;

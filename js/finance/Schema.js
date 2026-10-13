@@ -32,6 +32,9 @@ export function normalizePortfolio(input, { legacy = input.financeVersion !== 2 
   s.taxInflation ??= .025; s.annualCollegeCost ??= 28000;
   s.k401Allocation ??= { equity: 1 }; s.rothAllocation ??= { equity: 1 };
   s.spouseK401Allocation ??= {equity:1};s.spouseRothAllocation ??= {equity:1};
+  // Older saves predate 'Rise with limit' and keep their fixed Roth amount.
+  s.rothContributionMode = s.rothContributionMode === 'max' ? 'max' : 'fixed';
+  s.spouseRothContributionMode = s.spouseRothContributionMode === 'max' ? 'max' : 'fixed';
   if (s.spouseAge!=null) s.spouseBirthYear ??= s.year-Math.floor(s.spouseAge);
   s.spouseRetirementAge ??= 65;
   s.spouseSocialSecurityMonthly ??= 0;s.spouseSocialSecurityClaimAge ??= 67;

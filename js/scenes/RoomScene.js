@@ -1,5 +1,7 @@
 import { editPlanningInputs } from './PlanningInputs.js';
-import { editSpouseIdentity, editFamilyIncome, editRetirementAges, editRetirementAccounts, personName } from './FamilyInputs.js';
+import { editSpouseIdentity, editFamilyIncome, editRetirementAges, editRetirementAccounts, personName,
+  editPersonAppearance,
+  chooseRothContributionMode } from './FamilyInputs.js';
 import { ensureHoldings, syncBook, post } from '../finance/Books.js';
 import { childCostLabel } from '../data/stateChildCosts.js';
 import { randomChildName } from '../data/childNames.js';
@@ -78,6 +80,21 @@ export function transactionReason(transaction, portfolio) {
     default:
       return transaction.reason || '';
   }
+}
+
+/**
+ * Family Planning menu rows. Remove a Spouse sits at the bottom, just above Done,
+ * so the irreversible choice is not the first thing the cursor lands on.
+ */
+export function familyMenuOptions(p) {
+  return [
+    ...(p.married ? [] : [{ label: 'Add a Spouse', value: 'spouse' }]),
+    { label: 'Have a Kid', value: 'kid' },
+    { label: 'Child Care', value: 'care' },
+    { label: 'Change Name/Appearance', value: 'appearance' },
+    ...(p.married ? [{ label: 'Remove a Spouse', value: 'divorce' }] : []),
+    { label: 'Done', value: null },
+  ];
 }
 
 export class RoomScene {
@@ -303,7 +320,10 @@ export class RoomScene {
     }
   }
 
-  /** Family Planning — roster of spouse/kids, then Add/Remove a Spouse, Have a Kid, Child Care. */
+  /**
+   * Family Planning — roster of spouse/kids, then Add a Spouse (while single), Have a Kid,
+   * Child Care, Change Name/Appearance, and Remove a Spouse (while married) last before Done.
+   */
   async handleFamilyPlanning(game, dialog) {
     const title = 'Family Planning';
     while (true) {
@@ -312,21 +332,40 @@ export class RoomScene {
       if (p.married) lines.push(`**${personName(p, 'spouse')}** age ${p.spouseAge ?? '?'}`);
       for (const k of p.kids || []) lines.push(`**${k.name}** age ${k.age}`);
       if (!lines.length) lines.push('No spouse or kids yet.');
-      const choice = await dialog.menu(
-        lines.join('\n'),
-        [
-          { label: p.married ? 'Remove a Spouse' : 'Add a Spouse', value: p.married ? 'divorce' : 'spouse' },
-          { label: 'Have a Kid', value: 'kid' },
-          { label: 'Child Care', value: 'care' },
-          { label: 'Done', value: null },
-        ],
-        { title }
-      );
+      const choice = await dialog.menu(lines.join('\n'), familyMenuOptions(p), { title });
       if (!choice) return;
       if (choice === 'spouse') await this.handleAddSpouse(game, dialog);
       else if (choice === 'divorce') await this.handleDivorce(game, dialog);
       else if (choice === 'kid') await this.handleHaveKid(game, dialog);
       else if (choice === 'care') await this.handleChildCare(game, dialog);
+      else if (choice === 'appearance') await this.handleChangeAppearance(game, dialog);
+    }
+  }
+
+  /**
+   * Change Name/Appearance — who (player or spouse, by name; skipped while single), then name,
+   * hair length and the hair/shirt color page. Cosmetic only: the room sprites read these fields
+   * every frame, and the portfolio is saved at the next doorway like any teller change.
+   */
+  async handleChangeAppearance(game, dialog) {
+    const title = 'Change Name/Appearance';
+    while (true) {
+      const p = game.portfolio;
+      let owner = 'primary';
+      if (p.married) {
+        owner = await dialog.menu('Whose name or look?', [
+          { label: personName(p, 'primary'), value: 'primary' },
+          { label: personName(p, 'spouse'), value: 'spouse' },
+          { label: 'Back', value: null },
+        ], { title });
+        if (!owner) return;
+      }
+      const changes = await editPersonAppearance(p, dialog, { owner, title });
+      if (changes) {
+        game.portfolio = { ...p, ...changes };
+        return;
+      }
+      if (!p.married) return; // Back on the name question
     }
   }
 
@@ -1132,24 +1171,31 @@ Cash received: ${money(preview.netCash)}`, {
       } else if (choice === 'salary') {
         await editFamilyIncome(p, dialog, { title });
       } else if (choice === 'retire') {
+        // Roth style first ('Fixed amount' or 'Rise with limit'); Back leaves everything unchanged.
+        const rothMode = await chooseRothContributionMode(p, dialog, { title });
+        if (!rothMode) continue;
+        const spouseRothMode = p.married ? await chooseRothContributionMode(p, dialog, { owner: 'spouse', title }) : 'fixed';
+        if (!spouseRothMode) continue;
         const form = await dialog.form('Contributions (balances are locked during play)', [
           { key: 'kRate', label: `${personName(p)} 401(k) contrib % of salary`, type: 'percent', defaultValue: String(((p.k401ContribRate || 0) * 100).toFixed(2)) },
-          { key: 'rothC', label: `${personName(p)} Roth annual contribution`, type: 'money', prefix: '$', defaultValue: String(p.rothAnnualContribution || 0) },
+          ...(rothMode === 'fixed' ? [{ key: 'rothC', label: `${personName(p)} Roth annual contribution`, type: 'money', prefix: '$', defaultValue: String(p.rothAnnualContribution || 0) }] : []),
           ...(p.married ? [
             { key: 'spouseKRate', label: `${personName(p, 'spouse')} 401(k) contrib %`, type: 'percent', defaultValue: String((p.spouseK401ContribRate || 0) * 100) },
-            { key: 'spouseRothC', label: `${personName(p, 'spouse')} Roth annual contribution`, type: 'money', prefix: '$', defaultValue: String(p.spouseRothAnnualContribution || 0) },
+            ...(spouseRothMode === 'fixed' ? [{ key: 'spouseRothC', label: `${personName(p, 'spouse')} Roth annual contribution`, type: 'money', prefix: '$', defaultValue: String(p.spouseRothAnnualContribution || 0) }] : []),
           ] : []),
         ], { title, portfolio: p });
         if (form) {
           p.k401ContribRate = Math.max(0, Math.min(1, (form.kRate || 0) / 100));
           p.has401k = (p.k401Balance || 0) > 0 || p.k401ContribRate > 0;
-          p.rothAnnualContribution = Math.max(0, form.rothC || 0);
-          p.hasRoth = (p.rothBalance || 0) > 0 || p.rothAnnualContribution > 0;
+          p.rothContributionMode = rothMode;
+          if (rothMode === 'fixed') p.rothAnnualContribution = Math.max(0, form.rothC || 0);
+          p.hasRoth = (p.rothBalance || 0) > 0 || rothMode === 'max' || p.rothAnnualContribution > 0;
           if (p.married) {
             p.spouseK401ContribRate = Math.max(0, Math.min(1, (form.spouseKRate || 0) / 100));
-            p.spouseRothAnnualContribution = Math.max(0, form.spouseRothC || 0);
+            p.spouseRothContributionMode = spouseRothMode;
+            if (spouseRothMode === 'fixed') p.spouseRothAnnualContribution = Math.max(0, form.spouseRothC || 0);
             p.spouseHas401k = (p.spouseK401Balance || 0) > 0 || p.spouseK401ContribRate > 0;
-            p.spouseHasRoth = (p.spouseRothBalance || 0) > 0 || p.spouseRothAnnualContribution > 0;
+            p.spouseHasRoth = (p.spouseRothBalance || 0) > 0 || spouseRothMode === 'max' || p.spouseRothAnnualContribution > 0;
           }
         }
       } else if (choice === 'retireAge') {

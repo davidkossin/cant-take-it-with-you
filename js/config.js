@@ -1,6 +1,6 @@
 import { MARKET_DIFFICULTIES } from './finance/marketAssumptions.js';
 
-/** Game-wide constants and LTTP-inspired palette. */
+/** Game-wide constants and palette. */
 
 export const TILE = 16;
 export const SCALE = 3;
@@ -21,7 +21,7 @@ export const CANVAS_W = FRAME_W;
 export const CANVAS_H = FRAME_H;
 
 /** Bump on each published build so players can confirm cache. */
-export const GAME_VERSION = '0.7.9';
+export const GAME_VERSION = '0.7.10';
 
 export const PALETTE = {
   bg: '#1a1420',
@@ -55,7 +55,7 @@ export const PALETTE = {
   hairBlonde: '#d4b060',
   hairRed: '#a03828',
   hairGray: '#a0a0a8',
-  /** Dark purple stippled void (LTTP dungeon exterior) */
+  /** Dark purple stippled void (dungeon exterior) */
   void: '#2a1840',
   voidDot: '#1a0e28',
   voidDeep: '#140818',

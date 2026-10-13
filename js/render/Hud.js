@@ -20,7 +20,7 @@ export class Hud {
     const worth = worthOverride || computeWorth(portfolio);
     const money = n => formatMoneyDisplay(n, portfolio);
 
-    // Opaque LTTP-ish dark band — full width, HUD only
+    // Opaque dark band — full width, HUD only
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = '#141018';
     ctx.fillRect(0, 0, FRAME_W, HUD_H);

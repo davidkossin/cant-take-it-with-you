@@ -1,6 +1,6 @@
 /**
  * Painted textures at 8× the logical tile, drawn back down with smoothing
- * so floors and walls are not 16px stamps blown up. Original art, not Nintendo.
+ * so floors and walls are not 16px stamps blown up. Original art.
  */
 
 const S = 8;

@@ -61,12 +61,30 @@ test('Portfolio teller locks balances during play but keeps income, spending and
   assert.doesNotMatch(labels, /Cash \(checking\)|Stocks total|Savings \/ rate|401\(k\) \/ Roth\b(?! contributions)/);
   for (const keep of ['Salary', 'Annual spending', 'Retirement age', 'Planning inputs / benefits', '401(k) / Roth contributions'])
     assert.ok(labels.includes(keep), keep);
-  const form = scriptedDialog(['retire', { kRate: 10, rothC: 0 }, null]);
+  const form = scriptedDialog(['retire', 'fixed', { kRate: 10, rothC: 0 }, null]);
   await new RoomScene().handleTeller(g, form, 'portfolio');
   const fields = form.seen.find(s => s.kind === 'form').fields.map(f => f.key);
   assert.deepEqual(fields, ['kRate', 'rothC']);
   assert.equal(g.portfolio.k401Balance, 7000);
   assert.equal(g.portfolio.k401ContribRate, .1);
+});
+
+test("Portfolio teller sets 'Rise with limit' Roth contributions for player and spouse", async () => {
+  const g = game({ married: true, spouseAge: 50, salary: 80000, spouseSalary: 60000, rothAnnualContribution: 1000 });
+  const dialog = scriptedDialog(['retire', 'max', 'max', { kRate: 10, spouseKRate: 5 }, null]);
+  await new RoomScene().handleTeller(g, dialog, 'portfolio');
+  const menus = dialog.seen.filter(s => s.kind === 'menu' && s.options.some(o => o.value === 'max'));
+  assert.equal(menus.length, 2);
+  assert.ok(menus[1].options[1].label.startsWith('Rise with limit'));
+  assert.deepEqual(dialog.seen.find(s => s.kind === 'form').fields.map(f => f.key), ['kRate', 'spouseKRate']);
+  const p = g.portfolio;
+  assert.equal(p.rothContributionMode, 'max'); assert.equal(p.spouseRothContributionMode, 'max');
+  assert.equal(p.hasRoth, true); assert.equal(p.spouseHasRoth, true);
+  assert.equal(p.rothAnnualContribution, 1000); // the fixed amount is kept for switching back
+  const back = scriptedDialog(['retire', 'fixed', 'fixed', { kRate: 10, rothC: 2500, spouseKRate: 5, spouseRothC: 0 }, null]);
+  await new RoomScene().handleTeller(g, back, 'portfolio');
+  assert.equal(p.rothContributionMode, 'fixed'); assert.equal(p.rothAnnualContribution, 2500);
+  assert.equal(p.spouseRothContributionMode, 'fixed');
 });
 
 test('Starman starts with $155k Cash; everything else is unchanged', () => {

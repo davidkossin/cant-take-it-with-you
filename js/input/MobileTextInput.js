@@ -13,7 +13,8 @@
  */
 
 import { FRAME_W, FRAME_H } from '../config.js';
-import { formatMoneyInput, sanitizeNumberInput, sanitizeTextInput } from '../render/Dialog.js';
+import { sanitizeNumberInput, sanitizeTextInput } from '../render/Dialog.js';
+import { formatMoneyWithCaret, formatMoneyInput } from '../ui/TextEdit.js';
 
 export class MobileTextInput {
   /**
@@ -30,6 +31,11 @@ export class MobileTextInput {
     /** identity of the field the input is bound to (dialog instance + field) */
     this._owner = null;
     this._key = null;
+    /** pointerType of the last press on the input (mouse presses are routed to the canvas) */
+    this._lastPointerType = null;
+    this._press = null;
+    /** set by main.js: a mouse press on the overlay, handled like a canvas press */
+    this.onMousePointer = null;
   }
 
   mount() {
@@ -57,8 +63,39 @@ export class MobileTextInput {
       this._seed(t);
     });
     // Stop pad/page from treating our taps as game gestures incorrectly
-    input.addEventListener('pointerdown', (e) => e.stopPropagation());
+    input.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this._lastPointerType = e.pointerType;
+      if (e.pointerType === 'mouse') {
+        // Desktop: the canvas field is the editor (caret, drag selection,
+        // double click); keep the mouse from focusing this overlay.
+        e.preventDefault();
+        this.onMousePointer?.(e);
+        return;
+      }
+      this._press = { x: e.clientX, y: e.clientY, t: performance.now() };
+    });
+    input.addEventListener('mousedown', (e) => {
+      if (this._lastPointerType === 'mouse') e.preventDefault();
+    });
+    input.addEventListener('pointerup', (e) => {
+      if (e.pointerType === 'mouse') return;
+      const p = this._press;
+      this._press = null;
+      // A quick tap places the caret where the canvas text is (the overlay's
+      // own font metrics do not match the canvas). Long presses keep the
+      // native selection handles; selectionchange mirrors them.
+      if (!p || performance.now() - p.t > 450 || Math.hypot(e.clientX - p.x, e.clientY - p.y) > 12) return;
+      this._placeCaretAtClient(e.clientX);
+    });
     input.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+    // Mirror the native caret / selection into the canvas field.
+    const mirror = () => this._mirrorSelection();
+    input.addEventListener('select', mirror);
+    input.addEventListener('keyup', mirror);
+    document.addEventListener('selectionchange', () => {
+      if (document.activeElement === input) mirror();
+    });
 
     // A new prompt shows its field on the next frame (layout is ready then).
     const origPrompt = this.dialog.prompt.bind(this.dialog);
@@ -162,6 +199,59 @@ export class MobileTextInput {
   _seed(t) {
     this._syncing = true;
     this.input.value = t.get();
+    this._pushSelection();
+    this._syncing = false;
+  }
+
+  /** Copy the canvas field's caret / selection into the hidden input. */
+  _pushSelection() {
+    const sel = this.dialog.getTextSelection?.();
+    if (!sel || !this.input) return;
+    try {
+      this.input.setSelectionRange(sel.start, sel.end, sel.direction);
+    } catch (_) {
+      /* ignore: not focusable yet */
+    }
+  }
+
+  /** Copy the hidden input's selectionStart / End into the canvas field. */
+  _mirrorSelection() {
+    if (!this._open || this._syncing || !this.input || !this.isFocused()) return;
+    const pending = this._pendingCaret;
+    if (pending && performance.now() < pending.until) {
+      // Just tapped: the browser places its own caret (its font metrics differ
+      // from the canvas); put back the one under the finger.
+      this._applyPendingCaret();
+      return;
+    }
+    this._pendingCaret = null;
+    const t = this._target();
+    if (!t || this.input.value !== t.get()) return;
+    const { selectionStart: s, selectionEnd: e, selectionDirection: dir } = this.input;
+    if (s == null || e == null) return;
+    this.dialog.setTextSelection?.(s, e, dir === 'backward' ? 'backward' : 'forward');
+  }
+
+  /** Caret at the canvas character under client x (tap on the field). */
+  _placeCaretAtClient(clientX) {
+    const rect = this.canvas.getBoundingClientRect();
+    if (!rect.width) return;
+    const lx = ((clientX - rect.left) / rect.width) * FRAME_W;
+    const idx = this.dialog.caretIndexAt?.(lx);
+    if (idx == null) return;
+    this._pendingCaret = { idx, until: performance.now() + 150 };
+    this._applyPendingCaret();
+    // The browser moves its own caret after pointerup; set ours again after it.
+    setTimeout(() => this._applyPendingCaret(), 0);
+    setTimeout(() => this._applyPendingCaret(), 60);
+  }
+
+  _applyPendingCaret() {
+    const pending = this._pendingCaret;
+    if (!pending || !this._open) return;
+    this.dialog.setTextSelection(pending.idx, pending.idx);
+    this._syncing = true;
+    this._pushSelection();
     this._syncing = false;
   }
 
@@ -219,12 +309,16 @@ export class MobileTextInput {
     } catch (_) {
       this.input.focus();
     }
-    try {
-      const n = this.input.value.length;
-      this.input.setSelectionRange(n, n);
-    } catch (_) {
-      /* ignore */
-    }
+    // Same caret / selection as the canvas field (e.g. where the field was tapped).
+    this._syncing = true;
+    this._pushSelection();
+    this._syncing = false;
+    setTimeout(() => {
+      if (!this._open || !this.isFocused()) return;
+      this._syncing = true;
+      this._pushSelection();
+      this._syncing = false;
+    }, 0);
     return this.isFocused();
   }
 
@@ -255,35 +349,42 @@ export class MobileTextInput {
   }
 
   _onInput() {
+    this._pendingCaret = null;
     const t = this._target();
     if (!this._open || this._syncing || !t) return;
-    let v = this.input.value;
+    const rawValue = this.input.value;
+    const pos = this.input.selectionStart ?? rawValue.length;
+    let v = rawValue;
+    let caret = pos;
 
     if (t.type === 'money') {
-      v = formatMoneyInput(v);
+      // Keep the caret beside the same digit when commas move.
+      const out = formatMoneyWithCaret(rawValue.replace(/[^\d.,\-]/g, ''), pos - (rawValue.slice(0, pos).match(/[^\d.,\-]/g) || []).length);
+      if (out) { v = out.value; caret = out.caret; }
+      else { v = formatMoneyInput(rawValue); caret = v.length; }
     } else if (t.type === 'number' || t.type === 'percent') {
-      v = sanitizeNumberInput(v);
+      v = sanitizeNumberInput(rawValue);
+      caret = Math.min(v.length, sanitizeNumberInput(rawValue.slice(0, pos)).length);
     } else {
-      v = sanitizeTextInput(v);
+      v = sanitizeTextInput(rawValue);
+      caret = Math.min(v.length, pos);
     }
 
     t.set(v);
 
-    if (this.input.value !== v) {
-      this._syncing = true;
-      const pos = this.input.selectionStart;
-      this.input.value = v;
-      try {
-        const next = Math.min(v.length, pos ?? v.length);
-        this.input.setSelectionRange(next, next);
-      } catch (_) {
-        /* ignore */
-      }
-      this._syncing = false;
+    this._syncing = true;
+    if (this.input.value !== v) this.input.value = v;
+    try {
+      this.input.setSelectionRange(caret, caret);
+    } catch (_) {
+      /* ignore */
     }
+    this._syncing = false;
+    this.dialog.setTextSelection?.(caret, caret);
   }
 
   _onKeyDown(e) {
+    this._pendingCaret = null;
     // Return on a form field that is not the last one moves to the next
     // field and keeps the keyboard up. Otherwise Enter / Escape bubble to the
     // window handler (Accept / Cancel); prevent the input's default action.
@@ -291,7 +392,8 @@ export class MobileTextInput {
         && this.dialog.fieldIndex < this.dialog.fields.length - 1) {
       e.preventDefault();
       e.stopPropagation();
-      this.dialog.fieldIndex += 1;
+      if (this.dialog.focusField) this.dialog.focusField(this.dialog.fieldIndex + 1);
+      else this.dialog.fieldIndex += 1;
       this.sync();
       return;
     }

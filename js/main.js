@@ -10,7 +10,7 @@ import { SetupScene } from './scenes/SetupScene.js';
 import { RoomScene } from './scenes/RoomScene.js';
 import { HallwayScene } from './scenes/HallwayScene.js';
 import { EndingScene } from './scenes/EndingScene.js';
-import { PauseMenu } from './scenes/PauseMenu.js';
+import { PauseMenu, QUIT_SUBTITLE } from './scenes/PauseMenu.js';
 import { VirtualPad } from './input/VirtualPad.js';
 import { installFullscreen, isOsFullscreen } from './input/Fullscreen.js';
 import { MobileTextInput } from './input/MobileTextInput.js';
@@ -190,6 +190,8 @@ document.addEventListener('visibilitychange', suspendInput);
 function waitForConfirm() {
   return new Promise((resolve) => {
     const handler = (e) => {
+      // A key already used by a dialog (e.g. the leave question) is not "press to start".
+      if (e.defaultPrevented) return;
       if (KEYS.confirm.includes(e.key)) {
         window.removeEventListener('keydown', handler);
         e.preventDefault();
@@ -295,6 +297,18 @@ function applyPauseResult(result) {
 
 // Pointer input is bound to the canvas only. The on-screen pad is separate DOM
 // above the canvas, so pad taps never reach these handlers (no double fire).
+/** Pointer press on a dialog (canvas, or a mouse press on the text overlay). */
+function dialogPointerDown(e, pt) {
+  // A touch tap on a text field selects it now and focuses the hidden input
+  // on pointerup / touchend (iOS ignores focus() from pointerdown).
+  const onField = e.pointerType !== 'mouse' && dialog.textFieldAt(pt.x, pt.y);
+  // Mouse presses on a text field place the caret and start a drag selection.
+  if (dialog.handlePointer(pt.x, pt.y, { shift: e.shiftKey, now: performance.now(), drag: e.pointerType === 'mouse' })) {
+    e.preventDefault();
+  }
+  pendingFieldFocus = onField ? { pointerType: e.pointerType } : null;
+}
+
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button != null && e.button !== 0) return;
   if (e.target !== canvas) return;
@@ -302,13 +316,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (!pt) return;
   syncMoneyContext(true);
   if (dialog.active) {
-    // A touch tap on a text field selects it now and focuses the hidden input
-    // on pointerup / touchend (iOS ignores focus() from pointerdown).
-    const onField = e.pointerType !== 'mouse' && dialog.textFieldAt(pt.x, pt.y);
-    if (dialog.handlePointer(pt.x, pt.y)) {
-      e.preventDefault();
-    }
-    pendingFieldFocus = onField ? { pointerType: e.pointerType } : null;
+    dialogPointerDown(e, pt);
     return;
   }
   if (pause.open && game) {
@@ -336,10 +344,42 @@ canvas.addEventListener('touchcancel', () => {
   pendingFieldFocus = null;
 });
 
+// The hidden text overlay sits on the focused field; a mouse press on it acts on the canvas field.
+mobileText.onMousePointer = (e) => {
+  if (e.button != null && e.button !== 0) return;
+  const pt = canvasLogicalXY(e.clientX, e.clientY);
+  if (!pt || !dialog.active) return;
+  syncMoneyContext(true);
+  dialogPointerDown(e, pt);
+};
+
+// Drag-select in a text field follows the mouse even outside the canvas.
+window.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'mouse' || !dialog.isDraggingText()) return;
+  if (!(e.buttons & 1)) { dialog.endPointer(); return; }
+  const pt = canvasLogicalXY(e.clientX, e.clientY);
+  if (pt) dialog.dragPointer(pt.x, pt.y);
+});
+window.addEventListener('pointerup', () => dialog.endPointer());
+
+// Copy / cut / paste for the canvas text fields (the hidden input handles its own).
+for (const type of ['copy', 'cut', 'paste']) {
+  document.addEventListener(type, (e) => {
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    if (!dialog.active || pause.open || (dialog.mode !== 'prompt' && dialog.mode !== 'form')) return;
+    dialog.handleClipboardEvent(e);
+  });
+}
+
 canvas.addEventListener('pointermove', (e) => {
   if (e.pointerType === 'touch') return; // touch has no hover; taps go through pointerdown
   const pt = canvasLogicalXY(e.clientX, e.clientY);
   let over = false;
+  if (pt && dialog.active && (dialog.mode === 'prompt' || dialog.mode === 'form') && dialog.textFieldAt(pt.x, pt.y)) {
+    canvas.style.cursor = 'text';
+    return;
+  }
   if (pt && dialog.active && dialog.mode === 'palette') {
     // The appearance page previews the hovered swatch, in setup and in tellers.
     over = dialog.hoverPointer(pt.x, pt.y);
@@ -354,7 +394,42 @@ canvas.addEventListener('pointerleave', () => {
   canvas.style.cursor = '';
 });
 
+// ── "← Objects In Space" (top bar) asks before leaving the game ──────────
+const LEAVE_QUESTION = 'Are you sure you want to leave?';
+let leaveAsking = false;
+async function confirmLeave() {
+  // The in-game dialog draws over any scene, pause screen or open dialog; only
+  // a loading overlay (busy, no input) falls back to the browser's confirm.
+  const inGame = !(dialog.active && dialog.mode === 'loading');
+  if (!inGame) return window.confirm(LEAVE_QUESTION);
+  const subtitle = game && (mode === 'room' || mode === 'hallway' || mode === 'ending') ? QUIT_SUBTITLE
+    : mode === 'setup' ? 'Custom Setup answers are not saved' : '';
+  suspendInput();
+  return dialog.confirmOver(LEAVE_QUESTION, { title: 'Leave the game?', subtitle });
+}
+const leaveLink = document.querySelector('.topbar a.back');
+leaveLink?.addEventListener('click', async (e) => {
+  // Modified clicks (new tab / window) do not leave this page.
+  if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button > 0) return;
+  e.preventDefault();
+  leaveLink.blur(); // keys go to the game (and its dialog) again
+  if (leaveAsking) return;
+  leaveAsking = true;
+  let leave = false;
+  try {
+    leave = await confirmLeave();
+  } catch (err) {
+    console.error(err);
+    leave = window.confirm(LEAVE_QUESTION);
+  } finally {
+    leaveAsking = false;
+  }
+  if (leave) window.location.href = leaveLink.href;
+});
+
 window.addEventListener('keydown', async (e) => {
+  // Enter on the focused top-bar link opens its own question (click handler).
+  if (e.target && e.target.closest?.('.topbar a')) return;
   syncMoneyContext(true);
   if (dialog.active) {
     dialog.handleKeyDown(e);

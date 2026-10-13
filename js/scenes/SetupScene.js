@@ -1,7 +1,8 @@
 import { editPlanningInputs, editInflationSettings, inflationToggleLabel, setMoneyContext } from './PlanningInputs.js';
-import { editSpouseIdentity, editFamilyIncome, editRetirementAges, editRetirementAccounts, householdSalary, personName } from './FamilyInputs.js';
+import { editSpouseIdentity, editFamilyIncome, editRetirementAges, editRetirementAccounts, householdSalary, personName,
+  rothContributionLabel } from './FamilyInputs.js';
 /**
- * Contextual LTTP-styled setup questionnaires with Back on every step.
+ * Contextual retro-styled setup questionnaires with Back on every step.
  * Name → Year → Age → Appearance (hair + shirt color) → Hair length → Difficulty → Family → Settings → ZIP → Finances →
  * Retirement → Investments → Homes → Expenses → Portfolio overview.
  */
@@ -17,9 +18,46 @@ import { estimateAnnualTax } from '../finance/Tax.js';
 import { annualMortgagePayment, syncStocksTotal } from '../finance/Engine.js';
 import { lookupStockWithLoading } from '../finance/stockQuotes.js';
 import { randomChildName, childOrdinal } from '../data/childNames.js';
-import { formatMoneyDisplay } from '../render/Dialog.js';
+import { formatMoneyDisplay, formatMoneyInput, parseMoneyInput } from '../render/Dialog.js';
+import { toDisplayMoney } from '../finance/DollarBasis.js';
 
 const BACK = '__back__';
+
+/** Share count for the linked holding form: up to 4 decimals, trailing zeros trimmed. */
+export function formatShareCount(n) {
+  if (!Number.isFinite(n)) return '';
+  return (Math.round(n * 10000) / 10000).toFixed(4).replace(/\.?0+$/, '');
+}
+
+/**
+ * Live link for a holding's "$ amount" (field 0) and "# of shares" (field 1)
+ * at a known share price: every keystroke in one recomputes the other
+ * (dollars ÷ price, shares × price). `displayPrice` is the price in the
+ * form's display dollars. A blank field, or no usable price, blanks the other.
+ * `lastEdited()` names the field the player typed in last ('dollars' |
+ * 'shares' | null), which is the source of truth on submit.
+ */
+export function linkedSharesForm(displayPrice) {
+  let last = null;
+  return {
+    lastEdited: () => last,
+    onFieldChange(fields, i) {
+      const price = Number(displayPrice);
+      const ok = Number.isFinite(price) && price > 0;
+      if (i === 0) {
+        last = 'dollars';
+        const raw = String(fields[0].value ?? '').replace(/,/g, '').trim();
+        const d = parseFloat(raw);
+        fields[1].value = ok && raw !== '' && Number.isFinite(d) ? formatShareCount(d / price) : '';
+      } else if (i === 1) {
+        last = 'shares';
+        const raw = String(fields[1].value ?? '').trim();
+        const n = parseFloat(raw);
+        fields[0].value = ok && raw !== '' && Number.isFinite(n) ? formatMoneyInput((n * price).toFixed(2)) : '';
+      }
+    },
+  };
+}
 
 export class SetupScene {
   constructor() {
@@ -458,9 +496,10 @@ export class SetupScene {
           continue;
         }
 
-        // Linked $ amount and # shares
+        // Linked $ amount and # shares: typing in either fills the other at this price.
         let dollars = 0;
         let shares = 0;
+        const linked = linkedSharesForm(toDisplayMoney(price));
         const link = await dialog.form(
           'Shares owned (fill $ or # — the other calculates)',
           [
@@ -478,7 +517,8 @@ export class SetupScene {
               defaultValue: '0',
             },
           ],
-          { title: 'Investments' }
+          { title: 'Investments', subtitle: `${ticker} @ ${formatMoneyDisplay(price)} per share`,
+            onFieldChange: linked.onFieldChange }
         );
         if (link == null) {
           step = 16;
@@ -486,7 +526,10 @@ export class SetupScene {
         }
         dollars = Math.max(0, link.dollars || 0);
         shares = Math.max(0, link.shares || 0);
-        if (dollars > 0 && !(shares > 0)) shares = dollars / price;
+        // The field typed in last is the source of truth; the other is derived from it.
+        if (linked.lastEdited() === 'shares') dollars = shares * price;
+        else if (linked.lastEdited() === 'dollars') shares = dollars / price;
+        else if (dollars > 0 && !(shares > 0)) shares = dollars / price;
         else if (shares > 0 && !(dollars > 0)) dollars = shares * price;
         else if (dollars > 0 && shares > 0) {
           // Prefer dollars as source of truth for value
@@ -925,13 +968,13 @@ function buildOverview(s) {
   } else lines.push('  401(k): none');
   if (s.hasRoth) {
     lines.push(
-      `  Roth IRA: ${formatMoneyDisplay(s.rothBalance)} · contrib ${formatMoneyDisplay(s.rothAnnualContribution)}/yr`
+      `  Roth IRA: ${formatMoneyDisplay(s.rothBalance)} · contrib ${rothContributionLabel(s)}`
     );
   } else lines.push('  Roth IRA: none');
   if (s.married) {
     lines.push(`  ${personName(s, 'spouse')} retirement age: ${s.spouseRetirementAge || 65}`);
     lines.push(`  ${personName(s, 'spouse')} 401(k): ${s.spouseHas401k ? formatMoneyDisplay(s.spouseK401Balance) : 'none'}`);
-    lines.push(`  ${personName(s, 'spouse')} Roth IRA: ${s.spouseHasRoth ? formatMoneyDisplay(s.spouseRothBalance) : 'none'}`);
+    lines.push(`  ${personName(s, 'spouse')} Roth IRA: ${s.spouseHasRoth ? `${formatMoneyDisplay(s.spouseRothBalance)} · contrib ${rothContributionLabel(s, 'spouse')}` : 'none'}`);
   }
   lines.push('');
   lines.push('Investments:');
