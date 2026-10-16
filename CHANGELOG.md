@@ -10,6 +10,17 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.12] — 2026-10-16
+
+### Added
+- Start menu: "Create User Profile with AI" opens a panel with a copyable prompt (and a Copy button) that an AI assistant can use to build a character profile file from your real finances; load that file with "Load from File", then choose "Use Profile".
+
+### Changed
+- Buying a stock (Decision Room Buy Stock and Custom Setup specific stocks): the price screen after an online lookup, and the lookup-failed screen, now have Back (or Esc) as well as Continue, so you can return to the previous question instead of being stuck on OK. Backing out buys nothing.
+- The glass wall message is shorter: "Not enough cash to cover YEAR's expenses! Enter a past year Decision Room to adjust finances."
+- Start menu "Load from File" now opens the file picker right from the menu and stays on the start menu behind it (cancelling the picker leaves the menu as it was) instead of dropping back to the launch screen first.
+- Name and age fields no longer accept a blank value (ages must also be a number); the dialog stays open with a short message, on desktop and in the mobile entry panel.
+
 ## [0.7.11] — 2026-10-13
 
 ### Added

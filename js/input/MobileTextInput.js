@@ -478,7 +478,7 @@ export class MobileTextInput {
     panel.hidden = true;
     panel.setAttribute('role', 'dialog');
     panel.innerHTML =
-      '<div class="me-text"><div class="me-title"></div><div class="me-q"></div><div class="me-hint"></div></div>' +
+      '<div class="me-text"><div class="me-title"></div><div class="me-q"></div><div class="me-hint"></div><div class="me-error" role="alert" hidden></div></div>' +
       '<div class="me-slot"></div>' +
       '<div class="me-btns"><button type="button" class="me-cancel">Cancel</button>' +
       '<button type="button" class="me-done">Done</button></div>';
@@ -488,6 +488,7 @@ export class MobileTextInput {
       title: panel.querySelector('.me-title'),
       q: panel.querySelector('.me-q'),
       hint: panel.querySelector('.me-hint'),
+      error: panel.querySelector('.me-error'),
       slot: panel.querySelector('.me-slot'),
       done: panel.querySelector('.me-done'),
       cancel: panel.querySelector('.me-cancel'),
@@ -568,6 +569,12 @@ export class MobileTextInput {
     p.style.top = `${vy + m}px`;
     p.style.width = `${Math.max(200, vw - m * 2)}px`;
     p.style.maxHeight = `${Math.max(80, vh - m * 2)}px`;
+    // Required name / age refused on Accept / Done: show the dialog's message.
+    const t = this._target();
+    const err = this.dialog.currentInlineError?.();
+    const msg = err && t && String(err.key === 'prompt' ? 'prompt' : `form:${err.key}`) === t.key ? err.msg : '';
+    if (this._els.error.textContent !== msg) this._els.error.textContent = msg;
+    this._els.error.hidden = !msg;
     const r = this._els.slot.getBoundingClientRect();
     const el = this.input;
     const pre = this._els.slot.dataset.prefix ? 22 : 0;
@@ -583,6 +590,16 @@ export class MobileTextInput {
   _done() {
     if (!this._panelOpen) return;
     const t = this._target();
+    if (t) {
+      // A required name / age stays open with the message instead of closing.
+      const key = t.key === 'prompt' ? 'prompt' : this.dialog.fieldIndex;
+      const msg = this.dialog.requiredError?.(key);
+      if (msg) {
+        this.dialog.setInlineError(key, msg);
+        this._layoutPanel();
+        return;
+      }
+    }
     if (t && t.key !== 'prompt' && !t.last && this._stepField(1, false)) return;
     this._before = null;
     this.input.blur();

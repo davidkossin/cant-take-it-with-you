@@ -9,6 +9,7 @@ import { editFamilyIncome, editRetirementAges, editRetirementAccounts, editSpous
 export { setMoneyContext, moneyUnitSubtitle, inflationToggleLabel } from '../finance/DollarBasis.js';
 const dollars=(key,label,value,amountScale=1)=>({key,label,type:'money',prefix:'$',defaultValue:String(value ?? 0),amountScale});
 const number=(key,label,value)=>({key,label,type:'number',defaultValue:String(value ?? 0)});
+const ageField=(key,label,value)=>({...number(key,label,value),required:'age'});
 const percent=(key,label,value)=>({key,label,type:'percent',defaultValue:String((value ?? 0)*100)});
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,Number(v)||0));
 
@@ -35,9 +36,9 @@ async function editBenefits(p, dialog, owner='primary') {
   const pensionNominal=(view.annualPension || 0)*(view.pensionCOLA?priceIndex/(view.pensionInputPriceIndex ?? 1):1);
   const r=await dialog.form('Use your SSA statement benefit at the selected claim age.',[
     dollars('ss','SSA monthly benefit at claim age',originalBenefit,priceIndex),
-    number('claim','Social Security claim age (62–70)',view.socialSecurityClaimAge ?? 67),
+    ageField('claim','Social Security claim age (62–70)',view.socialSecurityClaimAge ?? 67),
     dollars('pension','Annual pension when payments begin',pensionNominal),
-    number('start','Pension starting age',view.pensionStartAge ?? view.retirementAge ?? 65),
+    ageField('start','Pension starting age',view.pensionStartAge ?? view.retirementAge ?? 65),
     number('cola','Pension inflation indexed: 1 yes / 0 no',view.pensionCOLA?1:0),
   ],{title:personName(p,owner)+' benefits',portfolio:p});
   if (!r) return;

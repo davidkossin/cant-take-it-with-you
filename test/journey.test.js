@@ -97,7 +97,7 @@ test('saved Hallway paths from an older selection or funding rule are dropped on
 
 test('glass wall, Bank teller and Charts headline describe cash-only funding', () => {
   const text = glassWallMessage(2040);
-  assert.ok(text.startsWith("Not enough Cash to pay 2040's bills — enter a Decision Room to raise cash."));
+  assert.equal(text, "Not enough cash to cover 2040's expenses!\nEnter a past year Decision Room to adjust finances.");
   assert.ok(!/≤|<= ?0/.test(text));
   const bank = buildDecisionRoom().interactables.find(o => o.action === 'bank');
   assert.equal(bank.kind, 'teller');

@@ -138,6 +138,7 @@ export class SetupScene {
         result = await dialog.prompt('What is your name?', {
           title: '',
           defaultValue: s.playerName,
+          required: 'name',
         });
         if (result == null) {
           const exit = await dialog.confirm(
@@ -147,7 +148,7 @@ export class SetupScene {
           if (exit) return null;
           continue;
         }
-        s.playerName = result || s.playerName;
+        s.playerName = String(result).trim().slice(0, 28);
         step++;
       }
 
@@ -173,6 +174,7 @@ export class SetupScene {
           title: '',
           defaultValue: String(s.age),
           type: 'number',
+          required: 'age',
         });
         if (result == null) {
           step--;
@@ -462,10 +464,11 @@ export class SetupScene {
                 + 'Past performance is not predictive, especially for individual stocks.';
             }
           } else {
-            await dialog.show(
+            const manual = await dialog.confirm(
               look.error || 'Lookup failed. Enter price manually — growth/vol use difficulty averages.',
-              { title: 'Investments' }
+              { title: 'Investments', yes: 'Enter price manually', no: 'Back', distinctCancel: true }
             );
+            if (!manual) { step = 16; continue; } // Back / Esc: change the lookup choice
             s._online = false;
           }
         }
@@ -484,10 +487,11 @@ export class SetupScene {
           }
           price = Math.max(0, priceRes);
         } else {
-          await dialog.show(
+          const ok = await dialog.confirm(
             `${ticker} @ ${formatMoneyDisplay(price)}${onlineNote ? '\n' + onlineNote : ''}${historyNote ? '\n' + historyNote : ''}`,
-            { title: 'Investments' }
+            { title: 'Investments', yes: 'Continue', no: 'Back', distinctCancel: true }
           );
+          if (!ok) { step = 16; continue; } // Back / Esc: change the lookup choice
         }
 
         if (!(price > 0)) {
@@ -860,6 +864,7 @@ export class SetupScene {
         result = await dialog.prompt(`Name of ${childOrdinal(i)}`, {
           title: 'Family',
           defaultValue: defName,
+          required: 'name',
         });
         if (result == null) {
           if (i === 0) step = 27;
@@ -870,7 +875,7 @@ export class SetupScene {
           }
           continue;
         }
-        s._kidName = result || defName;
+        s._kidName = String(result).trim().slice(0, 28);
         step = 29;
       }
 
@@ -881,6 +886,7 @@ export class SetupScene {
           title: 'Family',
           defaultValue: String(5 + i * 3),
           type: 'number',
+          required: 'age',
         });
         if (result == null) {
           step = 28;

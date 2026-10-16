@@ -708,10 +708,8 @@ export function southDoorMessage(game, year, age) {
  */
 export function glassWallMessage(shortfallYear) {
   // Paragraphs only — Dialog wraps each paragraph at 40 chars, so no mid-sentence breaks here.
-  return `Not enough Cash to pay ${shortfallYear}'s bills — enter a Decision Room to raise cash.\n` +
-    `Use the ${shortfallYear} door or an earlier one: move Savings to Cash, withdraw from your ` +
-    `401(k)/Roth, sell stock or a home, borrow, or cut spending.\n` +
-    `Nothing is sold for you.`;
+  return `Not enough cash to cover ${shortfallYear}'s expenses!\n` +
+    `Enter a past year Decision Room to adjust finances.`;
 }
 
 /**

@@ -19,6 +19,20 @@ export function parseMoneyInput(raw) {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * Message for a required name / age value that cannot be accepted, or null.
+ * 'name': blank or whitespace only. 'age': blank, or not a plain number.
+ */
+export function requiredFieldError(kind, value) {
+  const v = String(value ?? '').trim();
+  if (kind === 'name') return v ? null : 'Please enter a name.';
+  if (kind === 'age') {
+    if (!v) return 'Please enter an age.';
+    return /^\d[\d,]*(\.\d+)?$/.test(v) ? null : 'Age must be a number.';
+  }
+  return null;
+}
+
 export function sanitizeNumberInput(raw) {
   let s = String(raw ?? '').replace(/[^\d.\-]/g, '');
   const neg = s.startsWith('-');
@@ -246,7 +260,7 @@ export class Dialog {
    * @param {string} [opts.subtitle]
    */
   prompt(text, { title = '', defaultValue = '', type = 'text', prefix = '', subtitle = '', portfolio,
-    amountScale = 1 } = {}) {
+    amountScale = 1, required = null } = {}) {
     return new Promise((resolve) => {
       this.active = true;
       this.mode = 'prompt';
@@ -255,6 +269,9 @@ export class Dialog {
       this.subtitle = type === 'money' ? moneySubtitle(subtitle, this._moneyContext) : subtitle;
       this.lines = wrapRich(text, 40);
       this.promptType = type;
+      /** 'name' | 'age' | null: Accept refuses a blank (or, for ages, non-numeric) value */
+      this.promptRequired = required;
+      this.inlineError = null;
       this.promptPrefix = prefix || (type === 'money' ? '$' : '');
       let initial = String(defaultValue ?? '');
       this.promptAmountScale = amountScale;
@@ -309,9 +326,11 @@ export class Dialog {
           amountScale,
           initialMoneyValue,
           initialDisplay: v,
+          required: f.required || null,
         };
       });
       this.fieldIndex = 0;
+      this.inlineError = null;
       this._resetTextFocus();
       this.options = [
         { label: 'Accept', value: '__accept' },
@@ -672,11 +691,12 @@ export class Dialog {
     }
     if (this.mode === 'prompt') {
       if (opt.value === '__back' || opt.value === '__cancel') this.close(null);
-      else this.close(this._parsePromptValue());
+      else if (!this._refuseInvalid()) this.close(this._parsePromptValue());
       return;
     }
     if (this.mode === 'form') {
       if (opt.value === '__back' || opt.value === '__cancel') this.close(null);
+      else if (this._refuseInvalid()) return;
       else {
         const out = {};
         for (const f of this.fields) {
@@ -686,7 +706,51 @@ export class Dialog {
       }
       return;
     }
+    // A menu entry can act in place (e.g. open a file picker from this very key/click
+    // handler) and keep the menu on screen; it closes the menu itself when it is done.
+    if (this.mode === 'menu' && typeof opt.onActivate === 'function') {
+      opt.onActivate();
+      return;
+    }
     this.close(opt.value);
+  }
+
+  /**
+   * Required-field error for the prompt ('prompt') or form field index, or null.
+   * @param {'prompt'|number} key
+   */
+  requiredError(key) {
+    if (key === 'prompt') return this.mode === 'prompt' ? requiredFieldError(this.promptRequired, this.promptValue) : null;
+    const f = this.mode === 'form' ? this.fields[key] : null;
+    return f ? requiredFieldError(f.required, f.value) : null;
+  }
+
+  /** Show `msg` beside field `key` until its value changes. */
+  setInlineError(key, msg) {
+    const value = key === 'prompt' ? this.promptValue : this.fields[key]?.value;
+    this.inlineError = msg ? { key, msg, value } : null;
+  }
+
+  /** The inline error still showing (its field unchanged since), or null. */
+  currentInlineError() {
+    const e = this.inlineError;
+    if (!e) return null;
+    const value = e.key === 'prompt' ? this.promptValue : this.fields[e.key]?.value;
+    return value === e.value ? e : null;
+  }
+
+  /** Accept guard: true (and an inline message shown) when a required value is missing. */
+  _refuseInvalid() {
+    const keys = this.mode === 'prompt' ? ['prompt'] : this.fields.map((_, i) => i);
+    for (const key of keys) {
+      const msg = this.requiredError(key);
+      if (!msg) continue;
+      if (key !== 'prompt' && key !== this.fieldIndex) this.focusField(key, 'all');
+      this.setInlineError(key, msg);
+      return true;
+    }
+    this.inlineError = null;
+    return false;
   }
 
   _parsePromptValue() {
@@ -699,6 +763,17 @@ export class Dialog {
       v = Number.isFinite(n) ? n : 0;
     }
     return v;
+  }
+
+  /** Short warning text, right-aligned at (right, y), in the dialog's pixel font. */
+  _drawInlineError(ctx, msg, right, y) {
+    ctx.save();
+    ctx.font = '14px "Press Start 2P", monospace';
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#ff8a6a';
+    ctx.fillText(msg, right, y);
+    ctx.restore();
   }
 
   _parseFieldValue(f) {
@@ -1227,12 +1302,16 @@ export class Dialog {
         prefix: this.promptPrefix, value: this.promptValue, suffix: this.promptType === 'percent' ? '%' : '',
         focused: true, lineH: 26,
       });
+      const err = this.currentInlineError();
+      if (err && err.key === 'prompt') this._drawInlineError(ctx, err.msg, x + boxW - pad - 12, ty + 15);
       ty += 56;
     } else if (this.mode === 'form') {
       ty += 4;
       this.fields.forEach((f, i) => {
         const focused = i === this.fieldIndex;
         drawRichText(ctx, f.label, x + pad, ty, 14, focused ? PALETTE.gold : '#a89878');
+        const err = this.currentInlineError();
+        if (err && err.key === i) this._drawInlineError(ctx, err.msg, x + boxW - pad, ty);
         ty += 20;
         ctx.fillStyle = '#000';
         ctx.fillRect(x + pad, ty, boxW - pad * 2, 36);

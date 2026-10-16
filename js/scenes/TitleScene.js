@@ -1,5 +1,6 @@
 import { PALETTE, FRAME_W, FRAME_H, TILE, WORLD_SCALE } from '../config.js';
 import { autoSave, deleteSave, flushSaves, getSaveStatus, hasSaves, listSaves, loadSave, loadStoredRecord } from '../state/SaveSystem.js';
+import { openAiProfilePanel } from '../ui/AiProfilePanel.js';
 import { exportPlan, pickSaveFile, saveFileName, saveTextToDisk } from '../state/PlanExport.js';
 import {
   loadFromFile,
@@ -54,10 +55,15 @@ export class TitleScene {
         opts.push({ label: 'Use Profile', value: 'useProfile' });
       }
       opts.push({ label: 'Create a Profile', value: 'createProfile' });
+      // Opens a panel over this menu in place; the menu stays up and is unchanged on close.
+      opts.push({ label: 'Create User Profile with AI', value: 'aiProfile', onActivate: () => openAiProfilePanel() });
       if (hasSaves()) {
         opts.push({ label: 'Load Game', value: 'load' });
       }
-      opts.push({ label: 'Load from File', value: 'loadFile' });
+      // The file picker opens straight from this menu entry's click/key handler (the browser
+      // needs that user gesture) and the start menu stays up behind it; the menu only closes
+      // once a file was actually chosen. Cancelling the picker leaves the menu as it was.
+      opts.push({ label: 'Load from File', value: 'loadFile', onActivate: () => this.pickFileFromMenu(dialog) });
       opts.push({ label: 'Manage Saves / Import Plan', value: 'manage' });
       if (hasProfiles()) {
         opts.push({ label: 'Manage Profiles', value: 'manageProfiles' });
@@ -199,15 +205,30 @@ export class TitleScene {
    * browser, the game is stored as a checkpoint) and start that game.
    * @returns {Promise<{action:'load', game:object}|null>}
    */
+  /** Menu entry handler: open the picker now, then close the menu if a file was chosen. */
+  pickFileFromMenu(dialog) {
+    if (this._pickingFile) return;
+    this._pickingFile = true;
+    this._pickedFile = null;
+    const finish = (picked) => {
+      this._pickingFile = false;
+      if (!picked) return; // cancelled: stay on the start menu
+      this._pickedFile = picked;
+      dialog.close('loadFile');
+    };
+    // loadFromFile() calls the file input's click() synchronously, inside this handler.
+    loadFromFile().then((loaded) => finish(loaded ? { loaded } : null), (error) => finish({ error }));
+  }
+
   async loadGameFromFile(dialog) {
-    let loaded;
-    try {
-      loaded = await loadFromFile();
-    } catch (error) {
-      await dialog.show(error.message || 'This save file could not be loaded.', { title: 'Load from File' });
+    const picked = this._pickedFile;
+    this._pickedFile = null;
+    if (!picked) return null;
+    if (picked.error) {
+      await dialog.show(picked.error.message || 'This save file could not be loaded.', { title: 'Load from File' });
       return null;
     }
-    if (!loaded) return null;
+    const loaded = picked.loaded;
     await dialog.show(loadedFileMessage(loaded), { title: 'Load from File' });
     return loaded.game ? { action: 'load', game: loaded.game } : null;
   }

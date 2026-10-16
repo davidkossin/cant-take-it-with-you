@@ -48,8 +48,8 @@ export async function editSpouseIdentity(p, dialog, { title = 'Family' } = {}) {
   let details;
   while (true) {
     details = await dialog.form('Spouse details', [
-    { key: 'name', label: 'Spouse name', type: 'text', defaultValue: p.spouseName || 'Spouse' },
-    { key: 'age', label: 'Spouse age', type: 'number', defaultValue: p.spouseAge == null ? '' : String(p.spouseAge) },
+    { key: 'name', label: 'Spouse name', type: 'text', defaultValue: p.spouseName || 'Spouse', required: 'name' },
+    { key: 'age', label: 'Spouse age', type: 'number', defaultValue: p.spouseAge == null ? '' : String(p.spouseAge), required: 'age' },
   ], { title, portfolio: p });
     if (!details) return false;
     if (Number.isFinite(Number(details.age)) && Number(details.age) >= 18 && Number(details.age) <= 110) break;
@@ -67,7 +67,7 @@ export async function editSpouseIdentity(p, dialog, { title = 'Family' } = {}) {
     { label: 'Short', value: 'short' }, { label: 'Long', value: 'long' }, { label: 'Back', value: null },
   ], { title, selected: p.spouseHairLength === 'long' ? 1 : 0 });
   if (length == null) return false;
-  p.spouseName = String(details.name || 'Spouse').trim().slice(0, 28) || 'Spouse';
+  p.spouseName = String(details.name).trim().slice(0, 28);
   p.spouseAge = Math.max(18, Math.min(110, Math.round(Number(details.age) || 18)));
   p.spouseBirthYear = p.year - p.spouseAge;
   p.spouseHairColor = normalizeHairColor(look.hairColor);
@@ -100,9 +100,9 @@ export async function editPersonAppearance(p, dialog, { owner = 'primary', title
   let step = 0;
   while (true) {
     if (step === 0) {
-      const result = await dialog.prompt(spouse ? 'Spouse name' : 'What is your name?', { title, defaultValue: name });
+      const result = await dialog.prompt(spouse ? 'Spouse name' : 'What is your name?', { title, defaultValue: name, required: 'name' });
       if (result == null) return false;
-      name = String(result).trim().slice(0, 28) || name;
+      name = String(result).trim().slice(0, 28);
       step = 1;
     } else if (step === 1) {
       const result = await dialog.menu(`${name}: hair length?`, [
@@ -155,8 +155,8 @@ export async function editFamilyIncome(p, dialog, { title = 'Finances' } = {}) {
 }
 
 export async function editRetirementAges(p, dialog, { title = 'Retirement' } = {}) {
-  const fields = [{ key: 'retirementAge', label: `${personName(p)} retirement age`, type: 'number', defaultValue: String(p.retirementAge || 65) }];
-  if (p.married) fields.push({ key: 'spouseRetirementAge', label: `${personName(p, 'spouse')} retirement age`, type: 'number', defaultValue: String(p.spouseRetirementAge || 65) });
+  const fields = [{ key: 'retirementAge', label: `${personName(p)} retirement age`, type: 'number', defaultValue: String(p.retirementAge || 65), required: 'age' }];
+  if (p.married) fields.push({ key: 'spouseRetirementAge', label: `${personName(p, 'spouse')} retirement age`, type: 'number', defaultValue: String(p.spouseRetirementAge || 65), required: 'age' });
   const form = await dialog.form('Each person retires at their own age.', fields, { title });
   if (!form) return false;
   p.retirementAge = Math.max(40, Math.min(100, Math.round(Number(form.retirementAge) || 65)));

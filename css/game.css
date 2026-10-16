@@ -612,3 +612,83 @@ body.has-virtual-pad .hint {
   pointer-events: auto;
 }
 body.mobile-entry-open .virtual-pad { visibility: hidden; }
+.mobile-entry .me-error { font-size: 10px; line-height: 1.5; color: #ff8a6a; margin-top: 6px; }
+.mobile-entry .me-error[hidden] { display: none; }
+
+/* —— Title menu: Create User Profile with AI —— */
+.ai-profile {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.72);
+}
+.ai-profile-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(820px, 100%);
+  max-height: 100%;
+  height: min(720px, 100%);
+  box-sizing: border-box;
+  padding: 16px;
+  background: #181818;
+  border: 3px solid #d4a84b;
+  box-shadow: 0 0 0 3px #8a6830, 0 8px 24px #000;
+  color: #f0e8c8;
+}
+.ai-profile-title {
+  flex: none;
+  margin: 0;
+  font: 14px/1.5 "Press Start 2P", monospace;
+  color: #d4a84b;
+}
+.ai-profile-intro {
+  flex: none;
+  margin: 0;
+  max-height: 28%;
+  overflow-y: auto;
+  white-space: pre-line;
+  font: 15px/1.45 "Outfit", system-ui, sans-serif;
+}
+.ai-profile-text {
+  flex: 1 1 auto;
+  min-height: 90px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  overflow: auto;
+  padding: 10px;
+  background: #0f0b14;
+  color: #f0e8c8;
+  border: 2px solid #d4a84b;
+  border-radius: 0;
+  font: 13px/1.45 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.ai-profile-btns { flex: none; display: flex; gap: 10px; }
+.ai-profile-btns button {
+  flex: 1;
+  min-height: 44px;
+  font: 12px "Press Start 2P", monospace;
+  border: 2px solid #8a6830;
+  background: #2a2018;
+  color: #c8b878;
+  border-radius: 0;
+  touch-action: manipulation;
+  cursor: pointer;
+}
+.ai-profile-btns .ai-profile-copy { background: #d4a84b; color: #181818; border-color: #fff4c8; }
+.ai-profile-btns button:focus-visible { outline: 3px solid #fff4c8; outline-offset: 2px; }
+@media (max-width: 600px) {
+  .ai-profile { padding: 6px; }
+  .ai-profile-panel { padding: 12px; gap: 10px; }
+  .ai-profile-title { font-size: 11px; }
+  .ai-profile-intro { font-size: 14px; }
+  .ai-profile-text { font-size: 12px; }
+}

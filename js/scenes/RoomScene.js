@@ -403,10 +403,11 @@ export class RoomScene {
       await dialog.show('Four kids is the max for this ledger.', { title });
       return;
     }
-    const name = await dialog.prompt('Name of the new child', { title, defaultValue: randomChildName() });
+    const name = await dialog.prompt('Name of the new child', { title, defaultValue: randomChildName(), required: 'name' });
     if (name == null) return;
-    game.portfolio = addKid(p, { name: name || 'Child', age: 0 });
-    await dialog.show(`${name || 'Child'} joins the timeline at age 0. Annual child costs use ${childCostLabel(p.zip)} until age 18.`, { title });
+    const kidName = String(name).trim().slice(0, 28);
+    game.portfolio = addKid(p, { name: kidName, age: 0 });
+    await dialog.show(`${kidName} joins the timeline at age 0. Annual child costs use ${childCostLabel(p.zip)} until age 18.`, { title });
   }
 
   /** Remove a Spouse / divorce — fund-split % (linked fields) over joint Cash/Savings/investments, then property. */
@@ -610,7 +611,7 @@ export class RoomScene {
       } else if (step === 3) {
         const age = ownerAge(game.portfolio, owner);
         const result = await dialog.prompt(`${personName(game.portfolio, owner)} planned retirement age for this job`, {
-          title, type: 'number', defaultValue: String(retirementAge ?? Math.ceil(age + 1)),
+          title, type: 'number', defaultValue: String(retirementAge ?? Math.ceil(age + 1)), required: 'age',
           subtitle: 'Choose a future age so the model includes this new salary.',
         });
         if (result == null) return; // no single prior "question" to return to here; cancel the whole job start
@@ -1622,7 +1623,9 @@ Cash received: ${money(preview.netCash)}`, {
               historyNote = `Estimated from ${look.historyYears} yrs of price history — not a guarantee of future returns; edit freely.`;
             }
           } else {
-            await dialog.show(look.error || 'Lookup failed. Enter price manually.', { title });
+            const manual = await dialog.confirm(look.error || 'Lookup failed. Enter price manually.',
+              { title, yes: 'Enter price manually', no: 'Back', distinctCancel: true });
+            if (!manual) { step = 1; continue; } // Back / Esc: change the lookup choice
             online = false;
           }
         }
@@ -1634,7 +1637,9 @@ Cash received: ${money(preview.netCash)}`, {
           if (result == null) { step = 1; continue; }
           price = Math.max(0, result);
         } else {
-          await dialog.show(`${ticker} @ ${formatMoneyDisplay(price)}${onlineNote ? '\n' + onlineNote : ''}`, { title });
+          const ok = await dialog.confirm(`${ticker} @ ${formatMoneyDisplay(price)}${onlineNote ? '\n' + onlineNote : ''}`,
+            { title, yes: 'Continue', no: 'Back', distinctCancel: true });
+          if (!ok) { step = 1; continue; } // Back / Esc: nothing is bought
         }
         if (!(price > 0)) { await dialog.show('Price must be greater than zero.', { title }); step = 1; continue; }
         step = 3;
