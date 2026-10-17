@@ -166,7 +166,7 @@ export class BabyNpc {
   }
 
   draw(ctx) {
-    const spr = makeBabySprite(this.look.hair, this.look.shirt, this.facing, this.moving ? this.frame : -1, this.look.gender);
+    const spr = makeBabySprite(this.look.hair, this.look.shirt, this.facing, this.moving ? this.frame : -1);
     drawCrispSprite(ctx, spr, this.x, this.y);
   }
 }
