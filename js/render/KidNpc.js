@@ -9,7 +9,7 @@
  * Positions are the sprite's top-left corner in world pixels.
  */
 import { TILE } from '../config.js';
-import { npcBounds, NPC_FACE_RANGE } from './SpouseNpc.js';
+import { npcBounds, NPC_FACE_RANGE, npcBlocked, npcOverlapsAt, npcBumpPauseTicks } from './SpouseNpc.js';
 import {
   makeBabySprite, makeChildSprite, makeTeenSprite, kidLook, childLook, teenLook,
   BABY_SPRITE_W, BABY_SPRITE_H, BABY_FRAMES, CHILD_SPRITE_W, CHILD_SPRITE_H, CHILD_FRAMES, TEEN_SPRITE_H,
@@ -52,8 +52,9 @@ export class BabyNpc {
    * @param {{x:number,y:number,w:number,h:number}|null} [opts.avoid] rect to spawn away from
    * @param {() => number} [opts.random]
    */
-  constructor(world, kid, index, { walkSpeed = 1.35, avoid = null, random = Math.random } = {}) {
+  constructor(world, kid, index, { walkSpeed = 1.35, avoid = null, random = Math.random, others = null } = {}) {
     this.world = world;
+    this.others = others;
     this.kid = kid;
     this.index = index;
     this.look = kidLook(kid, index);
@@ -91,6 +92,7 @@ export class BabyNpc {
       const x = Math.round(b.minX + this.random() * (b.maxX - b.minX));
       const y = Math.round(b.minY + this.random() * (b.maxY - b.minY));
       spot = { x, y };
+      if (npcOverlapsAt(this, x, y)) continue;
       if (!avoid) break;
       if (Math.hypot(x - avoid.x, y - avoid.y) >= 3 * TILE) break;
     }
@@ -142,6 +144,12 @@ export class BabyNpc {
     const ddx = t.x - this.x;
     const ddy = t.y - this.y;
     if (Math.abs(ddx) + Math.abs(ddy) <= this.speed) {
+      if (npcBlocked(this, t.x, t.y)) {
+        this.moving = false;
+        this.target = null;
+        this.pauseTicks = npcBumpPauseTicks(this.random);
+        return;
+      }
       this.x = t.x;
       this.y = t.y;
       this.moving = false;
@@ -151,6 +159,12 @@ export class BabyNpc {
     }
     const nx = this.x + Math.sign(ddx) * Math.min(this.speed, Math.abs(ddx));
     const ny = this.y + Math.sign(ddy) * Math.min(this.speed, Math.abs(ddy));
+    if (npcBlocked(this, nx, ny)) {
+      this.moving = false;
+      this.target = null;
+      this.pauseTicks = npcBumpPauseTicks(this.random);
+      return;
+    }
     if (player && overlaps(this.box(nx, ny), player) && !overlaps(this.box(), player)) {
       this.moving = false;
       this.target = null;
@@ -198,8 +212,9 @@ export class ChildNpc {
    * @param {number} index position in the kids list (seeds the look)
    * @param {object} [opts] same as BabyNpc
    */
-  constructor(world, kid, index, { walkSpeed = 1.35, avoid = null, random = Math.random } = {}) {
+  constructor(world, kid, index, { walkSpeed = 1.35, avoid = null, random = Math.random, others = null } = {}) {
     this.world = world;
+    this.others = others;
     this.kid = kid;
     this.index = index;
     this.look = childLook(kid, index);
@@ -243,6 +258,7 @@ export class ChildNpc {
       const x = Math.round(b.minX + this.random() * (b.maxX - b.minX));
       const y = Math.round(b.minY + this.random() * (b.maxY - b.minY));
       spot = { x, y };
+      if (npcOverlapsAt(this, x, y)) continue;
       if (!avoid) break;
       if (Math.hypot(x - avoid.x, y - avoid.y) >= 3 * TILE) break;
     }
@@ -295,6 +311,13 @@ export class ChildNpc {
     const ddx = t.x - this.x;
     const ddy = t.y - this.y;
     if (Math.abs(ddx) + Math.abs(ddy) <= this.speed) {
+      if (npcBlocked(this, t.x, t.y)) {
+        this.moving = false;
+        this.running = false;
+        this.target = null;
+        this.pauseTicks = npcBumpPauseTicks(this.random);
+        return;
+      }
       this.x = t.x;
       this.y = t.y;
       this.moving = false;
@@ -305,6 +328,13 @@ export class ChildNpc {
     }
     const nx = this.x + Math.sign(ddx) * Math.min(this.speed, Math.abs(ddx));
     const ny = this.y + Math.sign(ddy) * Math.min(this.speed, Math.abs(ddy));
+    if (npcBlocked(this, nx, ny)) {
+      this.moving = false;
+      this.running = false;
+      this.target = null;
+      this.pauseTicks = npcBumpPauseTicks(this.random);
+      return;
+    }
     if (player && overlaps(this.box(nx, ny), player) && !overlaps(this.box(), player)) {
       this.moving = false;
       this.running = false;
@@ -347,6 +377,7 @@ export class TeenNpc extends ChildNpc {
     this.runSpeed = walk;
     this.runChance = 0;
     this.spriteH = TEEN_SPRITE_H;
+    this.spawn(opts.avoid ?? null); // re-place with the teen's own feet box
     this.pauseTicks = this._pause();
   }
 

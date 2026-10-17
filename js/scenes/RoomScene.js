@@ -199,8 +199,12 @@ export class RoomScene {
       walkSpeed: pl ? pl.speed : 1.5,
       avoid: pl ? { x: pl.x - 2, y: pl.y - 12, w: 16, h: 24 } : null,
       onDecision: (d) => debugLog('spouse_npc', d),
+      others: this._npcOthers,
     });
   }
+
+  /** Every other NPC (spouse and kids) that `self` must not walk into. */
+  _npcOthers = (self) => [this.spouse, ...this.kidNpcs].filter((n) => n && n !== self);
 
   /** Crawling babies for the children aged 0-3 (rebuilt when the room or those children change). */
   syncKids(p) {
@@ -210,10 +214,15 @@ export class RoomScene {
     if (key === this._babyKey && this.kidNpcs.every((b) => b.world === this.world)) return;
     this._babyKey = key;
     const pl = this.player;
-    this.kidNpcs = kids.map(({ k, i }) => new ({ b: BabyNpc, c: ChildNpc, t: TeenNpc }[kind(k.age)])(this.world, k, i, {
-      walkSpeed: pl ? pl.speed : 1.35,
-      avoid: pl ? { x: pl.x - 2, y: pl.y - 12, w: 16, h: 24 } : null,
-    }));
+    // Built one at a time so each new kid already avoids the spouse and the kids before it.
+    this.kidNpcs = [];
+    for (const { k, i } of kids) {
+      this.kidNpcs.push(new ({ b: BabyNpc, c: ChildNpc, t: TeenNpc }[kind(k.age)])(this.world, k, i, {
+        walkSpeed: pl ? pl.speed : 1.35,
+        avoid: pl ? { x: pl.x - 2, y: pl.y - 12, w: 16, h: 24 } : null,
+        others: this._npcOthers,
+      }));
+    }
   }
 
   leave() {

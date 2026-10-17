@@ -75,6 +75,32 @@ function obstacles(world) {
   return (world.interactables || []).filter((o) => o.kind !== 'marker' && o.kind !== 'spawn' && o.kind !== 'lamp');
 }
 
+/** Other NPCs of `self` (opts.others is a function returning the NPCs it must not walk into). */
+function othersOf(self) {
+  return typeof self.others === 'function' ? self.others(self) : [];
+}
+
+/** True when a move of `self` to (nx, ny) would run its feet box into another NPC it is not already overlapping. */
+export function npcBlocked(self, nx, ny) {
+  const mine = self.box(nx, ny);
+  const now = self.box();
+  return othersOf(self).some((o) => {
+    const ob = o.box();
+    return overlaps(mine, ob) && !overlaps(now, ob);
+  });
+}
+
+/** True when `self` placed at (x, y) would overlap another NPC's feet box. */
+export function npcOverlapsAt(self, x, y) {
+  const mine = self.box(x, y);
+  return othersOf(self).some((o) => overlaps(mine, o.box()));
+}
+
+/** Short wait (0.3-1 s) after bumping into another NPC, so it re-picks soon. */
+export function npcBumpPauseTicks(random = Math.random) {
+  return Math.round((0.3 + random() * 0.7) * TICKS_PER_SECOND);
+}
+
 export class SpouseNpc {
   /**
    * @param {object} world Decision Room from buildDecisionRoom
@@ -84,9 +110,11 @@ export class SpouseNpc {
    * @param {{x:number,y:number,w:number,h:number}|null} [opts.avoid] sprite rect to spawn away from
    * @param {() => number} [opts.random] uniform [0, 1); Math.random by default
    * @param {(d:object) => void} [opts.onDecision] called with each wander decision
+   * @param {(self:object) => object[]} [opts.others] the other NPCs to avoid walking into
    */
-  constructor(world, { walkSpeed = 1.5, avoid = null, random = Math.random, onDecision = null } = {}) {
+  constructor(world, { walkSpeed = 1.5, avoid = null, random = Math.random, onDecision = null, others = null } = {}) {
     this.world = world;
+    this.others = others;
     this.speed = walkSpeed * NPC_SPEED_FACTOR;
     this.random = random;
     this.onDecision = onDecision;
@@ -130,7 +158,7 @@ export class SpouseNpc {
     for (let i = 0; i < 60; i++) {
       const x = Math.round(b.minX + this.random() * (b.maxX - b.minX));
       const y = Math.round(b.minY + this.random() * (b.maxY - b.minY));
-      if (!this._clear(x, y)) continue;
+      if (!this._clear(x, y) || npcOverlapsAt(this, x, y)) continue;
       best = { x, y };
       if (!avoid) break;
       const d = Math.hypot(x + NPC_SPRITE_W / 2 - (avoid.x + avoid.w / 2), y + NPC_SPRITE_H / 2 - (avoid.y + avoid.h / 2));
@@ -235,6 +263,12 @@ export class SpouseNpc {
     const ddy = t.y - this.y;
     const dist = Math.abs(ddx) + Math.abs(ddy); // one axis at a time (4-way)
     if (dist <= this.speed) {
+      if (npcBlocked(this, t.x, t.y)) {
+        this.moving = false;
+        this.target = null;
+        this.pauseTicks = npcBumpPauseTicks(this.random);
+        return;
+      }
       this.x = t.x;
       this.y = t.y;
       this.moving = false;
@@ -249,6 +283,13 @@ export class SpouseNpc {
     }
     const nx = this.x + Math.sign(ddx) * Math.min(this.speed, Math.abs(ddx));
     const ny = this.y + Math.sign(ddy) * Math.min(this.speed, Math.abs(ddy));
+    if (npcBlocked(this, nx, ny)) {
+      this.moving = false;
+      this.target = null;
+      this.animTimer = 0;
+      this.pauseTicks = npcBumpPauseTicks(this.random);
+      return;
+    }
     if (player && overlaps(this.box(nx, ny), player) && !overlaps(this.box(), player)) {
       // The player is in the way: stop here and wait a moment before wandering again.
       this.moving = false;

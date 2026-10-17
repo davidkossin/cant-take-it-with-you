@@ -11,6 +11,7 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 ## [Unreleased]
 
 ### Added
+- NPCs in the Decision Room (spouse, babies, children, teens) now collide with each other, not just with you: a wandering NPC will not walk into another NPC's feet box, waits a moment and picks a new direction when blocked, spawns clear of the others where possible, and can still walk apart if two end up overlapping.
 - Children's hair now follows their first name: a new name list (`js/data/firstNames.js`, a few hundred common US names, case-insensitive, first word only) picks the existing long-hair look for girl names and the short-hair look for boy names; names it does not know get one chosen by the name itself. It is seeded by name only, so it stays the same as a baby, a child and a teen, and a kid's own hair-length setting still wins. No new sprite styles.
 - Walking up to a baby, child or teen in the Decision Room now shows their name as the bottom tooltip, name only with no [Enter], the same as the spouse (kids with no name show as Kid 1, Kid 2, ...). There is nothing to interact with yet.
 - Teens aged 13-18 now appear in the Decision Room (new pixel sprite about 90% of adult height: four directions, standing and walk frames). They walk at a normal pace (about 85% of yours) with occasional pauses, never run, turn to face you when you are close, and are solid like the spouse. Hair (short or long), tee or hoodie, shirt and pants colors are picked per teen from their name, so they stay the same each visit. Kids older than 18 are not shown.
