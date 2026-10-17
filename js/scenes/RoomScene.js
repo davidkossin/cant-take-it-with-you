@@ -267,11 +267,21 @@ export class RoomScene {
 
   /** Nearest interactable the player is facing; the spouse counts, labelled with their name. */
   facingInteractable(game) {
+    const extra = [];
     const sp = this.spouse;
-    if (!sp || !hasSpouseNpc(game.portfolio)) return findFacingInteractable(this.player, this.world);
-    const b = sp.box();
-    const spouseObj = { kind: 'spouse', label: personName(game.portfolio, 'spouse'), x: b.x - 2, y: sp.y + 6, w: b.w + 4, h: 18 };
-    return findFacingInteractable(this.player, { interactables: [...this.world.interactables, spouseObj] });
+    if (sp && hasSpouseNpc(game.portfolio)) {
+      const b = sp.box();
+      extra.push({ kind: 'spouse', label: personName(game.portfolio, 'spouse'), x: b.x - 2, y: sp.y + 6, w: b.w + 4, h: 18 });
+    }
+    // Kids show their name as a bare tooltip (nothing to interact with yet).
+    const kids = game.portfolio.kids || [];
+    for (const n of this.kidNpcs) {
+      const name = String(kids[n.index]?.name ?? '').trim() || `Kid ${n.index + 1}`;
+      const b = n.box();
+      extra.push({ kind: 'kid', label: name, x: b.x - 2, y: b.y - 6, w: b.w + 4, h: b.h + 8 });
+    }
+    if (!extra.length) return findFacingInteractable(this.player, this.world);
+    return findFacingInteractable(this.player, { interactables: [...this.world.interactables, ...extra] });
   }
 
   async tryInteract(game, dialog) {
@@ -280,6 +290,11 @@ export class RoomScene {
     this.setInputBlocked(true);
     const obj = this.facingInteractable(game);
     if (!obj) return null;
+
+    if (obj.kind === 'kid') {
+      this.setInputBlocked(false);
+      return null;
+    }
 
     if (obj.kind === 'spouse') {
       const last = this.bubble?.text ?? this.lastSpouseLine ?? null;
@@ -1875,7 +1890,7 @@ Cash received: ${money(preview.netCash)}`, {
     }
 
     if (this.prompt && !this.locked) {
-      drawActionPrompt(ctx, this.prompt.label, { bare: this.prompt.kind === 'spouse' });
+      drawActionPrompt(ctx, this.prompt.label, { bare: this.prompt.kind === 'spouse' || this.prompt.kind === 'kid' });
     }
   }
 }

@@ -55,6 +55,7 @@ export class BabyNpc {
   constructor(world, kid, index, { walkSpeed = 1.35, avoid = null, random = Math.random } = {}) {
     this.world = world;
     this.kid = kid;
+    this.index = index;
     this.look = kidLook(kid, index);
     this.speed = walkSpeed * BABY_SPEED_FACTOR;
     this.random = random;
@@ -200,6 +201,7 @@ export class ChildNpc {
   constructor(world, kid, index, { walkSpeed = 1.35, avoid = null, random = Math.random } = {}) {
     this.world = world;
     this.kid = kid;
+    this.index = index;
     this.look = childLook(kid, index);
     this.walkSpeed = walkSpeed * CHILD_WALK_FACTOR;
     this.runSpeed = walkSpeed * CHILD_RUN_FACTOR;
