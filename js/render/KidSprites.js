@@ -8,6 +8,7 @@
  */
 import { HAIR_COLORS, HAIR_SHADES, SHIRT_COLORS, SHIRT_SHADES, normalizeHairColor, normalizeShirtColor } from '../config.js';
 import { playerTones } from './Assets.js';
+import { nameGender } from '../data/firstNames.js';
 
 export const BABY_SPRITE_W = 16;
 export const BABY_SPRITE_H = 16;
@@ -152,12 +153,13 @@ function drawBabySide(ctx, pal, c, flip) {
  * @param {'down'|'up'|'left'|'right'} facing
  * @param {number} frame 0..3 crawl frame, or < 0 for the still pose
  */
-export function makeBabySprite(hairColor = 'brown', shirtColor = 'sky', facing = 'down', frame = -1) {
+export function makeBabySprite(hairColor = 'brown', shirtColor = 'sky', facing = 'down', frame = -1, gender = 'boy') {
   const hairId = normalizeHairColor(hairColor);
   const shirtId = normalizeShirtColor(shirtColor);
   const still = frame < 0;
   const f = still ? 0 : ((frame % BABY_FRAMES) + BABY_FRAMES) % BABY_FRAMES;
-  const key = `baby-${hairId}-${shirtId}-${facing}-${still ? 's' : f}`;
+  const girl = gender === 'girl';
+  const key = `baby-${hairId}-${shirtId}-${girl ? 'g' : 'b'}-${facing}-${still ? 's' : f}`;
   if (cache.has(key)) return cache.get(key);
   const cv = makeCanvas(BABY_SPRITE_W, BABY_SPRITE_H);
   const ctx = cv.getContext('2d');
@@ -168,6 +170,12 @@ export function makeBabySprite(hairColor = 'brown', shirtColor = 'sky', facing =
   if (facing === 'left' || facing === 'right') drawBabySide(ctx, pal, c, facing === 'left');
   else if (facing === 'up') drawBabyUp(ctx, pal, c);
   else drawBabyDown(ctx, pal, c);
+  // Light touch: girls wear a little bow on top, boys have a small hair tuft.
+  const top = (facing === 'down' ? 4 : 3) - c.bob;
+  const flipX = facing === 'left';
+  const dot = (x, y, col) => { ctx.fillStyle = col; ctx.fillRect(flipX ? BABY_SPRITE_W - 1 - x : x, y, 1, 1); };
+  if (girl) { dot(7, top - 1, '#ee6aa4'); dot(9, top - 1, '#ee6aa4'); dot(8, top - 1, '#b43c78'); dot(8, top, '#b43c78'); }
+  else { dot(8, top - 1, pal.h); dot(7, top, pal.h); }
   cache.set(key, cv);
   return cv;
 }
@@ -182,21 +190,44 @@ export function hashString(s) {
   return h >>> 0;
 }
 
-/** Natural-leaning hair ids (the first eleven palette entries) for kids. */
+/** Natural-leaning hair ids for kids. */
 const KID_HAIR_IDS = ['black', 'dark', 'brown', 'chestnut', 'auburn', 'red', 'copper', 'strawberry', 'blonde', 'platinum'];
-const KID_SHIRT_IDS = ['sky', 'teal', 'green', 'mustard', 'orange', 'red', 'pink', 'purple', 'lavender', 'white', 'blue', 'olive'];
+/** Shirt colors per look: boys lean blues/greens/earth tones, girls lean pinks/purples plus a broad mix. */
+const BOY_SHIRTS = ['sky', 'teal', 'green', 'mustard', 'orange', 'red', 'blue', 'olive', 'white', 'forest', 'gray', 'blue'];
+const GIRL_SHIRTS = ['pink', 'pink', 'purple', 'lavender', 'lavender', 'teal', 'red', 'orange', 'mustard', 'white', 'sky', 'maroon', 'green'];
+
+function pick(list, h) { return list[h % list.length]; }
 
 /**
- * Hair and clothing colors for a child, stable for the same seed (name + position) so they do
- * not change between visits. An explicit `hairColor` / `shirtColor` on the child wins.
- * @param {{name?:string,hairColor?:string,shirtColor?:string}} kid
- * @param {number} index position in the kids list
+ * The look for a child, seeded by NAME ONLY (never by position or age), so the same kid looks the
+ * same as a baby, a child and a teen. The name's usual gender ('girl'/'boy') picks the palettes and
+ * styles; names it does not know get a girl or boy look chosen by the name's hash. Explicit
+ * `hairColor` / `shirtColor` / `hairLength` / `pantsColor` / `top` on the kid win.
+ * @param {{name?:string,hairColor?:string,shirtColor?:string,hairLength?:string,pantsColor?:string,top?:string}} kid
+ * @param {number} index only used as the seed when the kid has no name
  */
+export function kidProfile(kid, index = 0) {
+  const name = String(kid?.name ?? '').trim().toLowerCase();
+  const h = hashString(name || `kid${index}`);
+  const known = nameGender(name);
+  const gender = known === 'neutral' ? ((h >>> 20) % 2 ? 'girl' : 'boy') : known;
+  const girl = gender === 'girl';
+  const hair = kid?.hairColor && HAIR_COLORS[kid.hairColor] ? kid.hairColor : pick(KID_HAIR_IDS, h);
+  const shirt = kid?.shirtColor && SHIRT_COLORS[kid.shirtColor] ? kid.shirtColor : pick(girl ? GIRL_SHIRTS : BOY_SHIRTS, h >>> 8);
+  const pantsList = girl ? GIRL_PANTS : BOY_PANTS;
+  const pants = KID_PANTS[kid?.pantsColor] ? kid.pantsColor : pick(pantsList, h >>> 4);
+  const r = (h >>> 12) % 100;
+  let hairStyle = girl ? (r < 45 ? 'long' : r < 80 ? 'tail' : 'short') : 'short';
+  if (kid?.hairLength === 'long' || kid?.hairLength === 'short') hairStyle = kid.hairLength;
+  const skirt = girl && (h >>> 16) % 100 < 40 && kid?.top !== 'hoodie' && kid?.top !== 'tee';
+  const top = kid?.top === 'hoodie' || kid?.top === 'tee' ? kid.top : ((h >>> 14) % 100 < 40 ? 'hoodie' : 'tee');
+  return { gender, hair, shirt, pants, hairStyle, skirt, top };
+}
+
+/** Hair and clothing colors (and gender) for a child, stable per name. */
 export function kidLook(kid, index = 0) {
-  const h = hashString(`${kid?.name ?? ''}|${index}`);
-  const hair = kid?.hairColor && HAIR_COLORS[kid.hairColor] ? kid.hairColor : KID_HAIR_IDS[h % KID_HAIR_IDS.length];
-  const shirt = kid?.shirtColor && SHIRT_COLORS[kid.shirtColor] ? kid.shirtColor : KID_SHIRT_IDS[(h >>> 8) % KID_SHIRT_IDS.length];
-  return { hair, shirt };
+  const { hair, shirt, gender } = kidProfile(kid, index);
+  return { hair, shirt, gender };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -219,7 +250,8 @@ export const KID_PANTS = {
   black: '#2c2c34',
   plum: '#5c3a5c',
 };
-const KID_PANTS_IDS = Object.keys(KID_PANTS);
+const BOY_PANTS = ['navy', 'denim', 'denim', 'khaki', 'olive', 'brown', 'gray', 'black'];
+const GIRL_PANTS = ['denim', 'navy', 'plum', 'gray', 'black', 'khaki', 'plum'];
 
 function mix(a, b, t) {
   const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
@@ -276,19 +308,27 @@ const CHILD_RUN = [
 ];
 const CHILD_IDLE = { bob: 0, ll: 0, rl: 0, arm: 0, st: 0, lift: 0 };
 
+/** Bare skin legs for a dress. */
+function childBareLeg(ctx, pal, x, y, lift, flip) {
+  put(ctx, ['Sss', 'sss', 'sss'], x, y, pal, flip);
+  put(ctx, ['Ffz', 'zfz'], x, y + 3 - lift, pal, flip);
+}
+
 function childLeg(ctx, pal, x, y, lift, flip) {
   put(ctx, ['Ppq', 'ppq', 'qpq'], x, y, pal, flip);
   put(ctx, ['Ffz', 'zfz'], x, y + 3 - lift, pal, flip);
 }
 
-function drawChildFront(ctx, pal, pose, back, hairStyle) {
+function drawChildFront(ctx, pal, pose, back, hairStyle, dress = false) {
   const by = pose.bob;
-  childLeg(ctx, pal, 5, 10 + by, pose.ll, false);
-  childLeg(ctx, pal, 8, 10 + by, pose.rl, false);
+  const leg = dress ? childBareLeg : childLeg;
+  leg(ctx, pal, 5, 10 + by, pose.ll, false);
+  leg(ctx, pal, 8, 10 + by, pose.rl, false);
   const shirt = back
     ? ['uCCCCC', 'cuUUUU', 'cuUUUU', 'ccuUUU', 'uuuuuU']
     : ['CCCCCC', 'CccccU', 'ccccuU', 'cccuuU', 'uuuuuU'];
   put(ctx, shirt, 5, 5 + by, pal);
+  if (dress) put(ctx, back ? ['uUUUUUUu', 'cuuuuuuU'] : ['cCcccccU', 'ccccccuU'], 4, 10 + by, pal);
   // Arms: sleeve two rows, then the hand; a swung arm drops one or two pixels.
   const dl = Math.max(0, pose.arm < 0 ? -pose.arm : 0);
   const dr = Math.max(0, pose.arm > 0 ? pose.arm : 0);
@@ -297,24 +337,31 @@ function drawChildFront(ctx, pal, pose, back, hairStyle) {
   if (hairStyle === 'long') {
     if (back) put(ctx, ['hddddh', 'hddddh', '.hddh.'], 5, 5 + by, pal);
     else for (let i = 0; i < 4; i++) { put(ctx, ['h'], 4, 2 + by + i, pal); put(ctx, ['d'], 11, 2 + by + i, pal); }
+  } else if (hairStyle === 'tail') {
+    // Pigtails: a tuft hanging at each side of the head.
+    put(ctx, ['h', 'h', 'd'], 3, 1 + by, pal);
+    put(ctx, ['h', 'd', 'd'], 12, 1 + by, pal);
   }
   put(ctx, back ? CH_BACK : CH_FRONT, 0, by, pal);
 }
 
-function drawChildSide(ctx, pal, pose, flip, run, hairStyle) {
+function drawChildSide(ctx, pal, pose, flip, run, hairStyle, dress = false) {
   const by = pose.bob;
   const lean = run ? 1 : 0;
   const near = pose.st;
   const far = -pose.st;
   // Far leg (behind), body, near leg, then the arm and head.
-  put(ctx, ['Ppq', 'ppq', 'qpq'], 6 + far, 10 + by, pal, flip);
+  const legRows = dress ? ['Sss', 'sss', 'sss'] : ['Ppq', 'ppq', 'qpq'];
+  put(ctx, legRows, 6 + far, 10 + by, pal, flip);
   put(ctx, ['Ffz', 'zfz'], 6 + far, 13 + by - (pose.rl ? 1 : 0), pal, flip);
   put(ctx, ['uCCCu', 'ucccu', 'ucccu', 'uccuu', 'uuuuu'], 5 + lean, 5 + by, pal, flip);
-  put(ctx, ['Ppq', 'ppq', 'qpq'], 6 + near, 10 + by, pal, flip);
+  if (dress) put(ctx, ['uccccu', 'ucccuu'], 4 + lean, 10 + by, pal, flip);
+  put(ctx, legRows, 6 + near, 10 + by, pal, flip);
   put(ctx, ['Ffz', 'zfz'], 6 + near, 13 + by - (pose.ll ? 1 : 0), pal, flip);
   const swing = Math.round(-pose.st * (run ? 0.8 : 0.5));
   put(ctx, ['C', 'c', 's'], 8 + swing + lean, 5 + by, pal, flip);
   if (hairStyle === 'long') put(ctx, ['d', 'd', 'h', 'h'], 5 + lean, 3 + by, pal, flip);
+  else if (hairStyle === 'tail') put(ctx, ['h', 'd', 'd'], 4 + lean, 2 + by, pal, flip);
   put(ctx, CH_SIDE, lean, by, pal, flip);
 }
 
@@ -329,10 +376,10 @@ export function makeChildSprite(look, facing = 'down', frame = -1, run = false) 
   const hair = normalizeHairColor(look.hair);
   const shirt = normalizeShirtColor(look.shirt);
   const pants = KID_PANTS[look.pants] ? look.pants : 'navy';
-  const style = look.hairStyle === 'long' ? 'long' : 'short';
+  const style = look.hairStyle === 'long' || look.hairStyle === 'tail' ? look.hairStyle : 'short';
   const still = frame < 0;
   const f = still ? 0 : ((frame % CHILD_FRAMES) + CHILD_FRAMES) % CHILD_FRAMES;
-  const key = `child-${hair}-${shirt}-${pants}-${style}-${facing}-${still ? 's' : `${run ? 'r' : 'w'}${f}`}`;
+  const key = `child-${hair}-${shirt}-${pants}-${style}${look.skirt ? '-dress' : ''}-${facing}-${still ? 's' : `${run ? 'r' : 'w'}${f}`}`;
   if (cache.has(key)) return cache.get(key);
   const cv = makeCanvas(CHILD_SPRITE_W, CHILD_SPRITE_H);
   const ctx = cv.getContext('2d');
@@ -340,21 +387,16 @@ export function makeChildSprite(look, facing = 'down', frame = -1, run = false) 
   const pose = still ? CHILD_IDLE : (run ? CHILD_RUN : CHILD_WALK)[f];
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.fillRect(4, 15, 8, 2);
-  if (facing === 'left' || facing === 'right') drawChildSide(ctx, pal, pose, facing === 'left', run && !still, style);
-  else drawChildFront(ctx, pal, pose, facing === 'up', style);
+  if (facing === 'left' || facing === 'right') drawChildSide(ctx, pal, pose, facing === 'left', run && !still, style, !!look.skirt);
+  else drawChildFront(ctx, pal, pose, facing === 'up', style, !!look.skirt);
   cache.set(key, cv);
   return cv;
 }
 
-/** Pants and hair style for a child, stable per child (same seed as kidLook). */
+/** Look for a child (4-12), the same name-seeded profile as the other stages. */
 export function childLook(kid, index = 0) {
-  const base = kidLook(kid, index);
-  const h = hashString(`${kid?.name ?? ''}|${index}|child`);
-  return {
-    ...base,
-    pants: KID_PANTS[kid?.pantsColor] ? kid.pantsColor : KID_PANTS_IDS[h % KID_PANTS_IDS.length],
-    hairStyle: kid?.hairLength === 'long' || kid?.hairLength === 'short' ? kid.hairLength : ((h >>> 9) % 2 ? 'long' : 'short'),
-  };
+  const { gender, hair, shirt, pants, hairStyle, skirt } = kidProfile(kid, index);
+  return { gender, hair, shirt, pants, hairStyle, skirt };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -399,6 +441,12 @@ const TEEN_TEE_BACK = ['uCCCCCCu', 'cUUUUUUu', 'cUUUUUUu', 'ccUUUUuu', 'ccuUUUuU
 const TEEN_HOODIE_FRONT = ['CuCCCCuC', 'CcuccucU', 'CccccccU', 'ccuuuuuU', 'cuccccuU', 'cuccccuU', 'uuuuuuuU'];
 const TEEN_HOODIE_BACK = ['uCCuuCCu', 'cUuUUuUu', 'cUUUUUUu', 'ccUUUUuu', 'ccuUUUuU', 'cccuuuuU', 'uuuuuuuU'];
 
+/** Bare skin legs for a skirt. */
+function teenBareLeg(ctx, pal, x, y, lift, flip) {
+  put(ctx, ['Sss', 'Sss', 'sss', 'sss', 'sss'], x, y, pal, flip);
+  put(ctx, ['Ffz', 'zfz'], x, y + 5 - lift, pal, flip);
+}
+
 function teenLeg(ctx, pal, x, y, lift, flip) {
   put(ctx, ['Ppq', 'Ppq', 'ppq', 'ppq', 'qpq'], x, y, pal, flip);
   put(ctx, ['Ffz', 'zfz'], x, y + 5 - lift, pal, flip);
@@ -407,10 +455,12 @@ function teenLeg(ctx, pal, x, y, lift, flip) {
 function drawTeenFront(ctx, pal, pose, back, look) {
   const by = pose.bob;
   const hoodie = look.top === 'hoodie';
-  teenLeg(ctx, pal, 5, 14 + by, pose.ll, false);
-  teenLeg(ctx, pal, 8, 14 + by, pose.rl, false);
+  const leg = look.skirt ? teenBareLeg : teenLeg;
+  leg(ctx, pal, 5, 14 + by, pose.ll, false);
+  leg(ctx, pal, 8, 14 + by, pose.rl, false);
   const torso = back ? (hoodie ? TEEN_HOODIE_BACK : TEEN_TEE_BACK) : (hoodie ? TEEN_HOODIE_FRONT : TEEN_TEE_FRONT);
   put(ctx, torso, 4, 7 + by, pal);
+  if (look.skirt) put(ctx, back ? ['pppppqqq', 'pppqqqqq', 'ppqqqqqq'] : ['PPppppqq', 'Pppppppq', 'pppppqqq'], 4, 14 + by, pal);
   const dl = pose.arm < 0 ? -pose.arm : 0;
   const dr = pose.arm > 0 ? pose.arm : 0;
   const sleeveL = hoodie ? ['u', 'c', 'c', 'u'] : (back ? ['u', 'c', 'c', 's'] : ['C', 'c', 'c', 's']);
@@ -422,6 +472,10 @@ function drawTeenFront(ctx, pal, pose, back, look) {
   if (look.hairStyle === 'long') {
     if (back) put(ctx, ['hddddddh', 'hddddddh', '.hddddh.', '..hddh..'], 4, 6 + by, pal);
     else for (let i = 0; i < 6; i++) { put(ctx, ['h'], 3, 2 + by + i, pal); put(ctx, ['d'], 12, 2 + by + i, pal); }
+  } else if (look.hairStyle === 'tail' && back) {
+    // Ponytail down the middle of the back.
+    put(ctx, ['hd', 'hd', 'dd', 'hd'], 7, 7 + by, pal);
+    put(ctx, ['kk'], 7, 6 + by, pal);
   }
   put(ctx, back ? TH_BACK : TH_FRONT, 0, by, pal);
 }
@@ -429,17 +483,20 @@ function drawTeenFront(ctx, pal, pose, back, look) {
 function drawTeenSide(ctx, pal, pose, flip, look) {
   const by = pose.bob;
   const hoodie = look.top === 'hoodie';
-  put(ctx, ['Ppq', 'Ppq', 'ppq', 'ppq', 'qpq'], 6 - pose.st, 14 + by, pal, flip);
+  const tl = look.skirt ? ['Sss', 'Sss', 'sss', 'sss', 'sss'] : ['Ppq', 'Ppq', 'ppq', 'ppq', 'qpq'];
+  put(ctx, tl, 6 - pose.st, 14 + by, pal, flip);
   put(ctx, ['Ffz', 'zfz'], 6 - pose.st, 19 + by - (pose.rl ? 1 : 0), pal, flip);
   put(ctx, hoodie
     ? ['uuCCu', 'uccCu', 'ucccu', 'ucuuu', 'uccuu', 'uccuu', 'uuuuu']
     : ['uCCCu', 'ucccu', 'ucccu', 'uccuu', 'ucuuu', 'uuuuu', 'uuuuu'], 5, 7 + by, pal, flip);
-  put(ctx, ['Ppq', 'Ppq', 'ppq', 'ppq', 'qpq'], 6 + pose.st, 14 + by, pal, flip);
+  put(ctx, tl, 6 + pose.st, 14 + by, pal, flip);
   put(ctx, ['Ffz', 'zfz'], 6 + pose.st, 19 + by - (pose.ll ? 1 : 0), pal, flip);
+  if (look.skirt) put(ctx, ['pppppq', 'Ppppqq', 'pppqqq'], 4, 14 + by, pal, flip);
   const swing = Math.round(-pose.st * 0.6);
   put(ctx, hoodie ? ['C', 'c', 'c', 'u'] : ['C', 'c', 'c', 's'], 8 + swing, 7 + by, pal, flip);
   put(ctx, ['s'], 8 + swing, 11 + by, pal, flip);
   if (look.hairStyle === 'long') put(ctx, ['d', 'd', 'h', 'h', 'd'], 5, 3 + by, pal, flip);
+  else if (look.hairStyle === 'tail') put(ctx, ['h', 'd', 'd', 'h'], 4, 2 + by, pal, flip);
   put(ctx, TH_SIDE, 0, by, pal, flip);
 }
 
@@ -453,17 +510,17 @@ export function makeTeenSprite(look, facing = 'down', frame = -1) {
   const hair = normalizeHairColor(look.hair);
   const shirt = normalizeShirtColor(look.shirt);
   const pants = KID_PANTS[look.pants] ? look.pants : 'navy';
-  const style = look.hairStyle === 'long' ? 'long' : 'short';
+  const style = look.hairStyle === 'long' || look.hairStyle === 'tail' ? look.hairStyle : 'short';
   const top = look.top === 'hoodie' ? 'hoodie' : 'tee';
   const still = frame < 0;
   const f = still ? 0 : ((frame % TEEN_FRAMES) + TEEN_FRAMES) % TEEN_FRAMES;
-  const key = `teen-${hair}-${shirt}-${pants}-${style}-${top}-${facing}-${still ? 's' : f}`;
+  const key = `teen-${hair}-${shirt}-${pants}-${style}${look.skirt ? '-skirt' : ''}-${top}-${facing}-${still ? 's' : f}`;
   if (cache.has(key)) return cache.get(key);
   const cv = makeCanvas(TEEN_SPRITE_W, TEEN_SPRITE_H);
   const ctx = cv.getContext('2d');
   const pal = childTones({ hair, shirt, pants });
   const pose = still ? CHILD_IDLE : CHILD_WALK[f];
-  const lk = { hairStyle: style, top };
+  const lk = { hairStyle: style, top, skirt: !!look.skirt };
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.fillRect(4, 21, 8, 2);
   if (facing === 'left' || facing === 'right') drawTeenSide(ctx, pal, pose, facing === 'left', lk);
@@ -472,14 +529,8 @@ export function makeTeenSprite(look, facing = 'down', frame = -1) {
   return cv;
 }
 
-/** Look for a teen, stable per child (pants, hair style and tee/hoodie from the name seed). */
+/** Look for a teen (13-18), the same name-seeded profile as the other stages. */
 export function teenLook(kid, index = 0) {
-  const base = kidLook(kid, index);
-  const h = hashString(`${kid?.name ?? ''}|${index}|teen`);
-  return {
-    ...base,
-    pants: KID_PANTS[kid?.pantsColor] ? kid.pantsColor : KID_PANTS_IDS[h % KID_PANTS_IDS.length],
-    hairStyle: kid?.hairLength === 'long' || kid?.hairLength === 'short' ? kid.hairLength : ((h >>> 9) % 2 ? 'long' : 'short'),
-    top: kid?.top === 'hoodie' || kid?.top === 'tee' ? kid.top : ((h >>> 13) % 2 ? 'hoodie' : 'tee'),
-  };
+  const { gender, hair, shirt, pants, hairStyle, skirt, top } = kidProfile(kid, index);
+  return { gender, hair, shirt, pants, hairStyle, skirt, top };
 }
