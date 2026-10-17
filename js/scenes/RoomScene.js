@@ -23,7 +23,7 @@ import {
 } from '../config.js';
 import { Player } from '../render/Player.js';
 import { SpouseNpc, hasSpouseNpc } from '../render/SpouseNpc.js';
-import { BabyNpc, ChildNpc, isBabyAge, isChildAge } from '../render/KidNpc.js';
+import { BabyNpc, ChildNpc, TeenNpc, isBabyAge, isChildAge, isTeenAge } from '../render/KidNpc.js';
 import { pickSpouseLine } from '../data/spouseLines.js';
 import { drawSpeechBubble } from '../render/SpeechBubble.js';
 
@@ -110,7 +110,7 @@ export class RoomScene {
     this.player = null;
     /** @type {SpouseNpc|null} wandering spouse (solid and talkable; not saved) */
     this.spouse = null;
-    /** @type {(BabyNpc|ChildNpc)[]} kids shown in the room: crawling babies (0-3) and children (4-12), visual only */
+    /** @type {(BabyNpc|ChildNpc|TeenNpc)[]} kids shown in the room: babies (0-3), children (4-12) and teens (13-18), visual only */
     this.kidNpcs = [];
     this._babyKey = '';
     this.hud = new Hud();
@@ -204,12 +204,13 @@ export class RoomScene {
 
   /** Crawling babies for the children aged 0-3 (rebuilt when the room or those children change). */
   syncKids(p) {
-    const kids = (p.kids || []).map((k, i) => ({ k, i })).filter(({ k }) => isBabyAge(k.age) || isChildAge(k.age));
-    const key = kids.map(({ k, i }) => `${i}:${k.name}:${isBabyAge(k.age) ? 'b' : 'c'}`).join('|');
+    const kids = (p.kids || []).map((k, i) => ({ k, i })).filter(({ k }) => isBabyAge(k.age) || isChildAge(k.age) || isTeenAge(k.age));
+    const kind = (age) => (isBabyAge(age) ? 'b' : isChildAge(age) ? 'c' : 't');
+    const key = kids.map(({ k, i }) => `${i}:${k.name}:${kind(k.age)}`).join('|');
     if (key === this._babyKey && this.kidNpcs.every((b) => b.world === this.world)) return;
     this._babyKey = key;
     const pl = this.player;
-    this.kidNpcs = kids.map(({ k, i }) => new (isBabyAge(k.age) ? BabyNpc : ChildNpc)(this.world, k, i, {
+    this.kidNpcs = kids.map(({ k, i }) => new ({ b: BabyNpc, c: ChildNpc, t: TeenNpc }[kind(k.age)])(this.world, k, i, {
       walkSpeed: pl ? pl.speed : 1.35,
       avoid: pl ? { x: pl.x - 2, y: pl.y - 12, w: 16, h: 24 } : null,
     }));

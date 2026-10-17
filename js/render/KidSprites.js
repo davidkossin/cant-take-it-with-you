@@ -356,3 +356,130 @@ export function childLook(kid, index = 0) {
     hairStyle: kid?.hairLength === 'long' || kid?.hairLength === 'short' ? kid.hairLength : ((h >>> 9) % 2 ? 'long' : 'short'),
   };
 }
+
+// ---------------------------------------------------------------------------------------------
+// Teen (age 13-18): 16×23, about 90% of an adult's height, head about a third of the way down
+// to the waist. Four directions, standing and four walk frames. Shirt is a tee or a hoodie.
+// ---------------------------------------------------------------------------------------------
+
+export const TEEN_SPRITE_W = 16;
+export const TEEN_SPRITE_H = 23;
+export const TEEN_FRAMES = 4;
+
+const TH_FRONT = [
+  '.....hhhhhh.....',
+  '....hhHhhddh....',
+  '....hdSSSSdh....',
+  '....sSeSSeSs....',
+  '....sSSSSSSs....',
+  '.....SSnnSS.....',
+  '......ssss......',
+];
+const TH_BACK = [
+  '.....hhhhhh.....',
+  '....hhHhhhhh....',
+  '....hddddddh....',
+  '...shddddddhs...',
+  '....hddddddh....',
+  '.....hddddh.....',
+  '......skks......',
+];
+const TH_SIDE = [
+  '......hhhhh.....',
+  '.....hhHhhdh....',
+  '.....hddSSSs....',
+  '.....hdsSeSs....',
+  '.....hsSSSnS....',
+  '......sSSSs.....',
+  '.......kks......',
+];
+
+const TEEN_TEE_FRONT = ['CCCCCCCC', 'CccccccU', 'CccccccU', 'ccccccuU', 'ccccccuU', 'cccccuuU', 'uuuuuuuU'];
+const TEEN_TEE_BACK = ['uCCCCCCu', 'cUUUUUUu', 'cUUUUUUu', 'ccUUUUuu', 'ccuUUUuU', 'cccuuuuU', 'uuuuuuuU'];
+const TEEN_HOODIE_FRONT = ['CuCCCCuC', 'CcuccucU', 'CccccccU', 'ccuuuuuU', 'cuccccuU', 'cuccccuU', 'uuuuuuuU'];
+const TEEN_HOODIE_BACK = ['uCCuuCCu', 'cUuUUuUu', 'cUUUUUUu', 'ccUUUUuu', 'ccuUUUuU', 'cccuuuuU', 'uuuuuuuU'];
+
+function teenLeg(ctx, pal, x, y, lift, flip) {
+  put(ctx, ['Ppq', 'Ppq', 'ppq', 'ppq', 'qpq'], x, y, pal, flip);
+  put(ctx, ['Ffz', 'zfz'], x, y + 5 - lift, pal, flip);
+}
+
+function drawTeenFront(ctx, pal, pose, back, look) {
+  const by = pose.bob;
+  const hoodie = look.top === 'hoodie';
+  teenLeg(ctx, pal, 5, 14 + by, pose.ll, false);
+  teenLeg(ctx, pal, 8, 14 + by, pose.rl, false);
+  const torso = back ? (hoodie ? TEEN_HOODIE_BACK : TEEN_TEE_BACK) : (hoodie ? TEEN_HOODIE_FRONT : TEEN_TEE_FRONT);
+  put(ctx, torso, 4, 7 + by, pal);
+  const dl = pose.arm < 0 ? -pose.arm : 0;
+  const dr = pose.arm > 0 ? pose.arm : 0;
+  const sleeveL = hoodie ? ['u', 'c', 'c', 'u'] : (back ? ['u', 'c', 'c', 's'] : ['C', 'c', 'c', 's']);
+  const sleeveR = hoodie ? ['u', 'c', 'u', 'u'] : ['c', 'u', 'u', 's'];
+  put(ctx, sleeveL, 3, 7 + by + dl, pal);
+  put(ctx, sleeveR, 12, 7 + by + dr, pal);
+  put(ctx, ['s'], 3, 11 + by + dl, pal);
+  put(ctx, ['s'], 12, 11 + by + dr, pal);
+  if (look.hairStyle === 'long') {
+    if (back) put(ctx, ['hddddddh', 'hddddddh', '.hddddh.', '..hddh..'], 4, 6 + by, pal);
+    else for (let i = 0; i < 6; i++) { put(ctx, ['h'], 3, 2 + by + i, pal); put(ctx, ['d'], 12, 2 + by + i, pal); }
+  }
+  put(ctx, back ? TH_BACK : TH_FRONT, 0, by, pal);
+}
+
+function drawTeenSide(ctx, pal, pose, flip, look) {
+  const by = pose.bob;
+  const hoodie = look.top === 'hoodie';
+  put(ctx, ['Ppq', 'Ppq', 'ppq', 'ppq', 'qpq'], 6 - pose.st, 14 + by, pal, flip);
+  put(ctx, ['Ffz', 'zfz'], 6 - pose.st, 19 + by - (pose.rl ? 1 : 0), pal, flip);
+  put(ctx, hoodie
+    ? ['uuCCu', 'uccCu', 'ucccu', 'ucuuu', 'uccuu', 'uccuu', 'uuuuu']
+    : ['uCCCu', 'ucccu', 'ucccu', 'uccuu', 'ucuuu', 'uuuuu', 'uuuuu'], 5, 7 + by, pal, flip);
+  put(ctx, ['Ppq', 'Ppq', 'ppq', 'ppq', 'qpq'], 6 + pose.st, 14 + by, pal, flip);
+  put(ctx, ['Ffz', 'zfz'], 6 + pose.st, 19 + by - (pose.ll ? 1 : 0), pal, flip);
+  const swing = Math.round(-pose.st * 0.6);
+  put(ctx, hoodie ? ['C', 'c', 'c', 'u'] : ['C', 'c', 'c', 's'], 8 + swing, 7 + by, pal, flip);
+  put(ctx, ['s'], 8 + swing, 11 + by, pal, flip);
+  if (look.hairStyle === 'long') put(ctx, ['d', 'd', 'h', 'h', 'd'], 5, 3 + by, pal, flip);
+  put(ctx, TH_SIDE, 0, by, pal, flip);
+}
+
+/**
+ * Teen sprite (age 13-18).
+ * @param {{hair:string,shirt:string,pants?:string,hairStyle?:'short'|'long',top?:'tee'|'hoodie'}} look
+ * @param {'down'|'up'|'left'|'right'} facing
+ * @param {number} frame 0..3, or < 0 for the standing pose
+ */
+export function makeTeenSprite(look, facing = 'down', frame = -1) {
+  const hair = normalizeHairColor(look.hair);
+  const shirt = normalizeShirtColor(look.shirt);
+  const pants = KID_PANTS[look.pants] ? look.pants : 'navy';
+  const style = look.hairStyle === 'long' ? 'long' : 'short';
+  const top = look.top === 'hoodie' ? 'hoodie' : 'tee';
+  const still = frame < 0;
+  const f = still ? 0 : ((frame % TEEN_FRAMES) + TEEN_FRAMES) % TEEN_FRAMES;
+  const key = `teen-${hair}-${shirt}-${pants}-${style}-${top}-${facing}-${still ? 's' : f}`;
+  if (cache.has(key)) return cache.get(key);
+  const cv = makeCanvas(TEEN_SPRITE_W, TEEN_SPRITE_H);
+  const ctx = cv.getContext('2d');
+  const pal = childTones({ hair, shirt, pants });
+  const pose = still ? CHILD_IDLE : CHILD_WALK[f];
+  const lk = { hairStyle: style, top };
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(4, 21, 8, 2);
+  if (facing === 'left' || facing === 'right') drawTeenSide(ctx, pal, pose, facing === 'left', lk);
+  else drawTeenFront(ctx, pal, pose, facing === 'up', lk);
+  cache.set(key, cv);
+  return cv;
+}
+
+/** Look for a teen, stable per child (pants, hair style and tee/hoodie from the name seed). */
+export function teenLook(kid, index = 0) {
+  const base = kidLook(kid, index);
+  const h = hashString(`${kid?.name ?? ''}|${index}|teen`);
+  return {
+    ...base,
+    pants: KID_PANTS[kid?.pantsColor] ? kid.pantsColor : KID_PANTS_IDS[h % KID_PANTS_IDS.length],
+    hairStyle: kid?.hairLength === 'long' || kid?.hairLength === 'short' ? kid.hairLength : ((h >>> 9) % 2 ? 'long' : 'short'),
+    top: kid?.top === 'hoodie' || kid?.top === 'tee' ? kid.top : ((h >>> 13) % 2 ? 'hoodie' : 'tee'),
+  };
+}

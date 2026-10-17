@@ -1,8 +1,9 @@
 /**
  * Children as wandering NPCs in the Decision Room (same movement area as the spouse).
  * The baby (age 0-3) crawls slowly in short bursts; the child (age 4-12) walks at a modest
- * pace with pauses and now and then breaks into a short run. Both stop when the player is in
- * the way and turn to face the player when close. Purely visual: nothing is
+ * pace with pauses and now and then breaks into a short run; the teen (age 13-18) walks at a
+ * normal pace with pauses and never runs. All stop when the player is in the way and turn to
+ * face the player when close. Purely visual: nothing is
  * saved, and movement uses Math.random, never the seeded simulation RNG.
  *
  * Positions are the sprite's top-left corner in world pixels.
@@ -10,8 +11,8 @@
 import { TILE } from '../config.js';
 import { npcBounds, NPC_FACE_RANGE } from './SpouseNpc.js';
 import {
-  makeBabySprite, makeChildSprite, kidLook, childLook,
-  BABY_SPRITE_W, BABY_SPRITE_H, BABY_FRAMES, CHILD_SPRITE_W, CHILD_SPRITE_H, CHILD_FRAMES,
+  makeBabySprite, makeChildSprite, makeTeenSprite, kidLook, childLook, teenLook,
+  BABY_SPRITE_W, BABY_SPRITE_H, BABY_FRAMES, CHILD_SPRITE_W, CHILD_SPRITE_H, CHILD_FRAMES, TEEN_SPRITE_H,
 } from './KidSprites.js';
 import { drawCrispSprite } from './Player.js';
 
@@ -202,6 +203,8 @@ export class ChildNpc {
     this.look = childLook(kid, index);
     this.walkSpeed = walkSpeed * CHILD_WALK_FACTOR;
     this.runSpeed = walkSpeed * CHILD_RUN_FACTOR;
+    this.runChance = CHILD_RUN_CHANCE;
+    this.spriteH = CHILD_SPRITE_H;
     this.random = random;
     this.bounds = npcBounds(world);
     this.facing = 'down';
@@ -251,7 +254,7 @@ export class ChildNpc {
       const j = Math.floor(this.random() * (i + 1));
       [order[i], order[j]] = [order[j], order[i]];
     }
-    const run = this.random() < CHILD_RUN_CHANCE;
+    const run = this.random() < this.runChance;
     const maxSteps = run ? 6 : 4;
     const minSteps = run ? 3 : 1;
     for (const dir of order) {
@@ -278,7 +281,7 @@ export class ChildNpc {
       this.animTimer = 0;
       if (player) {
         const dx = player.x + player.w / 2 - (this.x + CHILD_SPRITE_W / 2);
-        const dy = player.y + player.h / 2 - (this.y + CHILD_SPRITE_H / 2);
+        const dy = player.y + player.h / 2 - (this.y + this.spriteH / 2);
         if (Math.hypot(dx, dy) < NPC_FACE_RANGE) {
           this.facing = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'up' : 'down');
         }
@@ -317,6 +320,46 @@ export class ChildNpc {
 
   draw(ctx) {
     const spr = makeChildSprite(this.look, this.facing, this.moving ? this.frame : -1, this.running);
+    drawCrispSprite(ctx, spr, this.x, this.y);
+  }
+}
+
+/** Teens 13-18 get the teen sprite. */
+export const TEEN_MIN_AGE = 13;
+export const TEEN_MAX_AGE = 18;
+/** A teen walks at 85% of the player's walk speed and never runs. */
+export const TEEN_WALK_FACTOR = 0.85;
+
+/** True when a kid of this age is shown as a teen. */
+export function isTeenAge(age) {
+  const a = Number(age);
+  return Number.isFinite(a) && a >= TEEN_MIN_AGE && a <= TEEN_MAX_AGE;
+}
+
+export class TeenNpc extends ChildNpc {
+  constructor(world, kid, index, opts = {}) {
+    super(world, kid, index, opts);
+    this.look = teenLook(kid, index);
+    const walk = (opts.walkSpeed ?? 1.35) * TEEN_WALK_FACTOR;
+    this.walkSpeed = walk;
+    this.runSpeed = walk;
+    this.runChance = 0;
+    this.spriteH = TEEN_SPRITE_H;
+    this.pauseTicks = this._pause();
+  }
+
+  /** Shorter, occasional pauses: 0.5-4 s. */
+  _pause() {
+    const s = 0.5 + this.random() * 3.5;
+    return Math.max(1, Math.round(s * TICKS_PER_SECOND));
+  }
+
+  box(x = this.x, y = this.y) {
+    return { x: x + 4, y: y + 14, w: 8, h: 7 };
+  }
+
+  draw(ctx) {
+    const spr = makeTeenSprite(this.look, this.facing, this.moving ? this.frame : -1);
     drawCrispSprite(ctx, spr, this.x, this.y);
   }
 }
