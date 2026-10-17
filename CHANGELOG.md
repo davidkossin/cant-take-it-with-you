@@ -13,6 +13,9 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 ### Added
 - Spouse in the Decision Room is now solid (you can't walk through them, and they won't wander into you), turns to face you when you get close, and shows just their name at the bottom (no [Enter] prefix). Press interact on them and a speech bubble appears above them for about 5 seconds, then fades, with a random brief remark (greetings, encouragement, ideas like buying a car; the "have a kid" line only while you are under 45). Interacting again picks a different line.
 
+### Changed
+- Touch controls (joystick, Menu, Run, B, A) sit a little higher above the bottom screen edge (28px extra in portrait, 16px in landscape) so they are easier to reach, especially in fullscreen.
+
 ## [0.7.13] — 2026-10-17
 
 ### Changed

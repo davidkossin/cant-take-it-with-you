@@ -7,6 +7,7 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   /* Set by fitCanvas when the touch pad can sit below the playfield. */
   --pad-reserve: 0px;
+  --pad-lift: 28px;
 }
 
 * {
@@ -274,7 +275,8 @@ body.has-virtual-pad .hint {
   pointer-events: auto;
   touch-action: none;
   position: absolute;
-  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  /* Extra lift so the controls are not jammed against the bottom edge (esp. fullscreen). */
+  bottom: calc(12px + var(--pad-lift, 28px) + env(safe-area-inset-bottom, 0px));
   user-select: none;
   -webkit-user-select: none;
 }
@@ -697,3 +699,6 @@ body.mobile-entry-open .virtual-pad { visibility: hidden; }
 body.has-virtual-pad .hint {
   display: none;
 }
+
+/* Landscape: the pad overlays the game, so lift it less. */
+body.is-landscape .virtual-pad { --pad-lift: 16px; }
