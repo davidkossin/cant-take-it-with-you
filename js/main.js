@@ -2,7 +2,7 @@
  * You Can't Take It With You — bootstrap & scene loop.
  */
 
-import { FRAME_W, FRAME_H, KEYS, GAME_VERSION } from './config.js';
+import { FRAME_W, FRAME_H, KEYS, GAME_VERSION, frame as frameInfo, computeFrameSize, setFrameSize } from './config.js';
 import { installHdText } from './render/hdText.js';
 import { Dialog } from './render/Dialog.js';
 import { TitleScene } from './scenes/TitleScene.js';
@@ -39,7 +39,9 @@ function availableViewport() {
  */
 function touchPadReserve() {
   if (!document.body.classList.contains('has-virtual-pad')) return 0;
-  const { h: winH } = availableViewport();
+  const { w: winW0, h: winH } = availableViewport();
+  // Landscape: the pad overlays the game (the frame needs every pixel of the short side).
+  if (winW0 > winH) return 0;
   let top = winH;
   for (const el of document.querySelectorAll('.vp-stick, .vp-actions')) {
     const r = el.getBoundingClientRect();
@@ -57,6 +59,9 @@ function touchPadReserve() {
 }
 
 function fitCanvas() {
+  // While the mobile entry panel is open the on-screen keyboard shrinks the visual viewport;
+  // keep the current frame (so the dialog behind it does not re-layout) and refit on close.
+  if (document.body.classList.contains('mobile-entry-open')) return;
   const { w: viewW, h: viewH } = availableViewport();
   // Landscape (including a wide desktop window): drop extra chrome so the
   // 16:9 frame can grow. Portrait keeps the roomier padding and the hint.
@@ -94,24 +99,23 @@ function fitCanvas() {
   const availW = Math.max(32, Math.floor(winW - padLeft - padRight - borderX * 2));
   const availH = Math.max(32, Math.floor(winH - padTop - padBottom - hintH - borderY * 2));
 
-  // CSS box is the largest 16:9 rect that fits the window. The backing
-  // store stays exactly 1920×1080 so HUD, text, charts, and menus rasterize
-  // at that frame. The pixel world is integer-scaled inside it.
-  const aspect = FRAME_W / FRAME_H;
-  let cssW = availW;
-  let cssH = Math.floor(availW / aspect);
-  if (cssH > availH) {
-    cssH = availH;
-    cssW = Math.floor(availH * aspect);
-  }
-  cssW = Math.max(32, cssW);
-  cssH = Math.max(18, cssH);
+  // Pick the logical frame for this visible area (1920×1080 at 16:9, otherwise the frame
+  // takes the window's aspect so the canvas fills it), then size the CSS box to match.
+  // The backing store is the logical frame, so HUD, text, charts and menus rasterize at it;
+  // the pixel world is integer-scaled inside it.
+  const size = computeFrameSize(availW, availH);
+  const changed = setFrameSize(size.w, size.h);
+  document.body.classList.toggle('is-portrait', frameInfo.orientation === 'portrait');
+  const scale = Math.min(availW / FRAME_W, availH / FRAME_H);
+  const cssW = Math.max(32, Math.floor(FRAME_W * scale));
+  const cssH = Math.max(18, Math.floor(FRAME_H * scale));
   canvas.style.width = `${cssW}px`;
   canvas.style.height = `${cssH}px`;
   if (canvas.width !== FRAME_W) canvas.width = FRAME_W;
   if (canvas.height !== FRAME_H) canvas.height = FRAME_H;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.imageSmoothingEnabled = false;
+  if (changed) window.dispatchEvent(new CustomEvent('frame-resize', { detail: { width: FRAME_W, height: FRAME_H } }));
 }
 
 function scheduleFit() {
@@ -120,6 +124,8 @@ function scheduleFit() {
 }
 
 fitCanvas();
+new MutationObserver(() => { if (!document.body.classList.contains('mobile-entry-open')) fitCanvas(); })
+  .observe(document.body, { attributes: true, attributeFilter: ['class'] });
 window.addEventListener('resize', fitCanvas);
 window.addEventListener('orientationchange', scheduleFit);
 if (window.visualViewport) {
@@ -264,7 +270,7 @@ function directionHeld() {
 }
 
 
-/** Map CSS-pixel click → logical 1920×1080 canvas coords. */
+/** Map CSS-pixel click → logical frame coords (FRAME_W × FRAME_H). */
 function canvasLogicalXY(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return null;

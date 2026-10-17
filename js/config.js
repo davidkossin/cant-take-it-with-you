@@ -5,20 +5,76 @@ import { MARKET_DIFFICULTIES } from './finance/marketAssumptions.js';
 export const TILE = 16;
 export const SCALE = 3;
 /**
- * Internal frame is exactly 1920×1080. The 16px tile world is integer-scaled
- * (WORLD_SCALE) into the playfield under the HUD. HUD, text, charts, and menus
- * are drawn in frame pixels so they stay sharp.
+ * Logical frame (the canvas bitmap size). Landscape 16:9 is exactly 1920×1080; other aspect
+ * ratios change the width (landscape, height stays 1080) or the height (portrait, width stays
+ * 1080) so the canvas fills the visible area. These are live bindings: `setFrameSize()` below
+ * is the single place that changes them, and every module that imports them sees the new
+ * value. The 16px tile world is integer-scaled (WORLD_SCALE) into the playfield under the HUD;
+ * HUD, text, charts, and menus are drawn in frame pixels so they stay sharp.
  */
-export const FRAME_W = 1920;
-export const FRAME_H = 1080;
+export let FRAME_W = 1920;
+export let FRAME_H = 1080;
 export const WORLD_SCALE = 4;
-/** HUD band in frame pixels, above the playfield. 120 + 240×4 = 1080. */
+/** HUD band in frame pixels, above the playfield. */
 export const HUD_H = 120;
-/** World pixels. 480×240 tiles fill the 1920×960 playfield at WORLD_SCALE. */
-export const VIEW_W = FRAME_W / WORLD_SCALE;
-export const VIEW_H = (FRAME_H - HUD_H) / WORLD_SCALE;
-export const CANVAS_W = FRAME_W;
-export const CANVAS_H = FRAME_H;
+/** World pixels visible in the playfield (frame minus HUD, divided by WORLD_SCALE). */
+export let VIEW_W = FRAME_W / WORLD_SCALE;
+export let VIEW_H = (FRAME_H - HUD_H) / WORLD_SCALE;
+export let CANVAS_W = FRAME_W;
+export let CANVAS_H = FRAME_H;
+
+/** Shared, read-only-by-convention description of the current frame. */
+export const frame = { width: FRAME_W, height: FRAME_H, orientation: 'landscape', aspect: FRAME_W / FRAME_H };
+
+/** Base logical size on the short axis; portrait width / landscape height. */
+export const FRAME_BASE = 1080;
+export const FRAME_MAX_LONG = 2400;
+/** Landscape ratios within this band of 16:9 keep the exact 1920×1080 frame (small letterbox bars). */
+const WIDE_SNAP_MIN = 1.6;
+const WIDE_SNAP_MAX = 2.0;
+
+/**
+ * Logical short side for a visible area: 1080 normally, smaller on phone-sized screens so the
+ * text (drawn in frame pixels) stays readable. Targets at least ~0.5 CSS px per frame px.
+ */
+export function frameBase(availW, availH) {
+  const short = Math.min(availW, availH);
+  if (!(short > 0)) return FRAME_BASE;
+  return Math.max(FRAME_BASE_MIN, Math.min(FRAME_BASE, Math.round(short / 0.5)));
+}
+const FRAME_BASE_MIN = 720;
+
+/**
+ * Logical frame size for a visible area of availW × availH CSS pixels.
+ * - Normal screens (base 1080): 16:9 and close to it (1.6–2.0) are exactly 1920×1080;
+ *   other landscape ratios keep height 1080 and the width follows (1.2–2.4 × 1080).
+ * - Portrait: width = base, height follows the aspect, up to FRAME_MAX_LONG.
+ * - Phone-sized screens use a smaller base (see frameBase) with the same rules minus the 16:9 snap.
+ */
+export function computeFrameSize(availW, availH) {
+  const a = availW > 0 && availH > 0 ? availW / availH : 16 / 9;
+  const base = frameBase(availW, availH);
+  if (a < 1) {
+    const h = Math.round(Math.min(FRAME_MAX_LONG, Math.max(base, base / a)));
+    return { w: base, h, orientation: 'portrait' };
+  }
+  if (base === FRAME_BASE && a >= WIDE_SNAP_MIN && a <= WIDE_SNAP_MAX) return { w: 1920, h: 1080, orientation: 'landscape' };
+  const w = Math.round(base * Math.min(FRAME_MAX_LONG / FRAME_BASE, Math.max(1.2, a)));
+  return { w, h: base, orientation: 'landscape' };
+}
+
+/** Change the logical frame. Returns true when the size changed. */
+export function setFrameSize(w, h) {
+  w = Math.round(w); h = Math.round(h);
+  if (w === FRAME_W && h === FRAME_H) return false;
+  FRAME_W = w; FRAME_H = h;
+  VIEW_W = FRAME_W / WORLD_SCALE;
+  VIEW_H = (FRAME_H - HUD_H) / WORLD_SCALE;
+  CANVAS_W = FRAME_W; CANVAS_H = FRAME_H;
+  frame.width = w; frame.height = h; frame.aspect = w / h;
+  frame.orientation = h > w ? 'portrait' : 'landscape';
+  return true;
+}
 
 /** Bump on each published build so players can confirm cache. */
 export const GAME_VERSION = '0.7.12';

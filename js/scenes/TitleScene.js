@@ -157,7 +157,7 @@ export class TitleScene {
       'Starman — age 30, married, no kids.\n' +
         'Salary $80k · spend $48k/yr.\n' +
         'Home $380k ($270k @ 6.5%, 27yr).\n' +
-        'Cash $155k · savings $35k ·\nstocks $85k · 401(k) $62k.\n' +
+        'Cash $155k · savings $35k · stocks $85k · 401(k) $62k.\n' +
         'ZIP 85001 · Standard difficulty.\n' +
         'Glass wall ~15 years if unchanged.',
       [
@@ -489,20 +489,26 @@ export class TitleScene {
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.font = '64px "Press Start 2P", monospace';
+    // 14 glyphs per line at 1em each: shrink on narrow (portrait phone) frames so the logo fits.
+    const logoPx = Math.max(32, Math.min(64, Math.floor((FRAME_W - 48) / 14)));
+    ctx.font = `${logoPx}px "Press Start 2P", monospace`;
     ctx.fillStyle = PALETTE.gold;
-    ctx.fillText("YOU CAN'T TAKE", FRAME_W / 2, 340);
-    ctx.fillText('IT WITH YOU', FRAME_W / 2, 430);
+    // Positions are offsets from the frame's vertical center (identical to the old fixed
+    // 1080-high layout in landscape), so portrait frames keep the title near the middle.
+    // Portrait: sit the block in the upper part so the start menu (centered) does not cover it.
+    const cy = FRAME_H > FRAME_W ? Math.round(FRAME_H * 0.2) - 340 : FRAME_H / 2 - 540;
+    ctx.fillText("YOU CAN'T TAKE", FRAME_W / 2, cy + 340);
+    ctx.fillText('IT WITH YOU', FRAME_W / 2, cy + 340 + Math.round(logoPx * 1.4));
 
     ctx.font = '22px "Press Start 2P", monospace';
     ctx.fillStyle = PALETTE.uiText;
-    ctx.fillText('An existential interactive', FRAME_W / 2, 560);
-    ctx.fillText('financial planner', FRAME_W / 2, 600);
+    ctx.fillText('An existential interactive', FRAME_W / 2, cy + 560);
+    ctx.fillText('financial planner', FRAME_W / 2, cy + 600);
 
     if (Math.floor(this.blink / 30) % 2 === 0) {
       ctx.fillStyle = PALETTE.accent;
       ctx.font = '28px "Press Start 2P", monospace';
-      ctx.fillText('Press Enter', FRAME_W / 2, 720);
+      ctx.fillText('Press Enter', FRAME_W / 2, cy + 720);
     }
     ctx.textAlign = 'left';
   }

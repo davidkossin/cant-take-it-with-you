@@ -1,7 +1,7 @@
 /**
  * "Generating Your Future" — full-frame loading screen shown before the
  * Hallway of Time while its Monte Carlo journey runs in the shared worker.
- * Drawn in 1920×1080 frame pixels; every line is fitted to the title-safe
+ * Drawn in frame pixels (the current logical frame); every line is fitted to the title-safe
  * area so it stays legible when the frame is scaled down on phones.
  */
 import { FRAME_W, FRAME_H, PALETTE } from '../config.js';
@@ -13,10 +13,10 @@ export const SPLASH_FADE_MS = 300;
 const FONT = '"Press Start 2P", monospace';
 /** Title-safe area: 10% inset on each axis. */
 export const TITLE_SAFE = {
-  x: Math.round(FRAME_W * 0.1),
-  y: Math.round(FRAME_H * 0.1),
-  w: Math.round(FRAME_W * 0.8),
-  h: Math.round(FRAME_H * 0.8),
+  get x() { return Math.round(FRAME_W * 0.1); },
+  get y() { return Math.round(FRAME_H * 0.1); },
+  get w() { return Math.round(FRAME_W * 0.8); },
+  get h() { return Math.round(FRAME_H * 0.8); },
 };
 
 /**
@@ -39,7 +39,7 @@ const STARS = (() => {
   const out = [];
   let s = 20261007;
   const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
-  for (let i = 0; i < 90; i++) out.push({ x: rnd() * FRAME_W, y: rnd() * FRAME_H, r: rnd() < 0.15 ? 6 : 3, p: rnd() * 6.28 });
+  for (let i = 0; i < 90; i++) out.push({ x: rnd(), y: rnd(), r: rnd() < 0.15 ? 6 : 3, p: rnd() * 6.28 });
   return out;
 })();
 
@@ -64,7 +64,7 @@ export function drawFutureSplash(ctx, { progress = 0, paths = 1000, error = null
   for (const st of STARS) {
     const tw = 0.35 + 0.65 * Math.abs(Math.sin(time * 1.3 + st.p));
     ctx.fillStyle = `rgba(240,232,200,${(0.25 * tw).toFixed(3)})`;
-    ctx.fillRect(Math.round(st.x), Math.round(st.y), st.r, st.r);
+    ctx.fillRect(Math.round(st.x * FRAME_W), Math.round(st.y * FRAME_H), st.r, st.r);
   }
 
   // Framed panel inside the title-safe area (gold double rule like dialogs).

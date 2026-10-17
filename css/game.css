@@ -692,3 +692,8 @@ body.mobile-entry-open .virtual-pad { visibility: hidden; }
   .ai-profile-intro { font-size: 14px; }
   .ai-profile-text { font-size: 12px; }
 }
+
+/* Touch devices: the pad has its own labels, so drop the hint line and give the game the room. */
+body.has-virtual-pad .hint {
+  display: none;
+}

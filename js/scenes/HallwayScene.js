@@ -509,10 +509,10 @@ export class HallwayScene {
       this._drawSplash(ctx, 1);
       return;
     }
-    const rawCamX = Math.max(
-      0,
-      Math.min(this.world.width - VIEW_W, this.player.x + 6 - VIEW_W / 2)
-    );
+    // A frame wider than the hallway centers it; the sides are plain background.
+    const rawCamX = this.world.width <= VIEW_W
+      ? (this.world.width - VIEW_W) / 2
+      : Math.max(0, Math.min(this.world.width - VIEW_W, this.player.x + 6 - VIEW_W / 2));
     const rawCamY = Math.max(
       0,
       Math.min(this.world.height - VIEW_H, this.player.y - VIEW_H / 2)
@@ -707,7 +707,7 @@ export function southDoorMessage(game, year, age) {
  * @param {number} shortfallYear calendar year whose bills Cash could not pay
  */
 export function glassWallMessage(shortfallYear) {
-  // Paragraphs only — Dialog wraps each paragraph at 40 chars, so no mid-sentence breaks here.
+  // Paragraphs only: Dialog wraps each paragraph to the dialog width, so no manual line breaks here.
   return `Not enough cash to cover ${shortfallYear}'s expenses!\n` +
     `Enter a past year Decision Room to adjust finances.`;
 }

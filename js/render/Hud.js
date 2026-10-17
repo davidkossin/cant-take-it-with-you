@@ -37,24 +37,48 @@ export class Hud {
       { icon: 'portfolio', label: money(worth.portfolio), w: 460 },
       { icon: 'salary', label: money(householdSalary(portfolio)), w: 420 },
     ];
-    const total = clusters.reduce((s, c) => s + c.w, 0) + gap * (clusters.length - 1);
+    // Narrow (portrait) frames: shrink the boxes and the label font so all five still fit.
+    const full = clusters.reduce((s, c) => s + c.w, 0) + gap * (clusters.length - 1);
+    const room = FRAME_W - 24;
+    const fit = Math.min(1, room / full);
+    const narrow = fit < 1;
+    const gapPx = narrow ? 6 : gap;
+    if (narrow) {
+      // Age/year are short; give the money boxes more of the row.
+      const weights = [100, 150, 220, 250, 220];
+      const avail = room - gapPx * (clusters.length - 1);
+      const sum = weights.reduce((s, n) => s + n, 0);
+      clusters.forEach((c, i) => { c.w = Math.floor((weights[i] * avail) / sum); });
+    }
+    const total = clusters.reduce((s, c) => s + c.w, 0) + gapPx * (clusters.length - 1);
     let x = Math.floor((FRAME_W - total) / 2);
+    const labelPx = narrow ? 14 : 22;
+    const iconSize = narrow ? 24 : 32;
+    const textInset = narrow ? 34 : 54;
 
-    ctx.font = '22px "Press Start 2P", monospace';
+    ctx.font = `${labelPx}px "Press Start 2P", monospace`;
     ctx.textBaseline = 'top';
     for (const c of clusters) {
       const box = makeHudBox(c.w, boxH);
       ctx.drawImage(box, x, y);
       const icon = makeHudIcon(c.icon);
-      ctx.drawImage(icon, x + 14, y + 16, 32, 32);
+      ctx.drawImage(icon, x + (narrow ? 8 : 14), y + (narrow ? (boxH - iconSize) / 2 : 16), iconSize, iconSize);
       ctx.fillStyle = PALETTE.uiText;
       let text = c.label;
-      while (text.length > 1 && ctx.measureText(text).width > c.w - 64) {
+      if (narrow && text.startsWith('$') && ctx.measureText(text).width > c.w - textInset - 10) {
+        // Compact money (e.g. $1.23M, $447K) before resorting to cutting digits off.
+        const n = Number(text.replace(/[^0-9.-]/g, ''));
+        if (Number.isFinite(n)) {
+          const a = Math.abs(n), sign = n < 0 ? '-' : '';
+          text = a >= 1e6 ? `${sign}$${(a / 1e6).toFixed(2)}M` : a >= 1e3 ? `${sign}$${Math.round(a / 1e3)}K` : text;
+        }
+      }
+      while (text.length > 1 && ctx.measureText(text).width > c.w - textInset - 10) {
         text = text.slice(0, -1);
       }
-      ctx.fillText(text, x + 54, y + 22);
+      ctx.fillText(text, x + textInset, y + (narrow ? (boxH - labelPx) / 2 : 22));
       c.x = x;
-      x += c.w + gap;
+      x += c.w + gapPx;
     }
 
     const kids = portfolio.kids || [];
@@ -79,7 +103,7 @@ export class Hud {
   }
 }
 
-/** Backdrop bottom sits this far inside the 1920×1080 frame. */
+/** Backdrop bottom sits this far inside the frame's bottom edge. */
 export const ACTION_PROMPT_BOTTOM = 60;
 
 const PROMPT_FONT = 18;

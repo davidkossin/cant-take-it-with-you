@@ -94,21 +94,55 @@ function parseRuns(text) {
   return runs;
 }
 const richWords = run => run.text.split(/\s+/).filter(Boolean).map(w => ({ text: w, bold: run.bold, italic: run.italic }));
-/** Word-wrap rich text by character budget; returns lines of styled word tokens. */
-function wrapRich(text, maxChars) {
+/** Shared 2D context for measuring text (no canvas in plain Node tests: estimate instead). */
+let measureCtx = null;
+function fontReady(px) {
+  try { return !!document.fonts?.check(`${px}px ${FONT_FAMILY}`); } catch (_) { return false; }
+}
+/** Width of `text` at `px` in the dialog font. Press Start 2P is exactly 1em per glyph, which is
+ *  the estimate used until the font is loaded (and in Node), so wrapping never depends on a fallback font. */
+export function measureRich(text, px, style = {}) {
+  const str = String(text);
+  if (typeof document !== 'undefined' && fontReady(px)) {
+    try {
+      measureCtx ||= document.createElement('canvas').getContext('2d');
+      measureCtx.font = richFont(px, style);
+      return measureCtx.measureText(str).width;
+    } catch (_) { /* fall through to the estimate */ }
+  }
+  return str.length * px;
+}
+/**
+ * Word-wrap rich text to `maxWidth` pixels at `px`, measured with the dialog font; returns
+ * lines of styled word tokens. A single word wider than the line gets a line of its own.
+ */
+function wrapRich(text, maxWidth, px = 18) {
   const lines = [];
+  const space = measureRich(' ', px);
   for (const para of String(text).split('\n')) {
     const words = parseRuns(para).flatMap(richWords);
     if (!words.length) { lines.push([]); continue; }
-    let cur = [], curLen = 0;
+    let cur = [], curW = 0;
     for (const word of words) {
-      const next = cur.length ? curLen + 1 + word.text.length : word.text.length;
-      if (cur.length && next > maxChars) { lines.push(cur); cur = [word]; curLen = word.text.length; }
-      else { cur.push(word); curLen = next; }
+      const w = measureRich(word.text, px, word);
+      const next = cur.length ? curW + space + w : w;
+      if (cur.length && next > maxWidth) { lines.push(cur); cur = [word]; curW = w; }
+      else { cur.push(word); curW = next; }
     }
     if (cur.length) lines.push(cur);
   }
   return lines.length ? lines : [[]];
+}
+/** Dialog box width: up to 1640 on wide frames, nearly the full width on narrow ones. */
+function dialogBoxW() {
+  return Math.min(1640, FRAME_W - (FRAME_W < 1300 ? 40 : 200));
+}
+const DIALOG_PAD = 36;
+/** Longest comfortable body line, so ultra-wide boxes do not become unreadable. */
+const TEXT_MAX_W = 1400;
+/** Pixel width available to body text in the current frame. */
+function dialogTextW() {
+  return Math.min(TEXT_MAX_W, dialogBoxW() - DIALOG_PAD * 2);
 }
 /** Draw one unwrapped line of authored text, styled run by run (no line-breaking). */
 function drawRichText(ctx, text, x, y, px, color) {
@@ -141,7 +175,9 @@ export class Dialog {
     this.active = false;
     this.title = '';
     this.subtitle = '';
-    this.lines = [];
+    this._text = '';
+    this._wrapKey = null;
+    this._wrapCache = [[]];
     this.options = [];
     this.selected = 0;
     this.mode = 'text'; // text | menu | prompt | confirm | form | multi | palette | loading
@@ -190,7 +226,7 @@ export class Dialog {
       this.mode = 'text';
       this.title = title;
       this.subtitle = subtitle;
-      this.lines = wrapRich(text, 40);
+      this._setText(text);
       this.options = [{ label: 'OK', value: true }];
       this.selected = 0;
       this.resolve = resolve;
@@ -212,7 +248,7 @@ export class Dialog {
       this.mode = 'menu';
       this.title = title;
       this.subtitle = subtitle;
-      this.lines = wrapRich(text, 40);
+      this._setText(text);
       this.options = options;
       this.selected = Math.max(0, Math.min(options.length - 1, selected));
       this._escValue = escValue;
@@ -267,7 +303,7 @@ export class Dialog {
       this.title = title;
       this._moneyContext = captureMoneyContext(portfolio);
       this.subtitle = type === 'money' ? moneySubtitle(subtitle, this._moneyContext) : subtitle;
-      this.lines = wrapRich(text, 40);
+      this._setText(text);
       this.promptType = type;
       /** 'name' | 'age' | null: Accept refuses a blank (or, for ages, non-numeric) value */
       this.promptRequired = required;
@@ -308,7 +344,7 @@ export class Dialog {
       this.title = title;
       this._moneyContext = captureMoneyContext(portfolio);
       this.subtitle = (fields || []).some(f => f.type === 'money') ? moneySubtitle(subtitle, this._moneyContext) : subtitle;
-      this.lines = wrapRich(text || '', 40);
+      this._setText(text || '');
       this.onFieldChange = onFieldChange;
       this.fields = (fields || []).map((f) => {
         let v = String(f.defaultValue ?? '');
@@ -351,7 +387,7 @@ export class Dialog {
       this.mode = 'multi';
       this.title = title;
       this.subtitle = subtitle;
-      this.lines = wrapRich(text, 40);
+      this._setText(text);
       this.multiValues = new Set(selected || []);
       this.options = [
         ...(items || []).map((it) => ({
@@ -389,7 +425,7 @@ export class Dialog {
       this.mode = 'palette';
       this.title = title;
       this.subtitle = subtitle;
-      this.lines = wrapRich(text, 40);
+      this._setText(text);
       this.palGroups = (groups || []).map((g) => ({
         key: g.key,
         label: g.label,
@@ -500,7 +536,7 @@ export class Dialog {
       mode: this.mode,
       title: this.title,
       subtitle: this.subtitle,
-      lines: this.lines,
+      _text: this._text,
       options: this.options,
       selected: this.selected,
       promptValue: this.promptValue,
@@ -522,7 +558,7 @@ export class Dialog {
     this.loadingMessage = message;
     this.title = '';
     this.subtitle = '';
-    this.lines = wrapRich(message, 40);
+    this._setText(message);
     this.options = [];
     this.resolve = null;
     this.chrome = null;
@@ -563,18 +599,31 @@ export class Dialog {
     return this._fieldBoxRects[index] || null;
   }
 
+  /** Body text, word-wrapped to the dialog's current width (re-wrapped when the frame changes). */
+  get lines() {
+    const w = dialogTextW();
+    const key = `${w}|${fontReady(18) ? 1 : 0}|${this._text}`;
+    if (this._wrapKey !== key) { this._wrapCache = wrapRich(this._text, w, 18); this._wrapKey = key; }
+    return this._wrapCache;
+  }
+
+  _setText(text) {
+    this._text = String(text ?? '');
+    this._wrapKey = null;
+  }
+
   /** Per-option row metrics: base label height, plus wrapped subtext lines (if any). */
   _optionMetrics() {
     return this.options.map((opt) => {
-      const subLines = opt.subtext ? wrapRich(opt.subtext, 64) : [];
+      const subLines = opt.subtext ? wrapRich(opt.subtext, dialogBoxW() - DIALOG_PAD * 2 - 36, 14) : [];
       return { subLines, h: OPTION_BASE_H + (subLines.length ? 6 + subLines.length * OPTION_SUB_LINE_H : 0) };
     });
   }
 
   _layout() {
-    const boxW = Math.min(1640, FRAME_W - 200);
+    const boxW = dialogBoxW();
     const lineH = 28;
-    const pad = 36;
+    const pad = DIALOG_PAD;
     const textH = this.lines.length * lineH;
     const subH = this.subtitle ? 28 : 0;
     const promptH = this.mode === 'prompt' ? 64 : 0;
@@ -1270,7 +1319,7 @@ export class Dialog {
       ty += layout.titleH;
     }
     if (this.subtitle) {
-      drawRichText(ctx, this.subtitle.slice(0, 64), x + pad, ty, 14, '#a89878');
+      drawRichText(ctx, this.subtitle.slice(0, Math.floor((boxW - pad * 2) / 14)), x + pad, ty, 14, '#a89878');
       ty += layout.subH;
     }
 
@@ -1331,7 +1380,7 @@ export class Dialog {
         this._fieldBoxRects[i] = { x: x + pad, y: ty, w: boxW - pad * 2, h: 36 };
         ty += 40;
         if (f.subtitle) {
-          drawRichText(ctx, f.subtitle.slice(0, 70), x + pad, ty, 12, '#777');
+          drawRichText(ctx, f.subtitle.slice(0, Math.floor((boxW - pad * 2) / 12)), x + pad, ty, 12, '#777');
           ty += 18;
         }
       });

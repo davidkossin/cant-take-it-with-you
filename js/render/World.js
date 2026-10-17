@@ -219,7 +219,7 @@ export function buildHallway(doorCount, firstDoorYear, firstDoorAge) {
   const walkW = 6;
   const wallThick = 2;
   // Corridor stays narrow; void and walls fill the wide 16:9 view.
-  const cols = VIEW_W / TILE;
+  const cols = Math.max(VIEW_W, 480) / TILE; // never narrower than the 16:9 view; wider frames center it
   const voidPad = Math.floor((cols - walkW - wallThick * 2) / 2);
   const walkLeft = voidPad + wallThick; // first walkable col
   const walkRight = walkLeft + walkW - 1;
