@@ -10,6 +10,8 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-17
+
 ### Added
 - NPCs in the Decision Room (spouse, babies, children, teens) now collide with each other, not just with you: a wandering NPC will not walk into another NPC's feet box, waits a moment and picks a new direction when blocked, spawns clear of the others where possible, and can still walk apart if two end up overlapping.
 - Children's hair now follows their first name: a new name list (`js/data/firstNames.js`, a few hundred common US names, case-insensitive, first word only) picks the existing long-hair look for girl names and the short-hair look for boy names; names it does not know get one chosen by the name itself. It is seeded by name only, so it stays the same as a baby, a child and a teen, and a kid's own hair-length setting still wins. No new sprite styles.
