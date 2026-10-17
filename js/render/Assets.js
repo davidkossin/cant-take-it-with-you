@@ -98,7 +98,7 @@ function walkPose(f) {
  * `hair` is `{ hex, shade?, shirt?: { hex, shade? } }`; the shirt defaults to
  * the original blue (PALETTE.shirt).
  */
-function playerTones(hair, white = 0) {
+export function playerTones(hair, white = 0) {
   const t = Math.max(0, Math.min(1, white));
   const aged = mixHex(hair.hex, '#ffffff', t);
   const shade = (hair.shade ?? 0.55) * (1 - t) + 0.07 * t;

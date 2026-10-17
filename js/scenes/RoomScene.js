@@ -23,6 +23,7 @@ import {
 } from '../config.js';
 import { Player } from '../render/Player.js';
 import { SpouseNpc, hasSpouseNpc } from '../render/SpouseNpc.js';
+import { BabyNpc, ChildNpc, isBabyAge, isChildAge } from '../render/KidNpc.js';
 import { pickSpouseLine } from '../data/spouseLines.js';
 import { drawSpeechBubble } from '../render/SpeechBubble.js';
 
@@ -109,6 +110,9 @@ export class RoomScene {
     this.player = null;
     /** @type {SpouseNpc|null} wandering spouse (solid and talkable; not saved) */
     this.spouse = null;
+    /** @type {(BabyNpc|ChildNpc)[]} kids shown in the room: crawling babies (0-3) and children (4-12), visual only */
+    this.kidNpcs = [];
+    this._babyKey = '';
     this.hud = new Hud();
     this.prompt = null;
     this.bubble = null;
@@ -198,6 +202,19 @@ export class RoomScene {
     });
   }
 
+  /** Crawling babies for the children aged 0-3 (rebuilt when the room or those children change). */
+  syncKids(p) {
+    const kids = (p.kids || []).map((k, i) => ({ k, i })).filter(({ k }) => isBabyAge(k.age) || isChildAge(k.age));
+    const key = kids.map(({ k, i }) => `${i}:${k.name}:${isBabyAge(k.age) ? 'b' : 'c'}`).join('|');
+    if (key === this._babyKey && this.kidNpcs.every((b) => b.world === this.world)) return;
+    this._babyKey = key;
+    const pl = this.player;
+    this.kidNpcs = kids.map(({ k, i }) => new (isBabyAge(k.age) ? BabyNpc : ChildNpc)(this.world, k, i, {
+      walkSpeed: pl ? pl.speed : 1.35,
+      avoid: pl ? { x: pl.x - 2, y: pl.y - 12, w: 16, h: 24 } : null,
+    }));
+  }
+
   leave() {
     this.player?.unbindInput();
   }
@@ -225,18 +242,23 @@ export class RoomScene {
       this.player.inputEnabled = true;
     }
     this.syncSpouse(game.portfolio);
+    this.syncKids(game.portfolio);
     const sp = this.spouse;
+    const solids = [...(sp ? [sp] : []), ...this.kidNpcs];
     this.player.update((x, y, w, h) => {
       if (isSolid(this.world, x, y, w, h)) return true;
-      // The spouse is solid, unless the player is already overlapping (so they can walk out).
-      if (!sp) return false;
-      const sb = sp.box();
+      // The spouse and babies are solid, unless the player is already overlapping (so they can walk out).
       const pl = this.player;
-      const hit = (r) => r.x < sb.x + sb.w && r.x + r.w > sb.x && r.y < sb.y + sb.h && r.y + r.h > sb.y;
-      return hit({ x, y, w, h }) && !hit({ x: pl.x, y: pl.y, w: pl.w, h: pl.h });
+      const hit = (r, sb) => r.x < sb.x + sb.w && r.x + r.w > sb.x && r.y < sb.y + sb.h && r.y + r.h > sb.y;
+      return solids.some((n) => {
+        const sb = n.box();
+        return hit({ x, y, w, h }, sb) && !hit({ x: pl.x, y: pl.y, w: pl.w, h: pl.h }, sb);
+      });
     });
     // The spouse wanders on the same fixed tick, avoids the player and faces them when close.
-    sp?.update({ x: this.player.x, y: this.player.y, w: this.player.w, h: this.player.h });
+    const pbox = { x: this.player.x, y: this.player.y, w: this.player.w, h: this.player.h };
+    sp?.update(pbox);
+    for (const b of this.kidNpcs) b.update(pbox);
     if (this.bubble && ++this.bubble.age >= SPOUSE_BUBBLE_TICKS) this.bubble = null;
     this.prompt = this.facingInteractable(game);
     return null;
@@ -1826,6 +1848,7 @@ Cash received: ${money(preview.netCash)}`, {
     ctx.translate(-camX, -camY);
     // Spouse first, so the player is always drawn over them.
     if (this.spouse && hasSpouseNpc(game.portfolio)) this.spouse.draw(ctx, game.portfolio);
+    for (const b of [...this.kidNpcs].sort((a, c) => a.y - c.y)) b.draw(ctx);
     this.player.draw(
       ctx,
       game.portfolio.hairColor,
