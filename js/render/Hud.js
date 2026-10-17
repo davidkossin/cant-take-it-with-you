@@ -125,8 +125,9 @@ export function actionPromptBox() {
  * Bottom interact line. A text-sized translucent black chip, not a full-width bar.
  * Bottom of the chip is ACTION_PROMPT_BOTTOM px above the frame edge.
  */
-export function drawActionPrompt(ctx, label) {
-  const text = `[Enter] ${label}`;
+export function drawActionPrompt(ctx, label, { bare = false } = {}) {
+  // `bare` shows the label alone (the spouse's name); everything else gets the [Enter] prefix.
+  const text = bare ? String(label) : `[Enter] ${label}`;
   ctx.save();
   ctx.font = `${PROMPT_FONT}px "Press Start 2P", monospace`;
   ctx.textAlign = 'center';

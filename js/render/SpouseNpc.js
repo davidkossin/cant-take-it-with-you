@@ -1,7 +1,8 @@
 /**
  * The spouse as a wandering NPC in the Decision Room.
  *
- * Purely visual: no collision with the player, no interaction, nothing saved,
+ * Solid to the player (feet box), turns to face the player when close, and can be talked
+ * to (RoomScene shows a speech bubble); nothing is saved,
  * and the wander uses Math.random so it never touches the seeded simulation
  * RNG or any forecast. RoomScene calls update() on the fixed 60 Hz clock only
  * while no dialog is open and the pause menu is closed, so the spouse freezes
@@ -37,6 +38,9 @@ const DIRS = {
   left: { dx: -1, dy: 0 },
   right: { dx: 1, dy: 0 },
 };
+
+/** Within this distance (world px, center to center) an idle spouse turns to face the player. */
+export const NPC_FACE_RANGE = 40;
 
 /** True when the household has a current spouse to show. */
 export function hasSpouseNpc(p) {
@@ -94,6 +98,7 @@ export class SpouseNpc {
     this.animTimer = 0;
     this.target = null;
     this.decision = null;
+    this.talkTicks = 0;
     this.spawn(avoid);
     this.pauseTicks = this._randomPauseTicks();
   }
@@ -179,8 +184,44 @@ export class SpouseNpc {
     return false;
   }
 
-  /** One fixed 60 Hz tick (only while the room is not blocked). */
-  update() {
+  /** Solid feet box (the lower half of the sprite), like the player's 12×12 box. */
+  box(x = this.x, y = this.y) {
+    return { x: x + 2, y: y + 12, w: 12, h: 12 };
+  }
+
+  /** Turn toward a world point along the dominant axis. */
+  faceToward(px, py) {
+    const dx = px - (this.x + NPC_SPRITE_W / 2);
+    const dy = py - (this.y + NPC_SPRITE_H / 2 + 4);
+    this.facing = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'up' : 'down');
+  }
+
+  /** Stand still and face the player for `ticks` (while talking). */
+  talk(ticks, player) {
+    this.talkTicks = ticks;
+    this.moving = false;
+    this.target = null;
+    this.pauseTicks = Math.max(this.pauseTicks, ticks);
+    if (player) this.faceToward(player.x + player.w / 2, player.y + player.h / 2);
+  }
+
+  /**
+   * One fixed 60 Hz tick (only while the room is not blocked).
+   * @param {{x:number,y:number,w:number,h:number}|null} [player] player's feet box: the spouse
+   *   never walks into it, and an idle spouse near it turns to face it
+   */
+  update(player = null) {
+    if (this.talkTicks > 0) {
+      this.talkTicks--;
+      this.moving = false;
+      this.animTimer = 0;
+      if (player) this.faceToward(player.x + player.w / 2, player.y + player.h / 2);
+      return;
+    }
+    if (!this.moving && player) {
+      const d = Math.hypot(player.x + player.w / 2 - (this.x + NPC_SPRITE_W / 2), player.y + player.h / 2 - (this.y + NPC_SPRITE_H / 2 + 4));
+      if (d < NPC_FACE_RANGE) this.faceToward(player.x + player.w / 2, player.y + player.h / 2);
+    }
     if (!this.moving) {
       this.animTimer = 0;
       if (--this.pauseTicks > 0) return;
@@ -206,8 +247,18 @@ export class SpouseNpc {
       }
       return;
     }
-    this.x += Math.sign(ddx) * Math.min(this.speed, Math.abs(ddx));
-    this.y += Math.sign(ddy) * Math.min(this.speed, Math.abs(ddy));
+    const nx = this.x + Math.sign(ddx) * Math.min(this.speed, Math.abs(ddx));
+    const ny = this.y + Math.sign(ddy) * Math.min(this.speed, Math.abs(ddy));
+    if (player && overlaps(this.box(nx, ny), player) && !overlaps(this.box(), player)) {
+      // The player is in the way: stop here and wait a moment before wandering again.
+      this.moving = false;
+      this.target = null;
+      this.animTimer = 0;
+      this.pauseTicks = this._randomPauseTicks();
+      return;
+    }
+    this.x = nx;
+    this.y = ny;
     // Same eight-frame walk cycle as the player, slowed by the same factor as
     // the speed, so each frame covers the same distance (no foot sliding).
     this.animTimer += NPC_SPEED_FACTOR;

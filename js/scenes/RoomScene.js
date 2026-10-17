@@ -23,6 +23,12 @@ import {
 } from '../config.js';
 import { Player } from '../render/Player.js';
 import { SpouseNpc, hasSpouseNpc } from '../render/SpouseNpc.js';
+import { pickSpouseLine } from '../data/spouseLines.js';
+import { drawSpeechBubble } from '../render/SpeechBubble.js';
+
+/** The spouse's speech bubble stays about 5 s (60 ticks/s), fading over the last second. */
+const SPOUSE_BUBBLE_TICKS = 300;
+const SPOUSE_BUBBLE_FADE_TICKS = 60;
 import { Hud, drawActionPrompt } from '../render/Hud.js';
 import {
   buildDecisionRoom,
@@ -101,10 +107,11 @@ export class RoomScene {
   constructor() {
     this.world = null;
     this.player = null;
-    /** @type {SpouseNpc|null} wandering spouse (visual only, not saved) */
+    /** @type {SpouseNpc|null} wandering spouse (solid and talkable; not saved) */
     this.spouse = null;
     this.hud = new Hud();
     this.prompt = null;
+    this.bubble = null;
     this.locked = false;
     this.animTime = 0;
     /** @type {object|null} prior Hallway of Time timeline node, if any */
@@ -141,6 +148,7 @@ export class RoomScene {
     }
     this.player.bindInput();
     this.prompt = null;
+    this.bubble = null;
     this.locked = false;
     this.animTime = 0;
     // enterYearRoom / createGame already record the Decision Room begin node —
@@ -216,20 +224,49 @@ export class RoomScene {
       this.player.clearKeys();
       this.player.inputEnabled = true;
     }
-    this.player.update((x, y, w, h) => isSolid(this.world, x, y, w, h));
-    // The spouse wanders on the same fixed tick; no collision with the player.
     this.syncSpouse(game.portfolio);
-    this.spouse?.update();
-    this.prompt = findFacingInteractable(this.player, this.world);
+    const sp = this.spouse;
+    this.player.update((x, y, w, h) => {
+      if (isSolid(this.world, x, y, w, h)) return true;
+      // The spouse is solid, unless the player is already overlapping (so they can walk out).
+      if (!sp) return false;
+      const sb = sp.box();
+      const pl = this.player;
+      const hit = (r) => r.x < sb.x + sb.w && r.x + r.w > sb.x && r.y < sb.y + sb.h && r.y + r.h > sb.y;
+      return hit({ x, y, w, h }) && !hit({ x: pl.x, y: pl.y, w: pl.w, h: pl.h });
+    });
+    // The spouse wanders on the same fixed tick, avoids the player and faces them when close.
+    sp?.update({ x: this.player.x, y: this.player.y, w: this.player.w, h: this.player.h });
+    if (this.bubble && ++this.bubble.age >= SPOUSE_BUBBLE_TICKS) this.bubble = null;
+    this.prompt = this.facingInteractable(game);
     return null;
+  }
+
+  /** Nearest interactable the player is facing; the spouse counts, labelled with their name. */
+  facingInteractable(game) {
+    const sp = this.spouse;
+    if (!sp || !hasSpouseNpc(game.portfolio)) return findFacingInteractable(this.player, this.world);
+    const b = sp.box();
+    const spouseObj = { kind: 'spouse', label: personName(game.portfolio, 'spouse'), x: b.x - 2, y: sp.y + 6, w: b.w + 4, h: 18 };
+    return findFacingInteractable(this.player, { interactables: [...this.world.interactables, spouseObj] });
   }
 
   async tryInteract(game, dialog) {
     if (dialog.active || this.locked) return null;
     this.player?.clearKeys();
     this.setInputBlocked(true);
-    const obj = findFacingInteractable(this.player, this.world);
+    const obj = this.facingInteractable(game);
     if (!obj) return null;
+
+    if (obj.kind === 'spouse') {
+      const last = this.bubble?.text ?? this.lastSpouseLine ?? null;
+      const text = pickSpouseLine(game.portfolio.age, last);
+      this.lastSpouseLine = text;
+      this.bubble = { text, age: 0 };
+      this.spouse?.talk(SPOUSE_BUBBLE_TICKS, this.player);
+      this.setInputBlocked(false);
+      return null;
+    }
 
     if (obj.kind === 'door') {
       const ok = await dialog.confirm(
@@ -1801,8 +1838,20 @@ Cash received: ${money(preview.netCash)}`, {
 
     this.hud.draw(ctx, game.portfolio);
 
+    if (this.bubble && this.spouse && hasSpouseNpc(game.portfolio)) {
+      const left = this.bubble.age;
+      const alpha = Math.min(1, (SPOUSE_BUBBLE_TICKS - left) / SPOUSE_BUBBLE_FADE_TICKS);
+      const bob = Math.sin(left / 12) * 2;
+      const ax = (this.spouse.x + 8 - camX) * WORLD_SCALE;
+      const ay = HUD_H + (this.spouse.y - camY) * WORLD_SCALE - 6 + bob;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      drawSpeechBubble(ctx, this.bubble.text, ax, ay, { left: 12, right: FRAME_W - 12, top: HUD_H + 8 }, alpha);
+      ctx.restore();
+    }
+
     if (this.prompt && !this.locked) {
-      drawActionPrompt(ctx, this.prompt.label);
+      drawActionPrompt(ctx, this.prompt.label, { bare: this.prompt.kind === 'spouse' });
     }
   }
 }
