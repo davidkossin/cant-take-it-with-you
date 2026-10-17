@@ -73,10 +73,12 @@ export class TitleScene {
       const choice = await dialog.menu(
         'A life of choices.\nYou can\'t take it with you.',
         opts,
-        // Esc / B on the start menu has nowhere to go back to; without this it picked the last
-        // entry (Changelog). '__stay' matches no choice below, so the menu just stays up.
-        { title: "You Can't Take It With You", escValue: '__stay' }
+        // Esc / B closes the menu and returns to the splash (without this it would pick the
+        // last entry, Changelog).
+        { title: "You Can't Take It With You", escValue: '__splash' }
       );
+
+      if (choice === '__splash') return { action: 'splash' };
 
       if (choice === 'new') {
         const start = await this.chooseNewGame(dialog);

@@ -18,7 +18,7 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 - Landscape touch controls: dialogs and the pause menu keep side margins so the on-screen pad no longer covers their corners.
 
 ### Fixed
-- Start menu: pressing Esc or the on-screen B button no longer opens the Changelog (it was picking the menu's last entry). B/Esc now does nothing there; the Changelog is still the "Changelog" menu entry.
+- Title screen now has two states: the splash (logo only) and the start menu. On the splash, A / Enter, B / Esc, or a tap or click opens the menu; in the menu, B / Esc closes it and returns to the splash. Previously B in the menu picked its last entry and opened the Changelog on its own. The Changelog is still the "Changelog" menu entry.
 
 ## [0.7.12] — 2026-10-16
 

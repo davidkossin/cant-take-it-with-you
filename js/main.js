@@ -222,16 +222,29 @@ document.addEventListener('visibilitychange', suspendInput);
 
 function waitForConfirm() {
   return new Promise((resolve) => {
+    const done = () => {
+      window.removeEventListener('keydown', handler);
+      canvas.removeEventListener('pointerup', onTap);
+      resolve();
+    };
     const handler = (e) => {
       // A key already used by a dialog (e.g. the leave question) is not "press to start".
       if (e.defaultPrevented) return;
-      if (KEYS.confirm.includes(e.key)) {
-        window.removeEventListener('keydown', handler);
+      // Splash: A / Enter and B / Esc both open the start menu.
+      if (KEYS.confirm.includes(e.key) || KEYS.cancel.includes(e.key)) {
+        // A trusted Escape just exits OS fullscreen; it should not also open the menu.
+        if (isOsFullscreen() && e.isTrusted && e.key === 'Escape') return;
         e.preventDefault();
-        resolve();
+        done();
       }
     };
+    // A tap / click on the splash opens the menu too.
+    const onTap = (e) => {
+      if (e.target !== canvas || (e.button != null && e.button !== 0)) return;
+      done();
+    };
     window.addEventListener('keydown', handler);
+    canvas.addEventListener('pointerup', onTap);
   });
 }
 
@@ -241,8 +254,12 @@ async function startTitle() {
   setMoneyContext(null);
   booting = true;
   pause.hide();
-  await waitForConfirm();
-  const result = await title.runMenu(dialog);
+  // Two states: the splash (logo only) and the start menu; B in the menu returns to the splash.
+  let result;
+  do {
+    await waitForConfirm();
+    result = await title.runMenu(dialog);
+  } while (result.action === 'splash');
   if (result.action === 'load') {
     enterLoadedGame(result.game);
   } else if (result.action === 'new' && result.game) {
