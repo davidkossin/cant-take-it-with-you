@@ -10,6 +10,8 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.7.13] — 2026-10-17
+
 ### Changed
 - Phones and tablets: the game frame now follows the screen shape instead of always being a letterboxed 16:9 box. Portrait uses a tall frame (touch pad below it, hint line removed), wide landscape phones fill the width, and phone-sized screens use a smaller logical frame so text is larger. 16:9 desktop windows are unchanged (1920×1080).
 - Dialog text now wraps to the width of the dialog (measured with the game font) instead of a fixed character count, so menus, forms and prompts fit narrow phone screens. Long option labels, titles, form labels and very long words wrap instead of running off the edge; long option lists scroll with "more" markers; the color palette stacks on narrow screens. Wide-screen dialogs look the same as before. The HUD, title screen, hallway and loading screen adapt to narrow frames.

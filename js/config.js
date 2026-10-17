@@ -82,7 +82,7 @@ export function setFrameSize(w, h) {
 }
 
 /** Bump on each published build so players can confirm cache. */
-export const GAME_VERSION = '0.7.12';
+export const GAME_VERSION = '0.7.13';
 
 export const PALETTE = {
   bg: '#1a1420',
