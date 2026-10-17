@@ -1,0 +1,63 @@
+# Deploys GitHub Pages from two branches:
+#   main     -> site root        (https://dkossin.com/cant-take-it-with-you/)
+#   staging  -> /staging/ folder (https://dkossin.com/cant-take-it-with-you/staging/, unlisted, noindex)
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build site (main at root, staging under /staging/)
+        run: |
+          set -euo pipefail
+          git fetch origin main staging || git fetch origin main
+          mkdir -p _site
+          # Root = exactly what the legacy deploy served: the whole main tree minus git/CI metadata.
+          git archive origin/main | tar -x -C _site
+          rm -rf _site/.github
+          if git rev-parse --verify -q origin/staging >/dev/null; then
+            mkdir -p _site/staging
+            git archive origin/staging | tar -x -C _site/staging
+            rm -rf _site/staging/.github _site/staging/staging
+            SHA=$(git rev-parse --short origin/staging)
+            S=_site/staging
+            # Separate storage from the live game (same origin shares localStorage / IndexedDB).
+            sed -i "s/ycitwy_/ycitwy_stg_/g" $S/js/config.js $S/js/debug/Logger.js
+            sed -i "s/'cant-take-it-plans'/'cant-take-it-plans-staging'/" $S/js/state/SaveSystem.js
+            grep -q "ycitwy_stg_saves_v2" $S/js/config.js
+            grep -q "cant-take-it-plans-staging" $S/js/state/SaveSystem.js
+            # noindex + visible STAGING marker.
+            sed -i 's#<head>#<head>\n  <meta name="robots" content="noindex, nofollow" />#' $S/index.html
+            sed -i "s#</body>#<div style=\"position:fixed;top:0;right:0;z-index:99999;background:\#c0392b;color:\#fff;font:bold 11px monospace;padding:3px 8px;pointer-events:none\">STAGING ${SHA}</div></body>#" $S/index.html
+            grep -q "STAGING ${SHA}" $S/index.html
+            grep -q 'name="robots"' $S/index.html
+          fi
+          touch _site/.nojekyll
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
