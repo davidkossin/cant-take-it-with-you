@@ -510,9 +510,20 @@ export class HallwayScene {
       return;
     }
     // A frame wider than the hallway centers it; the sides are plain background.
-    const rawCamX = this.world.width <= VIEW_W
-      ? (this.world.width - VIEW_W) / 2
-      : Math.max(0, Math.min(this.world.width - VIEW_W, this.player.x + 6 - VIEW_W / 2));
+    // A frame narrower than the hallway keeps the camera still on the year labels + corridor
+    // (when they fit), so the labels stay put in the world and in view.
+    const spanL = ((this.world.walkLeft ?? 12) - 3) * TILE - 32;
+    const spanR = ((this.world.walkRight ?? 17) + 2) * TILE;
+    let rawCamX;
+    if (this.world.width <= VIEW_W) rawCamX = (this.world.width - VIEW_W) / 2;
+    else if (spanR - spanL <= VIEW_W) {
+      rawCamX = Math.max(0, Math.min(this.world.width - VIEW_W, (spanL + spanR) / 2 - VIEW_W / 2));
+    } else {
+      // Too narrow for both: follow the player, but never scroll the year labels out of view.
+      // (The player is always kept on screen, so on the very narrowest phones the labels may slide off at the right edge.)
+      const follow = this.player.x + 6 - VIEW_W / 2;
+      rawCamX = Math.max(0, Math.min(this.world.width - VIEW_W, Math.max(Math.min(follow, spanL), this.player.x + 24 - VIEW_W)));
+    }
     const rawCamY = Math.max(
       0,
       Math.min(this.world.height - VIEW_H, this.player.y - VIEW_H / 2)

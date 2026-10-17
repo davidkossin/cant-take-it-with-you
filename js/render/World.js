@@ -708,8 +708,8 @@ function drawYearTimeline(ctx, world, camX, camY) {
   }
   const doors = ordered.doors;
   if (!doors.length) return;
-  // Narrow (portrait) views scroll sideways: keep the year labels pinned inside the left edge of the view.
-  const axisX = Math.max(34, (world.walkLeft - 3) * TILE - camX);
+  // The axis and its year labels are fixed in the world (left of the corridor); they scroll with it.
+  const axisX = (world.walkLeft - 3) * TILE - camX;
   ctx.save();
   ctx.strokeStyle = 'rgba(255,255,255,0.55)';
   ctx.fillStyle = 'rgba(255,255,255,0.8)';
