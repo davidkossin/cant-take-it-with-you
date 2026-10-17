@@ -68,7 +68,10 @@ export function drawTimelineMap(ctx, model, rect, selection, addHit, activate) {
     ctx.beginPath(); ctx.moveTo(laneX(pi) + 12, yy); ctx.lineTo(laneX(ci) - 12, yy); ctx.stroke(); ctx.setLineDash([]);
   });
   ctx.textAlign = 'left'; ctx.font = font(12); ctx.fillStyle = '#888';
-  ctx.fillText(`Timelines ${laneStart + 1}–${laneStart + lanes.length} of ${model.timelines.length} · decision-year rows ${rowStart + 1}–${rowStart + visibleYears.length} of ${years.length}`, x + 12, y + h + 8);
+  let pageNote = `Timelines ${laneStart + 1}–${laneStart + lanes.length} of ${model.timelines.length} · decision-year rows ${rowStart + 1}–${rowStart + visibleYears.length} of ${years.length}`;
+  // Narrow frames: shorten the page note so it fits under the map.
+  if (ctx.measureText(pageNote).width > w - 12) pageNote = `Lines ${laneStart + 1}–${laneStart + lanes.length}/${model.timelines.length} · rows ${rowStart + 1}–${rowStart + visibleYears.length}/${years.length}`;
+  ctx.fillText(pageNote, x + 12, y + h + 8);
   ctx.restore();
 }
 

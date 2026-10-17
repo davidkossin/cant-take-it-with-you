@@ -46,7 +46,7 @@ test('dialog wrap is width based and re-wraps when the frame narrows', () => {
   const narrow = d.lines.length;
   setFrameSize(1920, 1080);
   assert.ok(narrow > wide);
-  // 1400px max line width at 18px = 77 glyphs; a 60-word paragraph (299 chars) needs at least 4 lines.
-  assert.ok(wide >= 4 && wide <= 5);
+  // Wide frames keep the 40-glyph (720px at 18px) body line: a 60-word paragraph (299 chars) is 8 lines.
+  assert.equal(wide, 8);
   assert.equal(measureRich('abcd', 18), 72);
 });

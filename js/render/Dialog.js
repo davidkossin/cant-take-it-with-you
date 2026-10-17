@@ -3,7 +3,7 @@
  * Supports keyboard and mouse/pointer hit-testing for options.
  */
 
-import { PALETTE, FRAME_W, FRAME_H, HUD_H, KEYS } from '../config.js';
+import { PALETTE, frame, FRAME_W, FRAME_H, HUD_H, KEYS } from '../config.js';
 import { makeDialogChrome, makePlayerSprite, hairTones, shirtTones } from './Assets.js';
 import { captureMoneyContext, toDisplayMoney, fromDisplayMoney, moneyUnitSubtitle } from '../finance/DollarBasis.js';
 export { formatMoneyDisplay } from '../finance/DollarBasis.js';
@@ -123,8 +123,17 @@ function wrapRich(text, maxWidth, px = 18) {
     const words = parseRuns(para).flatMap(richWords);
     if (!words.length) { lines.push([]); continue; }
     let cur = [], curW = 0;
-    for (const word of words) {
-      const w = measureRich(word.text, px, word);
+    for (let word of words) {
+      let w = measureRich(word.text, px, word);
+      // A single token wider than the line (URLs, long identifiers) is split so it never runs off the box.
+      while (w > maxWidth && word.text.length > 1) {
+        let n = word.text.length - 1;
+        while (n > 1 && measureRich(word.text.slice(0, n), px, word) > maxWidth) n--;
+        if (cur.length) { lines.push(cur); cur = []; curW = 0; }
+        lines.push([{ ...word, text: word.text.slice(0, n) }]);
+        word = { ...word, text: word.text.slice(n) };
+        w = measureRich(word.text, px, word);
+      }
       const next = cur.length ? curW + space + w : w;
       if (cur.length && next > maxWidth) { lines.push(cur); cur = [word]; curW = w; }
       else { cur.push(word); curW = next; }
@@ -135,11 +144,12 @@ function wrapRich(text, maxWidth, px = 18) {
 }
 /** Dialog box width: up to 1640 on wide frames, nearly the full width on narrow ones. */
 function dialogBoxW() {
-  return Math.min(1640, FRAME_W - (FRAME_W < 1300 ? 40 : 200));
+  // Also keep the landscape touch pad's reach (frame.safeX each side) clear.
+  return Math.min(1640, FRAME_W - (FRAME_W < 1300 ? 40 : 200), FRAME_W - frame.safeX * 2);
 }
 const DIALOG_PAD = 36;
 /** Longest comfortable body line, so ultra-wide boxes do not become unreadable. */
-const TEXT_MAX_W = 1400;
+const TEXT_MAX_W = 720; // 40 glyphs at 18px, the long-standing body line length
 /** Pixel width available to body text in the current frame. */
 function dialogTextW() {
   return Math.min(TEXT_MAX_W, dialogBoxW() - DIALOG_PAD * 2);
@@ -614,9 +624,13 @@ export class Dialog {
 
   /** Per-option row metrics: base label height, plus wrapped subtext lines (if any). */
   _optionMetrics() {
+    const inner = dialogBoxW() - DIALOG_PAD * 2 - 36;
     return this.options.map((opt) => {
-      const subLines = opt.subtext ? wrapRich(opt.subtext, dialogBoxW() - DIALOG_PAD * 2 - 36, 14) : [];
-      return { subLines, h: OPTION_BASE_H + (subLines.length ? 6 + subLines.length * OPTION_SUB_LINE_H : 0) };
+      const subLines = opt.subtext ? wrapRich(opt.subtext, Math.min(896, inner), 14) : [];
+      const label = this.mode === 'multi' && opt.toggle ? `[ ] ${opt.label}` : String(opt.label ?? '');
+      const labelLines = wrapRich(label, inner, 18);
+      const extra = (labelLines.length - 1) * 24;
+      return { subLines, labelLines, labelH: extra, h: OPTION_BASE_H + extra + (subLines.length ? 6 + subLines.length * OPTION_SUB_LINE_H : 0) };
     });
   }
 
@@ -625,20 +639,42 @@ export class Dialog {
     const lineH = 28;
     const pad = DIALOG_PAD;
     const textH = this.lines.length * lineH;
-    const subH = this.subtitle ? 28 : 0;
+    const innerW = boxW - pad * 2;
+    // Title / subtitle wrap to the box (one line = the old 44 / 28 px heights).
+    const titleLines = this.title ? wrapRich(this.title, innerW, 18) : [];
+    const subLinesT = this.subtitle ? wrapRich(this.subtitle, innerW, 14) : [];
+    const subH = subLinesT.length ? subLinesT.length * 20 + 8 : 0;
     const promptH = this.mode === 'prompt' ? 64 : 0;
-    const formH =
-      this.mode === 'form'
-        ? this.fields.reduce((s, f) => s + (f.subtitle ? 78 : 58), 0) + 8
-        : 0;
-    const optsH = this.mode === 'palette' ? this._palBlockH(OPTION_BASE_H) + 8
-      : this._optionMetrics().reduce((s, m) => s + m.h, 0) + 8;
-    const titleH = this.title ? 44 : 0;
+    const fieldLayouts = this.mode === 'form' ? this.fields.map((f) => {
+      const labelLines = wrapRich(f.label ?? '', innerW, 14);
+      const subLines = f.subtitle ? wrapRich(f.subtitle, innerW, 12) : [];
+      return { labelLines, subLines, h: (f.subtitle ? 78 : 58) + (labelLines.length - 1) * 18 + Math.max(0, subLines.length - 1) * 18 };
+    }) : [];
+    const formH = this.mode === 'form' ? fieldLayouts.reduce((s, f) => s + f.h, 0) + 8 : 0;
+    const metrics = this.mode === 'palette' ? [] : this._optionMetrics();
+    const fullOptsH = this.mode === 'palette' ? this._palBlockH(OPTION_BASE_H) + 8 : metrics.reduce((s, m) => s + m.h, 0) + 8;
+    const titleH = titleLines.length ? titleLines.length * 26 + 18 : 0;
     // Stay below the HUD band and above a bottom margin; grow within that space, not the full frame.
     const topMargin = 28, bottomMargin = 28;
     const availTop = HUD_H + topMargin;
     const availH = FRAME_H - availTop - bottomMargin;
-    const boxH = Math.min(availH, pad * 2 + titleH + subH + textH + promptH + formH + optsH + 16);
+    // Option lists taller than the space left (short landscape phones) scroll in a window.
+    const fixedH = pad * 2 + titleH + subH + textH + promptH + formH + 16;
+    let optsH = fullOptsH, optWindow = null;
+    if (this.mode !== 'palette' && fixedH + fullOptsH > availH && metrics.length > 1) {
+      const room = Math.max(OPTION_BASE_H * 2 + 8, availH - fixedH - 8 - 24);
+      let first = Math.max(0, Math.min(this.optScroll || 0, metrics.length - 1));
+      if (this.selected < first) first = this.selected;
+      let sum = 0, last = first;
+      const fit = (f) => { let t = 0, l = f - 1; for (let i = f; i < metrics.length && t + metrics[i].h <= room; i++) { t += metrics[i].h; l = i; } return l; };
+      last = fit(first);
+      while (this.selected > last && first < metrics.length - 1) { first++; last = fit(first); }
+      this.optScroll = first;
+      sum = 0; for (let i = first; i <= last; i++) sum += metrics[i].h;
+      optWindow = { first, last };
+      optsH = sum + 8 + 24;
+    }
+    const boxH = Math.min(availH, fixedH + optsH);
     const x = Math.floor((FRAME_W - boxW) / 2);
     const y = availTop + Math.floor((availH - boxH) / 2);
     let ty = y + pad;
@@ -647,7 +683,7 @@ export class Dialog {
     ty += textH;
     let promptY = ty;
     if (this.mode === 'prompt') promptY = ty + 4; // matches the box drawn in draw()
-    return { boxW, boxH, pad, lineH, optH: OPTION_BASE_H, titleH, textH, subH, x, y, promptY, formH };
+    return { boxW, boxH, pad, lineH, optH: OPTION_BASE_H, titleH, textH, subH, x, y, promptY, formH, titleLines, subLinesT, fieldLayouts, metrics, optWindow };
   }
 
   /** True when (lx, ly) is on a text entry box (prompt field or a form field). */
@@ -1313,13 +1349,12 @@ export class Dialog {
     ctx.font = '18px "Press Start 2P", monospace';
     ctx.textBaseline = 'top';
 
-    if (this.title) {
-      ctx.fillStyle = PALETTE.gold;
-      ctx.fillText(this.title, x + pad, ty);
+    if (layout.titleLines.length) {
+      layout.titleLines.forEach((line, i) => drawRichLine(ctx, line, x + pad, ty + i * 26, 18, PALETTE.gold));
       ty += layout.titleH;
     }
-    if (this.subtitle) {
-      drawRichText(ctx, this.subtitle.slice(0, Math.floor((boxW - pad * 2) / 14)), x + pad, ty, 14, '#a89878');
+    if (layout.subLinesT.length) {
+      layout.subLinesT.forEach((line, i) => drawRichLine(ctx, line, x + pad, ty + i * 20, 14, '#a89878'));
       ty += layout.subH;
     }
 
@@ -1331,7 +1366,13 @@ export class Dialog {
     if (this.mode === 'loading') {
       ctx.fillStyle = PALETTE.gold;
       const dots = '.'.repeat(Math.floor(performance.now() / 400) % 4);
-      ctx.fillText(this.loadingMessage + dots, x + pad, ty + 12);
+      // Wrapped like body text (the box was sized from it); the dots go on the last line.
+      const ls = wrapRich(this.loadingMessage + '....', dialogTextW(), 18);
+      ls.forEach((line, i) => {
+        const words = line.map((w) => w.text).join(' ');
+        const shown = i === ls.length - 1 ? words.replace(/\.{4}$/, dots) : words;
+        ctx.fillText(shown, x + pad, ty + 12 + i * 28);
+      });
       return;
     }
 
@@ -1358,10 +1399,11 @@ export class Dialog {
       ty += 4;
       this.fields.forEach((f, i) => {
         const focused = i === this.fieldIndex;
-        drawRichText(ctx, f.label, x + pad, ty, 14, focused ? PALETTE.gold : '#a89878');
+        const fl = layout.fieldLayouts[i];
+        fl.labelLines.forEach((line, k) => drawRichLine(ctx, line, x + pad, ty + k * 18, 14, focused ? PALETTE.gold : '#a89878'));
         const err = this.currentInlineError();
-        if (err && err.key === i) this._drawInlineError(ctx, err.msg, x + boxW - pad, ty);
-        ty += 20;
+        if (err && err.key === i) this._drawInlineError(ctx, err.msg, x + boxW - pad, ty + (fl.labelLines.length - 1) * 18);
+        ty += 20 + (fl.labelLines.length - 1) * 18;
         ctx.fillStyle = '#000';
         ctx.fillRect(x + pad, ty, boxW - pad * 2, 36);
         ctx.strokeStyle = focused ? PALETTE.gold : PALETTE.uiBorder;
@@ -1380,8 +1422,8 @@ export class Dialog {
         this._fieldBoxRects[i] = { x: x + pad, y: ty, w: boxW - pad * 2, h: 36 };
         ty += 40;
         if (f.subtitle) {
-          drawRichText(ctx, f.subtitle.slice(0, Math.floor((boxW - pad * 2) / 12)), x + pad, ty, 12, '#777');
-          ty += 18;
+          fl.subLines.forEach((line, k) => drawRichLine(ctx, line, x + pad, ty + k * 18, 12, '#777'));
+          ty += 18 * Math.max(1, fl.subLines.length);
         }
       });
       ty += 6;
@@ -1392,8 +1434,11 @@ export class Dialog {
       ty += 6;
     }
 
-    const metrics = this._optionMetrics();
+    const metrics = layout.metrics;
+    const win = layout.optWindow;
+    if (win && win.first > 0) { ctx.fillStyle = '#a89878'; ctx.font = richFont(14); ctx.fillText('▲ more', x + pad + 36, ty - 2); ty += 22; }
     this.options.forEach((opt, i) => {
+      if (win && (i < win.first || i > win.last)) return;
       const selected = i === this.selected;
       const checked =
         this.mode === 'multi' && opt.toggle && this.multiValues.has(opt.value);
@@ -1405,13 +1450,13 @@ export class Dialog {
         ctx.font = richFont(18);
         ctx.fillText('▶', x + pad, ty);
       }
-      let label = opt.label;
-      if (this.mode === 'multi' && opt.toggle) {
-        label = `${checked ? '[X]' : '[ ]'} ${opt.label}`;
+      let labelLines = metrics[i].labelLines;
+      if (this.mode === 'multi' && opt.toggle && checked) {
+        labelLines = wrapRich(`[X] ${opt.label}`, dialogBoxW() - DIALOG_PAD * 2 - 36, 18);
       }
-      drawRichText(ctx, label, x + pad + 36, ty, 18, selected ? PALETTE.gold : PALETTE.uiText);
+      labelLines.forEach((line, k) => drawRichLine(ctx, line, x + pad + 36, ty + k * 24, 18, selected ? PALETTE.gold : PALETTE.uiText));
       if (metrics[i].subLines.length) {
-        let sy = ty + 28;
+        let sy = ty + 28 + metrics[i].labelH;
         for (const subLine of metrics[i].subLines) {
           drawRichLine(ctx, subLine, x + pad + 36, sy, 14, selected ? '#c8b878' : '#888070');
           sy += OPTION_SUB_LINE_H;
@@ -1426,6 +1471,12 @@ export class Dialog {
       });
       ty += h;
     });
+    if (win && win.last < this.options.length - 1) { ctx.fillStyle = '#a89878'; ctx.font = richFont(14); ctx.fillText('▼ more', x + pad + 36, ty + 2); }
+  }
+
+  /** True when the grids and the preview column do not fit side by side. */
+  _palNarrow() {
+    return dialogBoxW() - DIALOG_PAD * 2 < 1150;
   }
 
   /** Height of the palette block below the text: left grids vs right column. */
@@ -1433,6 +1484,8 @@ export class Dialog {
     const rows = (g) => Math.ceil(g.colors.length / PALETTE_COLS);
     const gridH = (g) => rows(g) * PAL.swatchH + (rows(g) - 1) * PAL.gap;
     const left = this.palGroups.reduce((h, g, k) => h + (k ? PAL.sectionGap : 0) + PAL.labelH + gridH(g), 0);
+    // Narrow frames stack the preview + Continue/Back under the grids instead of beside them.
+    if (this._palNarrow()) return PAL.topGap + left + PAL.sectionGap + Math.max(PAL.previewH, optH * 2 + PAL.rowGap);
     const right = PAL.previewH + PAL.rowGap + optH * 2;
     return PAL.topGap + Math.max(left, right);
   }
@@ -1443,6 +1496,7 @@ export class Dialog {
     const top = blockTop + PAL.topGap;
     const { swatchW: sw, swatchH: sh, gap } = PAL;
     const cols = PALETTE_COLS;
+    const narrowPal = this._palNarrow();
     const done = this._palDone();
     const gx = x + pad;
     const shownId = { hair: null, shirt: null };
@@ -1512,9 +1566,15 @@ export class Dialog {
 
       // Name of the chosen (or hovered) color beside the grid.
       const gridW = cols * sw + (cols - 1) * gap;
-      ctx.font = '20px "Press Start 2P", monospace';
+      ctx.font = narrowPal ? '16px "Press Start 2P", monospace' : '20px "Press Start 2P", monospace';
       ctx.fillStyle = focused ? PALETTE.gold : '#c8b878';
-      ctx.fillText(shown ? shown.label : '', gx + gridW + PAL.nameGap, sy0 + Math.round((gridH - 20) / 2));
+      if (narrowPal) {
+        // Narrow: the color name sits at the right end of the group's label row.
+        const nm = shown ? shown.label : '';
+        ctx.fillText(nm, x + boxW - pad - ctx.measureText(nm).width, gy + 2);
+      } else {
+        ctx.fillText(shown ? shown.label : '', gx + gridW + PAL.nameGap, sy0 + Math.round((gridH - 20) / 2));
+      }
 
       gy = sy0 + gridH + PAL.sectionGap;
     });
@@ -1522,42 +1582,46 @@ export class Dialog {
     // Right column: live preview of the hair and shirt being shown.
     const cw = PAL.colW;
     const ph = PAL.previewH;
-    const px0 = x + boxW - pad - cw;
+    // Wide: preview column at the right. Narrow: preview under the grids, Continue/Back beside it.
+    const px0 = narrowPal ? gx : x + boxW - pad - cw;
+    const top2 = narrowPal ? gy : top;
     ctx.fillStyle = '#000';
-    ctx.fillRect(px0, top, cw, ph);
+    ctx.fillRect(px0, top2, cw, ph);
     ctx.fillStyle = '#1e1628';
-    ctx.fillRect(px0 + 3, top + 3, cw - 6, ph - 6);
+    ctx.fillRect(px0 + 3, top2 + 3, cw - 6, ph - 6);
     ctx.strokeStyle = PALETTE.uiBorderDark;
     ctx.lineWidth = 2;
-    ctx.strokeRect(px0 + 1, top + 1, cw - 2, ph - 2);
+    ctx.strokeRect(px0 + 1, top2 + 1, cw - 2, ph - 2);
     ctx.lineWidth = 1;
     const k = PAL.spriteScale;
     const spr = makePlayerSprite(shownId.hair || 'dark', this.paletteHairLength, 0, 'down', -1, shownId.shirt || 'blue');
     const prev = ctx.imageSmoothingEnabled;
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(spr, Math.round(px0 + (cw - 16 * k) / 2), top + 6, 16 * k, 24 * k);
+    ctx.drawImage(spr, Math.round(px0 + (cw - 16 * k) / 2), top2 + 6, 16 * k, 24 * k);
     ctx.imageSmoothingEnabled = prev;
     ctx.font = '12px "Press Start 2P", monospace';
     ctx.fillStyle = '#a89878';
     const cap = this.paletteHairLength === 'long' ? 'Long hair' : 'Short hair';
-    ctx.fillText(cap, Math.round(px0 + (cw - ctx.measureText(cap).width) / 2), top + ph - 24);
+    ctx.fillText(cap, Math.round(px0 + (cw - ctx.measureText(cap).width) / 2), top2 + ph - 24);
 
     // Continue and Back rows, styled like menu options.
-    let ry = top + ph + PAL.rowGap;
+    let ry = narrowPal ? top2 + 8 : top + ph + PAL.rowGap;
+    const rx = narrowPal ? px0 + cw + 24 : px0;
+    const rw = narrowPal ? boxW - pad * 2 - cw - 24 : cw;
     [done, done + 1].forEach((focus, n) => {
       const opt = this.options[n];
       const on = this.palFocus === focus;
       ctx.font = '18px "Press Start 2P", monospace';
       if (on) {
         ctx.fillStyle = 'rgba(200,160,80,0.25)';
-        ctx.fillRect(px0, ry - 1, cw, optH);
+        ctx.fillRect(rx, ry - 1, rw, optH);
         ctx.fillStyle = PALETTE.gold;
-        ctx.fillText('▶', px0 + 10, ry + 10);
+        ctx.fillText('▶', rx + 10, ry + 10);
       } else {
         ctx.fillStyle = PALETTE.uiText;
       }
-      ctx.fillText(opt ? opt.label : '', px0 + 44, ry + 10);
-      this._optionHitRects.push({ kind: 'row', focus, x: px0, y: ry - 1, w: cw, h: optH });
+      ctx.fillText(opt ? opt.label : '', rx + 44, ry + 10);
+      this._optionHitRects.push({ kind: 'row', focus, x: rx, y: ry - 1, w: rw, h: optH });
       ry += optH;
     });
   }

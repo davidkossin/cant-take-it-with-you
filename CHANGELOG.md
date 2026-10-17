@@ -12,7 +12,10 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ### Changed
 - Phones and tablets: the game frame now follows the screen shape instead of always being a letterboxed 16:9 box. Portrait uses a tall frame (touch pad below it, hint line removed), wide landscape phones fill the width, and phone-sized screens use a smaller logical frame so text is larger. 16:9 desktop windows are unchanged (1920×1080).
-- Dialog text now wraps to the width of the dialog (measured with the game font, up to about 77 characters per line) instead of a fixed 40 characters, so menus, forms and prompts use more of the screen. The HUD, title screen, hallway and loading screen adapt to narrow frames.
+- Dialog text now wraps to the width of the dialog (measured with the game font) instead of a fixed character count, so menus, forms and prompts fit narrow phone screens. Long option labels, titles, form labels and very long words wrap instead of running off the edge; long option lists scroll with "more" markers; the color palette stacks on narrow screens. Wide-screen dialogs look the same as before. The HUD, title screen, hallway and loading screen adapt to narrow frames.
+- Pause menu on portrait and short landscape phones: every page (main, Portfolio, Details, charts, settings, map) wraps its text to the screen, keeps the hint line off the title, and shows a balanced two-column summary in landscape. The desktop layout is unchanged.
+- Hallway timeline year labels stay on screen in portrait; the life-event banner wraps; the family line in the HUD and the Ending ledger subtitle no longer run past the screen edge.
+- Landscape touch controls: dialogs and the pause menu keep side margins so the on-screen pad no longer covers their corners.
 
 ## [0.7.12] — 2026-10-16
 

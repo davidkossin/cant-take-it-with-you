@@ -547,13 +547,21 @@ export class HallwayScene {
       ctx.textBaseline = 'top';
       const promptTop = actionPromptBox().top;
       const by = this.prompt ? promptTop - 36 : HUD_H + VIEW_H * WORLD_SCALE - 40;
-      let msg = this.eventBanner;
-      while (msg.length > 1 && ctx.measureText(msg).width > FRAME_W - 80) msg = msg.slice(0, -1);
-      const tw = ctx.measureText(msg).width;
+      // Wrap to the frame (a single line on wide frames, as before); extra lines grow upward.
+      const words = String(this.eventBanner).split(' ');
+      const lines = [];
+      let cur = '';
+      for (const w of words) {
+        const next = cur ? `${cur} ${w}` : w;
+        if (cur && ctx.measureText(next).width > FRAME_W - 80) { lines.push(cur); cur = w; } else cur = next;
+      }
+      lines.push(cur);
+      const tw = Math.min(FRAME_W - 48, Math.max(...lines.map((l) => ctx.measureText(l).width)));
+      const top = by - (lines.length - 1) * 26;
       ctx.fillStyle = 'rgba(10,8,24,0.72)';
-      ctx.fillRect(FRAME_W / 2 - tw / 2 - 16, by - 6, tw + 32, 28);
+      ctx.fillRect(FRAME_W / 2 - tw / 2 - 16, top - 6, tw + 32, 28 + (lines.length - 1) * 26);
       ctx.fillStyle = '#e8d8ff';
-      ctx.fillText(msg, FRAME_W / 2, by);
+      lines.forEach((l, i) => ctx.fillText(l, FRAME_W / 2, top + i * 26));
       ctx.textAlign = 'left';
     }
 

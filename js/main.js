@@ -2,7 +2,7 @@
  * You Can't Take It With You — bootstrap & scene loop.
  */
 
-import { FRAME_W, FRAME_H, KEYS, GAME_VERSION, frame as frameInfo, computeFrameSize, setFrameSize } from './config.js';
+import { FRAME_W, FRAME_H, KEYS, GAME_VERSION, frame as frameInfo, computeFrameSize, setFrameSize, setFrameSafeX } from './config.js';
 import { installHdText } from './render/hdText.js';
 import { Dialog } from './render/Dialog.js';
 import { TitleScene } from './scenes/TitleScene.js';
@@ -115,7 +115,32 @@ function fitCanvas() {
   if (canvas.height !== FRAME_H) canvas.height = FRAME_H;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.imageSmoothingEnabled = false;
+  updateSafeMargins();
   if (changed) window.dispatchEvent(new CustomEvent('frame-resize', { detail: { width: FRAME_W, height: FRAME_H } }));
+}
+
+/**
+ * Landscape touch pad overlays the game: measure how far its stick/d-pad (left) and action buttons
+ * (right) reach into the frame so dialogs and menus can keep that much clear on both sides.
+ */
+function updateSafeMargins() {
+  let safe = 0;
+  if (document.body.classList.contains('has-virtual-pad') && FRAME_W > FRAME_H) {
+    const c = canvas.getBoundingClientRect();
+    if (c.width > 0) {
+      const k = FRAME_W / c.width;
+      for (const el of document.querySelectorAll('.vp-stick, .vp-dpad')) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.right > c.left) safe = Math.max(safe, (Math.min(r.right, c.right) - c.left) * k + 16);
+      }
+      for (const el of document.querySelectorAll('.vp-actions')) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.left < c.right) safe = Math.max(safe, (c.right - Math.max(r.left, c.left)) * k + 16);
+      }
+    }
+    safe = Math.min(safe, FRAME_W * 0.26);
+  }
+  setFrameSafeX(safe);
 }
 
 function scheduleFit() {
@@ -139,6 +164,8 @@ if (window.screen?.orientation) {
 const virtualPadEl = document.getElementById('virtual-pad');
 const virtualPad = new VirtualPad(virtualPadEl);
 virtualPad.mount();
+// The stick / d-pad swap changes how far the pad reaches into the frame.
+new MutationObserver(updateSafeMargins).observe(virtualPadEl, { attributes: true, attributeFilter: ['class'], subtree: true });
 // Re-fit after pad / hint visibility changes layout
 requestAnimationFrame(fitCanvas);
 if (document.fonts?.ready) {

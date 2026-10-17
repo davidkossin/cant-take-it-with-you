@@ -288,9 +288,13 @@ export function drawForecastChart(ctx, forecast, opts={}) {
   ctx.fillStyle='#aaa';ctx.textBaseline='top';
   ctx.fillText(String(series[0].year),left,bottom+8);
   ctx.fillText(String(series.at(-1).year),right-70,bottom+8);
-  ctx.fillStyle='#d4a84b';ctx.fillText('Median',left+90,y+6);
-  ctx.fillStyle='#80e0ef';ctx.fillText('Hallway path',left+220,y+6);
-  ctx.fillStyle='#80c0e0';ctx.fillText('Shading: 25–75% and 10–90%',left+440,y+6);
+  const shortLegend=w<1000;
+  ctx.fillStyle='#d4a84b';ctx.fillText('Median',left+(shortLegend?0:90),y+6);
+  ctx.fillStyle='#80e0ef';ctx.fillText('Hallway path',left+(shortLegend?100:220),y+6);
+  if (shortLegend) {
+    ctx.font='12px "Press Start 2P", monospace';
+    ctx.fillStyle='#80c0e0';ctx.fillText('Bands 25–75 / 10–90%',left+(shortLegend?290:440)-0,y+8);
+  } else {ctx.fillStyle='#80c0e0';ctx.fillText('Shading: 25–75% and 10–90%',left+440,y+6);}
   ctx.restore();
 }
 
@@ -350,11 +354,22 @@ export function drawEventTicks(ctx,rows,pxYear,top,opts={}) {
 /** Floating label near a cursor position, replacing a fixed text row below the chart. */
 export function drawCursorLabel(ctx,text,x,top,opts={}) {
   ctx.save();ctx.font='14px "Press Start 2P", monospace';ctx.textBaseline='top';
-  const padX=6,padY=4,lineH=14,w=ctx.measureText(text).width+padX*2,boxH=lineH+padY*2;
-  const lx=opts.alignRight?x-w-6:x+6;
+  const padX=6,padY=4,lineH=14;
+  // Narrow frames: break at ' · ' into several lines so the label never runs off the screen.
+  const maxW=Math.max(120,(opts.maxW||FRAME_W-24)-padX*2);
+  const lines=[];let cur='';
+  for (const part of String(text).split(' · ')) {
+    const next=cur?cur+' · '+part:part;
+    if (cur&&ctx.measureText(next).width>maxW) {lines.push(cur);cur=part;} else cur=next;
+  }
+  lines.push(cur);
+  const w=Math.min(maxW,Math.max(...lines.map(l=>ctx.measureText(l).width)))+padX*2,boxH=lines.length*(lineH+2)-2+padY*2;
+  let lx=opts.alignRight?x-w-6:x+6;
+  lx=Math.max(8,Math.min(FRAME_W-8-w,lx));
   ctx.fillStyle='rgba(0,0,0,.75)';ctx.fillRect(lx,top,w,boxH);
   ctx.strokeStyle=opts.color || '#ccc';hairline(ctx,1);ctx.strokeRect(lx+.5,top+.5,w-1,boxH-1);
-  ctx.fillStyle=opts.color || '#eee';ctx.fillText(text,lx+padX,top+padY);
+  ctx.fillStyle=opts.color || '#eee';
+  lines.forEach((l,i)=>ctx.fillText(l,lx+padX,top+padY+i*(lineH+2)));
   ctx.restore();
 }
 

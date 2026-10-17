@@ -98,7 +98,12 @@ export class Hud {
         .slice(0, 6)
         .map((k) => `${(k.name || '?').slice(0, 10)} ${k.age}`)
         .join('  ·  ');
-      ctx.fillText(names, familyX, familyY + (portfolio.married ? 2 : 0));
+      // Narrow frames: never run past the right edge.
+      let shownNames = names;
+      const room = FRAME_W - familyX - 12;
+      while (shownNames.length > 1 && ctx.measureText(shownNames).width > room) shownNames = shownNames.slice(0, -1);
+      if (shownNames !== names) shownNames = `${shownNames.slice(0, -1)}…`;
+      ctx.fillText(shownNames, familyX, familyY + (portfolio.married ? 2 : 0));
     }
   }
 }

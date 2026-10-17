@@ -221,15 +221,25 @@ export class EndingScene {
     const adjusted = (this.game?.settings?.inflationAdjusted ?? portfolio.inflationAdjusted) !== false;
     const units = moneyUnitSubtitle({ ...portfolio, inflationAdjusted: adjusted });
     const legacy = adjusted && (this.game?.worthHistory || []).some(r => r.legacy || !(r.priceIndex > 0));
-    ctx.fillText(units + (legacy ? ' · Earlier rows lack verified inflation data' : ''), FRAME_W / 2, 74);
+    // Wrap the units note to the frame (one line on wide frames); the chart starts below it.
+    const unitsText = units + (legacy ? ' · Earlier rows lack verified inflation data' : '');
+    const unitLines = [];
+    let curLine = '';
+    for (const w of unitsText.split(' ')) {
+      const next = curLine ? `${curLine} ${w}` : w;
+      if (curLine && ctx.measureText(next).width > maxW) { unitLines.push(curLine); curLine = w; } else curLine = next;
+    }
+    unitLines.push(curLine);
+    unitLines.forEach((l, i) => ctx.fillText(l, FRAME_W / 2, 74 + i * 20));
+    const chartTop = Math.max(100, 74 + unitLines.length * 20 + 14);
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     drawWorthChart(ctx, ledgerHistory(this.game), {
       x: 80,
-      y: 100,
+      y: chartTop,
       w: FRAME_W - 160,
-      h: FRAME_H - 200,
+      h: FRAME_H - chartTop - 100,
       series: ['netWorth', 'bank', 'salary'],
     });
 

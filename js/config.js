@@ -24,7 +24,12 @@ export let CANVAS_W = FRAME_W;
 export let CANVAS_H = FRAME_H;
 
 /** Shared, read-only-by-convention description of the current frame. */
-export const frame = { width: FRAME_W, height: FRAME_H, orientation: 'landscape', aspect: FRAME_W / FRAME_H };
+export const frame = { width: FRAME_W, height: FRAME_H, orientation: 'landscape', aspect: FRAME_W / FRAME_H, safeX: 0 };
+
+/** Horizontal frame px kept clear on both sides for overlays (touch pad in landscape). Set by main.js. */
+export function setFrameSafeX(px) {
+  frame.safeX = Math.max(0, Math.round(px) || 0);
+}
 
 /** Base logical size on the short axis; portrait width / landscape height. */
 export const FRAME_BASE = 1080;
