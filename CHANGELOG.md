@@ -17,6 +17,9 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 - Hallway timeline year labels stay fixed at the left of the hallway (they scroll with the world, never float with the camera). On portrait phones the camera now frames the labels and corridor together, so the labels are fully visible at the start; the life-event banner wraps; the family line in the HUD and the Ending ledger subtitle no longer run past the screen edge.
 - Landscape touch controls: dialogs and the pause menu keep side margins so the on-screen pad no longer covers their corners.
 
+### Fixed
+- Start menu: pressing Esc or the on-screen B button no longer opens the Changelog (it was picking the menu's last entry). B/Esc now does nothing there; the Changelog is still the "Changelog" menu entry.
+
 ## [0.7.12] — 2026-10-16
 
 ### Added

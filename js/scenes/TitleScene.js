@@ -73,7 +73,9 @@ export class TitleScene {
       const choice = await dialog.menu(
         'A life of choices.\nYou can\'t take it with you.',
         opts,
-        { title: "You Can't Take It With You" }
+        // Esc / B on the start menu has nowhere to go back to; without this it picked the last
+        // entry (Changelog). '__stay' matches no choice below, so the menu just stays up.
+        { title: "You Can't Take It With You", escValue: '__stay' }
       );
 
       if (choice === 'new') {
