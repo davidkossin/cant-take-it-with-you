@@ -319,6 +319,7 @@ function pushWorth(game, p) {
   game.worthHistory = game.worthHistory || [];
   const last = game.worthHistory[game.worthHistory.length - 1];
   if (last && last.year === p.year && last.age === p.age) {
+    Object.assign(last, worth);
     last.netWorth = worth.netWorth;
     last.bank = worth.bank;
     last.portfolio = worth.portfolio;
@@ -327,6 +328,7 @@ function pushWorth(game, p) {
     last.statement = p.lastStatement || null;
   } else {
     game.worthHistory.push({
+      ...worth,
       year: p.year,
       age: p.age,
       netWorth: worth.netWorth,
@@ -645,6 +647,7 @@ export function reconstructWorthAlongPath(game, tipNodeId) {
     if (!snap) continue;
     const worth = computeWorth(snap);
     const row = {
+      ...worth,
       year: snap.year ?? n.year,
       age: snap.age ?? n.age,
       netWorth: worth.netWorth,

@@ -10,6 +10,26 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+### Changed
+- Charts are now a full financial overview instead of a glass-wall forecast. Pause > Charts pages through eight charts: Summary, Net worth outlook, Assets & debts, Money in & out, Saving & withdrawals, Taxes, Your years so far, and Chance of running short (last, as a minor stress gauge).
+- Every chart has a title, a one- or two-line plain-English description (what the shading means, one sampled future vs all simulated futures), a legend with real color swatches (a row above the chart on wide screens, a grid below it in portrait), rounded axis labels, decade year marks with ages under them, a dotted Today marker, and a fixed readout row under the chart for the selected year. Each color now means one thing.
+- Map Compare draws the same eight charts for two timelines side by side (stacked in portrait), with the same colors and legend and one shared year axis and y-axis, plus its own year cursor and readout per timeline.
+- Controls are on-screen buttons that only show what applies to the current chart: arrow buttons to page, a dollars toggle (starting-year or future dollars), Net worth/Cash and Linear/Log on the outlook, Zoom on year charts, and More for the options menu. Hovering or tapping a chart moves the year cursor. The keyboard hint is one short line on desktop and hidden on touch screens.
+- Zoom moved from Z to + (or =): Z is a confirm key, and on the Charts page it opened Options instead of zooming. '[' and ']' page the charts, Left/Right move the year.
+- Arrow characters that did not render in the pixel font were replaced with drawn arrows or plain words.
+
+### Added
+- Summary card: today's net worth with what you own and owe, Cash, savings, stocks, retirement and home equity; this year's money in, money out, taxes and retirement saving; the middle and 8-in-10 range of net worth at 65 and 90 and the peak; and a small note on how many futures run short.
+- Assets & debts: Cash (checking), Savings, Stocks, 401(k) and Roth (yours and your spouse's when you have them) and home value above zero, with mortgage and other debts below zero and a net worth line.
+- Money in & out: pay (yours and spouse's), Social Security, pension, 401(k) withdrawals, stock sales, interest and dividends and rent received, against living costs, housing, healthcare, kids, college, loan payments, surprises, taxes and what goes into the 401(k) and Roth, with unpaid bills marked.
+- Saving & withdrawals (401(k) and Roth contributions, employer match, withdrawals and stock sales) and Taxes (federal, state, payroll, investment surtax and penalties, with an effective-rate line on a percent axis).
+- Your years so far: the played years as the same asset and debt breakdown (older saves without a breakdown show the net worth line). New save rows record the full balance breakdown.
+- Labeled life-event dots on the outlook, assets and money charts.
+
+### Fixed
+- The old composition chart read a home value field that does not exist, so home equity was always missing; chart drawing is now clipped to the chart box.
+- 401(k) withdrawals are no longer counted twice in money-in totals, and pension income is no longer counted as a 401(k) withdrawal.
+
 ## [0.8.0] — 2026-10-17
 
 ### Added

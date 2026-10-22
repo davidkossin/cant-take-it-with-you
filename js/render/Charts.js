@@ -403,7 +403,7 @@ const COMPOSITION_CATEGORIES=[
   {key:'savings',label:'Savings',color:'#80e0a0'},
   {key:'stocks',label:'Stocks',color:'#d4a84b'},
   {key:'retirement',label:'Retirement',color:'#c0a0ff'},
-  {key:'home',label:'Home Equity',color:'#e0c080'},
+  {key:'homeEquity',label:'Home Equity',color:'#e0c080'},
 ];
 function compositionValue(worth,key) {
   if (key==='retirement') return Math.max(0,(worth.k401Balance||0)+(worth.rothBalance||0)+(worth.spouseK401Balance||0)+(worth.spouseRothBalance||0));

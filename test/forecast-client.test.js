@@ -224,9 +224,9 @@ test('Charts screen: view paging, scale/zoom toggles, and camera-follow all work
     draw();
     assert.equal(pause.chartForecast, result);
 
-    // Paging ('[' / ']', the on-screen '‹ ›', or the options menu all call this) cycles all 4 views and wraps.
-    assert.equal(pause.chartView, 'bands');
-    for (const expected of ['composition', 'cashflow', 'risk', 'bands']) {
+    // Paging ('[' / ']', the on-screen arrow buttons, or the options menu all call this) cycles every page and wraps.
+    assert.equal(pause.chartView, 'summary');
+    for (const expected of ['networth', 'assets', 'cashflow', 'saving', 'taxes', 'history', 'risk', 'summary']) {
       pause.chartAction('viewNext', g);
       assert.equal(pause.chartView, expected);
       assert.doesNotThrow(draw);
@@ -234,6 +234,7 @@ test('Charts screen: view paging, scale/zoom toggles, and camera-follow all work
     pause.chartAction('viewPrev', g);
     assert.equal(pause.chartView, 'risk');
     assert.doesNotThrow(draw);
+    pause.chartView = 'networth';
 
     // Log-scale toggles independently of the current view and zoom state.
     assert.equal(pause.chartScaleLog, false);

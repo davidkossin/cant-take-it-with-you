@@ -164,3 +164,40 @@ test('drawForecastChart: renders bands/median/hallway/event-ticks, with log scal
   drawForecastChart(ctx, f, { ...opts, selectedYear: 2027 });
   assert.ok(ctx.calls.some(c => c.op === 'arc')); // the 'Retired' event tick
 });
+
+test('FinanceCharts: worthParts splits home value, mortgage and other debts out of computeWorth totals', async () => {
+  const { worthParts } = await import('../js/render/FinanceCharts.js');
+  // $300k home with a $200k mortgage (equity $100k) plus a $10k car loan; $50k cash/savings/stocks.
+  const w = { cash: 10000, savings: 20000, stocks: 20000, k401Balance: 0, rothBalance: 0, spouseK401Balance: 0, spouseRothBalance: 0,
+    homeEquity: 100000, debts: 210000, exactNetWorth: 140000, netWorth: 140000 };
+  const p = worthParts(w);
+  assert.equal(p.home, 300000); assert.equal(p.mortgage, 200000); assert.equal(p.otherDebt, 10000);
+  assert.equal(worthParts({ netWorth: 5 }), null, 'older rows without a breakdown are flagged, not invented');
+});
+
+test('FinanceCharts: every chart kind renders for one timeline and side by side for two, landscape and portrait', async () => {
+  const { buildChartData, drawFinanceChart, CHART_KINDS } = await import('../js/render/FinanceCharts.js');
+  const years = [2026, 2027, 2028];
+  const pct = v => ({ p10: v * 0.5, p25: v * 0.8, p50: v, p75: v * 1.2, p90: v * 1.6 });
+  const worth = { cash: 1000, savings: 2000, stocks: 3000, k401Balance: 4000, rothBalance: 500, spouseK401Balance: 0, spouseRothBalance: 0,
+    homeEquity: 50000, debts: 150000, exactNetWorth: 60500, netWorth: 60500 };
+  const statement = year => ({ year, priceIndex: 1.03, income: { wages: 90000, interest: 100 }, expenses: { living: 40000, mortgage: 20000, incomeTax: 15000 },
+    tax: { federal: 9000, state: 3000, payroll: 3000 }, employeeContribution: 9000, employerContribution: 4500, unfunded: year === 2027 ? 500 : 0 });
+  const forecast = { count: 1000, successProbability: 0.9, failureByYear: years.map((year, i) => ({ year, age: 40 + i, fraction: i * 0.02 })),
+    series: years.map((year, i) => ({ year, age: 40 + i, netWorth: pct(60000 + i * 1e4), realNetWorth: pct(60000), liquid: pct(6000), realLiquid: pct(6000) })),
+    scenarioSeries: years.map((year, i) => ({ year, age: 40 + i, netWorth: 61000 * 1.03 ** i, realNetWorth: 61000, liquid: 6000, realLiquid: 6000 })),
+    reference: years.slice(1).map(year => ({ year, worth, statement: statement(year - 1), events: year === 2027 ? ['Retired'] : [] })) };
+  const history = [{ year: 2025, netWorth: 50000, priceIndex: 1 }, { year: 2026, ...worth, priceIndex: 1 }];
+  const d = buildChartData({ forecast, history, today: worth, label: 'Timeline 1' });
+  for (const kind of CHART_KINDS) {
+    for (const rect of [{ x: 0, y: 0, w: 1700, h: 800 }, { x: 0, y: 0, w: 700, h: 1300 }]) {
+      for (const real of [true, false]) {
+        assert.doesNotThrow(() => drawFinanceChart(new MockCtx(), kind, [d], rect, { real, cursorYear: 2027, todayYear: 2026 }), kind);
+        assert.doesNotThrow(() => drawFinanceChart(new MockCtx(), kind, [d, { ...d, label: 'Timeline 2' }], rect,
+          { real, log: true, zoomSpan: 2, cursorYear: 2027, todayYear: 2026, metric: 'liquid' }), kind);
+      }
+    }
+  }
+  const empty = buildChartData({ forecast: null });
+  for (const kind of CHART_KINDS) assert.doesNotThrow(() => drawFinanceChart(new MockCtx(), kind, [empty], { x: 0, y: 0, w: 900, h: 600 }, {}));
+});

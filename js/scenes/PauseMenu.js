@@ -6,24 +6,23 @@ import { MODEL_SCOPE, SUCCESS_DEFINITION } from '../finance/Forecast.js';
  */
 
 import { PALETTE, frame, FRAME_W, FRAME_H, HUD_H, KEYS } from '../config.js';
-import { jumpToHallwayNode, currentNode } from '../state/GameState.js';
+import { jumpToHallwayNode, currentNode, reconstructWorthAlongPath } from '../state/GameState.js';
 import { currentTimeline, getTimelineForecast, listTimelines, timelineMapModel, timelineForecastOptions } from '../state/TimelineSystem.js';
-import { drawTimelineMap, drawTimelineComparison } from '../render/TimelineMap.js';
+import { drawTimelineMap } from '../render/TimelineMap.js';
 import { setMoneyContext } from '../finance/DollarBasis.js';
 import { getSaveStatus, flushSaves, autoSave } from '../state/SaveSystem.js';
 import { downloadForecastBundle } from '../state/PlanExport.js';
 import { loadFromFile, loadedFileMessage, saveGameToFile, savedFileMessage } from '../state/SaveFile.js';
 import { editInflationSettings, inflationToggleLabel, moneyUnitSubtitle } from './PlanningInputs.js';
 import { computeWorth, annualMortgagePayment, annualPropertyTax } from '../finance/Engine.js';
-import { drawWorthChart, drawForecastChart, drawCompositionChart, drawCashflowChart, drawRiskChart, groupIncome, groupExpenses } from '../render/Charts.js';
+import { buildChartData, drawFinanceChart, chartYearRange, CHART_KINDS, CHART_TITLES, TIME_KINDS, MONEY_KINDS } from '../render/FinanceCharts.js';
 import { makeDialogChrome } from '../render/Assets.js';
 import { formatMoneyDisplay } from '../render/Dialog.js';
 import { fitPixelFont } from '../render/FutureSplash.js';
 
 const VIEW_TABS = ['portfolio', 'map', 'charts', 'settings'];
-/** Charts screen: the four Hallway-path views, paged with '[' / ']' or the on-screen '‹ ›'. */
-const CHART_VIEWS = ['bands', 'composition', 'cashflow', 'risk'];
-const CHART_VIEW_LABELS = { bands: 'Bands', composition: 'Composition', cashflow: 'Cashflow', risk: 'Risk' };
+/** Charts screen pages (shared with Map Compare), paged with '[' / ']' or the on-screen arrow buttons. */
+const CHART_VIEWS = CHART_KINDS;
 /** Settings rows after the Inflation toggle (index 0); each row's index is i + 1. */
 const SETTINGS_ROWS = [
   { label: 'Save to File', note: 'This game + all character profiles, as a .json file on your device' },
@@ -78,7 +77,7 @@ function fontPx(font) {
 /** Charts remain focused on the current path; timeline comparison lives on Map. */
 
 /**
- * Charts headline: when the first glass wall arrives across the Monte Carlo paths
+ * Legacy headline (no longer drawn on the Charts page): when the first glass wall arrives across the Monte Carlo paths
  * (median year/age, P10–P90). A missing year means no wall through age 100.
  */
 export function firstWallHeadline(firstWall) {
@@ -99,7 +98,13 @@ export class PauseMenu {
     this.chartYear = 0;
     this.forecastPaths = 1000;
     /** Which of CHART_VIEWS is showing. */
-    this.chartView = 'bands';
+    this.chartView = 'summary';
+    /** History page cursor (calendar year; null = latest). */
+    this.historyYear = null;
+    /** Map Compare: which chart page and which year the cursor is on (null = first year). */
+    this.compareView = 'networth';
+    this.compareCursor = null;
+    this._compareCache = null;
     /** Y-axis log-scale toggle and year-range zoom window (null span = full horizon). */
     this.chartScaleLog = false;
     this.chartZoomSpan = null;
@@ -283,16 +288,56 @@ export class PauseMenu {
   /** Map C: toggle Compare selection. */
   toggleMapCompare(game) {
     if (listTimelines(game).length < 2) return undefined;
-    this.mapMode = 'select'; this.selectedComparison = [];
+    this.mapMode = 'select'; this.selectedComparison = []; this.compareCursor = null;
     this.compareSelectionIndex = this.mapTimelineIndex;
     this.compareScaleLog = false; this.compareZoomSpan = null; this.compareZoomCenter = null;
     return undefined;
   }
 
-  /** Map Compare Z: toggle the year-range zoom window, centered on the comparison's own horizon. */
+  /** Map Compare '+': toggle a 15-year zoom window around the year cursor. */
   toggleCompareZoom() {
-    if (this.compareZoomSpan == null) { this.compareZoomSpan = 15; this.compareZoomCenter = null; }
+    if (this.compareZoomSpan == null) { this.compareZoomSpan = 15; this.compareZoomCenter = this.compareCursor; }
     else { this.compareZoomSpan = null; this.compareZoomCenter = null; }
+  }
+
+  /** Map Compare: move the shared year cursor (camera-follows when zoomed). */
+  stepCompareCursor(dir) {
+    const range = this._compareRange;
+    if (!range) return;
+    const cur = this.compareCursor ?? range[0];
+    this.setCompareCursor(Math.max(range[0], Math.min(range[1], cur + dir)));
+  }
+
+  setCompareCursor(year) {
+    this.compareCursor = year;
+    if (this.compareZoomSpan != null) {
+      const half = this.compareZoomSpan / 2, c = this.compareZoomCenter ?? year;
+      if (year > c + half) this.compareZoomCenter = year - half;
+      else if (year < c - half) this.compareZoomCenter = year + half;
+      else this.compareZoomCenter = c;
+    }
+  }
+
+  /** Chart data for two compared timelines (forecast, its starting balances, and the played history), cached per pair. */
+  compareDatasets(game, selected) {
+    const key = selected.map(t => `${t.id}:${t.forecast?.count}:${t.points.length}`).join('|') + `|${(game.worthHistory || []).length}`;
+    if (this._compareCache?.key === key) return this._compareCache.data;
+    const data = selected.map(t => {
+      const tip = [...t.points].reverse().find(p => p.nodeId)?.nodeId;
+      let history = [];
+      try { history = tip ? reconstructWorthAlongPath(game, tip) : []; } catch { history = []; }
+      const baseline = t.baseline || t.forecast?.inputSnapshot?.portfolio;
+      return buildChartData({ forecast: t.forecast, history, today: baseline ? computeWorth(baseline) : null,
+        todayPriceIndex: baseline?.priceIndex || 1, label: `Timeline ${t.number}${t.isCurrent ? ' (current)' : ''}` });
+    });
+    this._compareCache = { key, data };
+    return data;
+  }
+
+  /** Map Compare: page through the same chart pages as Pause > Charts. */
+  pageCompare(dir) {
+    const i = CHART_KINDS.indexOf(this.compareView);
+    this.compareView = CHART_KINDS[(i + dir + CHART_KINDS.length) % CHART_KINDS.length];
   }
 
   selectComparisonTimeline(game, index) {
@@ -307,7 +352,7 @@ export class PauseMenu {
   /** Charts shortcuts by name (keys F/R/L/P/C/E, ←/→, Enter). */
   chartAction(name, game) {
     if (name === 'options') void this.showChartOptions(game);
-    if (name === 'history') this.chartMode = this.chartMode === 'forecast' ? 'history' : 'forecast';
+    if (name === 'history') { this.chartView = this.chartView === 'history' ? 'networth' : 'history'; this.historyYear = null; }
     if (name === 'real') { this.chartReal = !this.chartReal; game.portfolio.inflationAdjusted = this.chartReal; game.settings = { ...game.settings, inflationAdjusted: this.chartReal }; setMoneyContext(game.portfolio); }
     if (name === 'liquid') this.chartMetric = this.chartMetric === 'netWorth' ? 'liquid' : 'netWorth';
     if (name === 'paths') this.forecastPaths = this.forecastPaths === 1000 ? 5000 : this.forecastPaths === 5000 ? 10000 : 1000;
@@ -325,6 +370,15 @@ export class PauseMenu {
         this.chartZoomSpan = null;
         this.chartZoomCenter = null;
       }
+    }
+    if (this.chartView === 'history' && (name === 'next' || name === 'prev')) {
+      const years = (game.worthHistory || []).map(r => r.year).filter(Number.isFinite);
+      if (years.length) {
+        const lo = Math.min(...years), hi = Math.max(...years);
+        const cur = this.historyYear ?? hi;
+        this.historyYear = Math.max(lo, Math.min(hi, cur + (name === 'next' ? 1 : -1)));
+      }
+      return undefined;
     }
     if (name === 'next') this.chartYear = Math.min(100 - game.portfolio.age, this.chartYear + 1);
     if (name === 'prev') this.chartYear = Math.max(0, this.chartYear - 1);
@@ -360,6 +414,7 @@ export class PauseMenu {
    */
   handlePointerMove(lx, ly, game) {
     if (!this.open) return false;
+    this._pointer = { x: lx, y: ly };
     const hit = this.hitAt(lx, ly);
     this.hoverKey = hit?.key ?? null;
     if (hit?.hover) hit.hover(game);
@@ -373,6 +428,7 @@ export class PauseMenu {
    */
   handlePointerDown(lx, ly, game) {
     if (!this.open) return { handled: false };
+    this._pointer = { x: lx, y: ly };
     const hit = this.hitAt(lx, ly);
     if (!hit) return { handled: false };
     const result = hit.activate(game);
@@ -544,8 +600,15 @@ export class PauseMenu {
         return undefined;
       }
       if (this.mapMode === 'result') {
-        if (e.key.toLowerCase() === 's') { e.preventDefault(); this.compareScaleLog = !this.compareScaleLog; return undefined; }
-        if (e.key.toLowerCase() === 'z') { e.preventDefault(); this.toggleCompareZoom(); return undefined; }
+        const k = e.key.toLowerCase();
+        if (k === 's') { e.preventDefault(); this.compareScaleLog = !this.compareScaleLog; return undefined; }
+        if (k === '+' || k === '=') { e.preventDefault(); this.toggleCompareZoom(); return undefined; }
+        if (k === 'r') { e.preventDefault(); this.chartAction('real', game); return undefined; }
+        if (k === 'l') { e.preventDefault(); this.chartAction('liquid', game); return undefined; }
+        if (k === '[' || k === ']') { e.preventDefault(); this.pageCompare(k === ']' ? 1 : -1); return undefined; }
+        if (KEYS.left.includes(e.key) || KEYS.right.includes(e.key)) {
+          e.preventDefault(); this.stepCompareCursor(KEYS.right.includes(e.key) ? 1 : -1); return undefined;
+        }
         if (KEYS.confirm.includes(e.key)) { e.preventDefault(); return this.toggleMapCompare(game); }
         return undefined;
       }
@@ -567,7 +630,8 @@ export class PauseMenu {
 
     if (this.screen === 'charts') {
       if (KEYS.confirm.includes(e.key) && e.key.toLowerCase() !== 'e') { e.preventDefault(); return this.chartAction('options', game); }
-      const byKey = { f: 'history', r: 'real', l: 'liquid', p: 'paths', c: 'coverage', e: 'export', s: 'scale', z: 'zoom' };
+      // Z is a confirm key everywhere, so zoom lives on '+' (or '=').
+      const byKey = { f: 'history', r: 'real', l: 'liquid', p: 'paths', c: 'coverage', e: 'export', s: 'scale', '+': 'zoom', '=': 'zoom' };
       if (byKey[e.key.toLowerCase()]) this.chartAction(byKey[e.key.toLowerCase()], game);
       if (e.key === '[') this.chartAction('viewPrev', game);
       if (e.key === ']') this.chartAction('viewNext', game);
@@ -768,30 +832,28 @@ export class PauseMenu {
     }
   }
 
-  chartTitle(game) {
-    return this.chartMode === 'forecast' ? 'Charts · Financial forecast' : 'Charts · Recorded history';
+  chartTitle() {
+    return 'Charts';
   }
 
   async showChartOptions(game) {
     if (!this.dialog || this.dialog.active) return;
     const choice = await this.dialog.menu('Chart options', [
-      {label:this.chartMode === 'forecast' ? 'Show recorded history' : 'Show Monte Carlo forecast',value:'mode'},
-      {label:this.chartReal ? 'Show nominal dollars' : 'Show real dollars',value:'real'},
-      {label:this.chartMetric === 'netWorth' ? 'Show available liquid assets' : 'Show net worth',value:'metric'},
-      ...(this.chartMode === 'forecast' ? [
-        {label:'Chart view (' + CHART_VIEW_LABELS[this.chartView] + ')',value:'view'},
-        {label:'Y-axis: ' + (this.chartScaleLog ? 'Log' : 'Linear'),value:'scale'},
-      ] : []),
+      {label:'Chart: ' + CHART_TITLES[this.chartView],value:'view'},
+      {label:this.chartReal ? 'Show future (nominal) dollars' : 'Show ' + this.realDollarLabel(game) + ' dollars',value:'real'},
+      {label:this.chartMetric === 'netWorth' ? 'Outlook: show Cash' : 'Outlook: show net worth',value:'metric'},
+      {label:'Y-axis: ' + (this.chartScaleLog ? 'Log' : 'Linear'),value:'scale'},
+      {label:this.chartZoomSpan == null ? 'Zoom to 15 years' : 'Show all years',value:'zoom'},
       {label:'Simulation count (' + this.forecastPaths + ')',value:'paths'},
-      {label:'Model coverage / input warnings',value:'coverage'},
+      {label:'Model coverage / input warnings (' + (this.chartForecast?.warnings?.length || 0) + ')',value:'coverage'},
       {label:'Export forecast, inputs and plan',value:'export'},
       {label:'Back',value:null}], {title:'Charts'});
-    if (choice === 'mode') this.chartMode = this.chartMode === 'forecast' ? 'history' : 'forecast';
+    if (choice === 'zoom') this.chartAction('zoom', game);
     if (choice === 'real') this.chartAction('real', game);
     if (choice === 'metric') this.chartMetric = this.chartMetric === 'netWorth' ? 'liquid' : 'netWorth';
     if (choice === 'view') {
       const view = await this.dialog.menu('Chart view', [
-        ...CHART_VIEWS.map(v => ({label:CHART_VIEW_LABELS[v],value:v})),
+        ...CHART_VIEWS.map(v => ({label:CHART_TITLES[v],value:v})),
         {label:'Back',value:null}], {title:'Chart view'});
       if (view) this.chartView = view;
     }
@@ -820,37 +882,99 @@ export class PauseMenu {
     downloadForecastBundle(game, f, { baseline, settings: { inflationAdjusted: game.portfolio.inflationAdjusted !== false } });
   }
 
+  /** Context-only, touch-sized button. Returns its width. */
+  drawChip(ctx, label, x, y, key, action, { px = 13, h = 44, active = false, minW = 0, glyph = null } = {}) {
+    ctx.font = `${px}px "Press Start 2P", monospace`;
+    const w = Math.max(minW, glyph ? h : Math.ceil(ctx.measureText(label).width) + px * 2);
+    const hovered = this.hoverKey === key;
+    ctx.fillStyle = hovered ? '#34405a' : active ? '#2a3348' : '#1b2030';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = active || hovered ? PALETTE.gold : '#5a6275';
+    ctx.fillRect(x, y, w, 2); ctx.fillRect(x, y + h - 2, w, 2); ctx.fillRect(x, y, 2, h); ctx.fillRect(x + w - 2, y, 2, h);
+    if (glyph) {
+      // Drawn arrow (font-safe): a filled triangle pointing left or right.
+      const cx = x + w / 2, cy = y + h / 2, s = h * 0.22;
+      ctx.fillStyle = hovered ? PALETTE.gold : '#e8e8e8';
+      ctx.beginPath();
+      if (glyph === 'left') { ctx.moveTo(cx + s * 0.7, cy - s); ctx.lineTo(cx + s * 0.7, cy + s); ctx.lineTo(cx - s * 0.8, cy); }
+      else { ctx.moveTo(cx - s * 0.7, cy - s); ctx.lineTo(cx - s * 0.7, cy + s); ctx.lineTo(cx + s * 0.8, cy); }
+      ctx.closePath(); ctx.fill();
+    } else {
+      ctx.fillStyle = hovered ? PALETTE.gold : active ? '#ffffff' : '#d8d8d8';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    }
+    this._addHit({ key, x, y, w, h, activate: action });
+    return w;
+  }
+
+  /** True on touch layouts (the on-screen pad is showing): keyboard hints are hidden there. */
+  isTouchLayout() {
+    return typeof document !== 'undefined' && !!document.body?.classList?.contains('has-virtual-pad');
+  }
+
+  /**
+   * The pager row ("< 2/8 Net worth outlook >") and the context chips for one chart kind.
+   * Shared by Pause > Charts and Map Compare. Returns the y below the controls.
+   */
+  drawChartControls(ctx, kind, x, y, w, { onPage, onReal, onMetric, onLog, onZoom, onMore, real, metric, log, zoomed, realLabel, idPrefix }) {
+    const narrow = w < 1000, h = narrow ? 48 : 44, px = narrow ? 13 : 13;
+    const index = CHART_KINDS.indexOf(kind);
+    let cx = x;
+    cx += this.drawChip(ctx, '', cx, y, `${idPrefix}:prev`, g => onPage(-1, g), { h, glyph: 'left' }) + 10;
+    const label = `${index + 1}/${CHART_KINDS.length} ${CHART_TITLES[kind]}`;
+    ctx.font = `${narrow ? 14 : 15}px "Press Start 2P", monospace`;
+    const labelW = narrow ? w - 2 * h - 20 : Math.max(ctx.measureText('8/8 Saving & withdrawals').width + 24, ctx.measureText(label).width + 24);
+    const pagerKey = `${idPrefix}:page`;
+    ctx.fillStyle = this.hoverKey === pagerKey ? PALETTE.gold : '#f0d080'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+    ctx.fillText(label, cx + labelW / 2, y + h / 2 + 1); ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    this._addHit({ key: pagerKey, x: cx, y, w: labelW, h, activate: g => onPage(1, g) });
+    cx += labelW + 10;
+    cx += this.drawChip(ctx, '', cx, y, `${idPrefix}:next`, g => onPage(1, g), { h, glyph: 'right' }) + 10;
+    const chips = [];
+    if (MONEY_KINDS.has(kind)) chips.push({ label: real ? `${realLabel} $` : 'Future $', key: 'real', action: onReal, active: real });
+    if (kind === 'networth') {
+      chips.push({ label: metric === 'liquid' ? 'Cash' : 'Net worth', key: 'metric', action: onMetric, active: metric === 'liquid' });
+      chips.push({ label: log ? 'Log' : 'Linear', key: 'log', action: onLog, active: log });
+    }
+    if (TIME_KINDS.has(kind)) chips.push({ label: zoomed ? 'All years' : 'Zoom', key: 'zoom', action: onZoom, active: zoomed });
+    if (onMore) chips.push({ label: 'More', key: 'more', action: onMore });
+    let rowY = y;
+    if (narrow) { cx = x; rowY = y + h + 12; }
+    for (const c of chips) {
+      ctx.font = `${px}px "Press Start 2P", monospace`;
+      const cw = Math.ceil(ctx.measureText(c.label).width) + px * 2;
+      if (narrow && cx > x && cx + cw > x + w) { cx = x; rowY += h + 10; }
+      cx += this.drawChip(ctx, c.label, cx, rowY, `${idPrefix}:${c.key}`, c.action, { px, h, active: c.active }) + 10;
+    }
+    return rowY + h + (narrow ? 16 : 18);
+  }
+
+  /** Plot hit regions: hovering or tapping a plot moves the year cursor to that column. */
+  addPlotHits(result, setYear, idPrefix) {
+    (result?.plots || []).forEach((p, i) => {
+      const pick = () => { if (this._pointer) setYear(Math.max(p.x0, Math.min(p.x1, p.yearAt(this._pointer.x)))); };
+      this._addHit({ key: `${idPrefix}:plot${i}`, x: p.x, y: p.y, w: p.w, h: p.h, hover: pick, activate: () => { pick(); return undefined; } });
+    });
+  }
+
+  /** One short keyboard-hint line at the bottom (desktop only; never wraps). */
+  drawKeyHint(ctx, text, x, y, w) {
+    if (this.isTouchLayout()) return;
+    ctx.font = '12px "Press Start 2P", monospace'; ctx.fillStyle = '#7d828c'; ctx.textBaseline = 'top';
+    ctx.fillText(fitPlain(ctx, text, w), x, y);
+  }
+
+  realDollarLabel(game) {
+    return String(game?.portfolio?.dollarBaseYear ?? game?.timeline?.startYear ?? 'Start');
+  }
+
   drawCharts(ctx, game, x, y, boxW, boxH) {
     const compact = boxW < 1500;
-    const innerW = boxW - (compact ? 48 : 56);
-    const cx0 = x + (compact ? 24 : 28);
-    ctx.font = (compact ? '12px' : '14px') + ' "Press Start 2P", monospace'; ctx.fillStyle = '#aaa';
+    const innerW = boxW - (compact ? 48 : 64);
+    const cx0 = x + (compact ? 24 : 32);
     const act = (name) => (g) => this.chartAction(name, g);
-    const keysEnd = this.drawLinks(ctx, [
-      { text: 'Enter/A options', action: act('options') }, { text: ' · ' },
-      { text: '←', key: 'chart:prev', action: act('prev') }, { text: '/' },
-      { text: '→', key: 'chart:next', action: act('next') }, { text: ' year · ' },
-      { text: 'F history', action: act('history') }, { text: ' · ' },
-      { text: 'R real', action: act('real') }, { text: ' · ' },
-      { text: 'L liquid', action: act('liquid') }, { text: ' · ' },
-      { text: 'P paths', action: act('paths') }, { text: ' · ' },
-      { text: 'S scale', action: act('scale') }, { text: ' · ' },
-      { text: 'Z zoom', action: act('zoom') }, { text: ' · ' },
-      { text: 'C coverage', action: act('coverage') }, { text: ' · ' },
-      { text: 'E export', action: act('export') },
-    ], cx0, y + (compact ? 52 : 58), compact ? innerW : 0);
-    // Keys line wraps in compact frames; everything below starts under it.
-    const keysTop = y + (compact ? 52 : 58);
-    const dy = compact ? Math.max(0, keysEnd - keysTop - 23) : 0;
-    y += dy; boxH -= dy;
-    if (this.chartMode === 'history') {
-      drawWorthChart(ctx, (game.worthHistory || []).map(r => ({ ...r,
-        netWorth: this.chartReal && r.legacy ? null : r.netWorth / (this.chartReal ? r.priceIndex || 1 : 1), bank: this.chartReal && r.legacy ? null : r.bank / (this.chartReal ? r.priceIndex || 1 : 1) })),
-        { x: compact ? cx0 : x + 36, y: y + (compact ? 80 : 108), w: compact ? innerW : boxW - 80, h: boxH - (compact ? 190 : 200), series: ['netWorth', 'bank'] });
-      if (compact) { ctx.font = '12px "Press Start 2P", monospace'; this.drawWrapped(ctx, 'Recorded journeys; earlier saves may contain reference-path or legacy-engine years.', cx0, y + boxH - 74, innerW, 17); }
-      else ctx.fillText('Recorded journeys; earlier saves may contain reference-path or legacy-engine years.', x + 28, y + boxH - 38);
-      return;
-    }
     const timeline = currentTimeline(game);
     const inHallway = currentNode(game)?.type === 'hallway';
     const baseline = inHallway && timeline ? timeline.baseline : game.portfolio;
@@ -861,94 +985,54 @@ export class PauseMenu {
       { ...timelineForecastOptions(game), revision: inHallway ? timeline?.id : `${timeline?.id || 'setup'}-preview` });
     const f = saved || this.forecast.result || this.forecast.preview;
     this.chartForecast = f;
+    const kind = CHART_KINDS.includes(this.chartView) ? this.chartView : 'networth';
+    const top = y + (compact ? 50 : 58);
+    const controlsEnd = this.drawChartControls(ctx, kind, cx0, top, innerW, {
+      idPrefix: 'chart', real: this.chartReal, metric: this.chartMetric, log: this.chartScaleLog, zoomed: this.chartZoomSpan != null,
+      realLabel: this.realDollarLabel(game),
+      onPage: (dir, g) => this.chartAction(dir > 0 ? 'viewNext' : 'viewPrev', g), onReal: act('real'), onMetric: act('liquid'),
+      onLog: act('scale'), onZoom: act('zoom'), onMore: act('options'),
+    });
+    const touch = this.isTouchLayout();
+    const footH = touch ? 10 : 34;
+    const rect = { x: cx0, y: controlsEnd, w: innerW, h: y + boxH - footH - 14 - controlsEnd };
+    if (!touch) this.drawKeyHint(ctx, '[ ] chart  < > year  R dollars  L net worth/Cash  S log  + zoom  Enter more  Esc back', cx0, y + boxH - 40, innerW);
     if (!f) {
-      ctx.fillStyle = '#d4a84b'; ctx.font = (compact ? '16px' : '20px') + ' "Press Start 2P", monospace';
-      const msg = this.forecast.error || 'Simulating ' + this.forecastPaths + ' paths · ' + Math.round(this.forecast.progress * 100) + '%';
-      const nextY = this.drawWrapped(ctx, msg, x + (compact ? 24 : 36), y + (compact ? 90 : 140), boxW - (compact ? 48 : 72), compact ? 26 : 30);
-      ctx.font = (compact ? '13px' : '16px') + ' "Press Start 2P", monospace'; ctx.fillStyle = '#aaa';
-      this.drawWrapped(ctx, 'Forecasts leave gameplay balances unchanged. Esc returns to the menu.', x + (compact ? 24 : 36), compact ? nextY + 16 : y + 190, boxW - (compact ? 48 : 72), 20); return;
+      ctx.fillStyle = '#d4a84b'; ctx.font = (compact ? '15px' : '18px') + ' "Press Start 2P", monospace';
+      const msg = this.forecast.error || 'Simulating ' + this.forecastPaths.toLocaleString('en-US') + ' futures... ' + Math.round(this.forecast.progress * 100) + '%';
+      const nextY = this.drawWrapped(ctx, msg, cx0, rect.y + 20, innerW, 28);
+      ctx.font = (compact ? '12px' : '14px') + ' "Press Start 2P", monospace'; ctx.fillStyle = '#aaa';
+      this.drawWrapped(ctx, 'Forecasts never change your actual balances.', cx0, nextY + 16, innerW, 20);
+      return;
     }
-    this.chartYear = Math.min(this.chartYear, f.series.length - 1);
-    const metric = this.chartReal ? (this.chartMetric === 'liquid' ? 'realLiquid' : 'realNetWorth') : this.chartMetric;
-    const money = amount => formatMoneyDisplay(amount, null, { alreadyDisplay: true });
-
-    // Headline: merges what used to be 3 separate lines (first wall, wall-free %, metric/dollars).
-    ctx.fillStyle = '#d4a84b'; ctx.font = (compact ? '13px' : '16px') + ' "Press Start 2P", monospace';
-    const headline = (f.provisional ? 'Preliminary · ' : '') + firstWallHeadline(f.firstWall) +
-      ' · Wall-free ' + (f.successProbability * 100).toFixed(1) + '% · N=' + f.count;
-    let afterHead = y + 128;
-    if (compact) {
-      const lines = wrapPlain(ctx, headline, innerW).slice(0, 4);
-      const hy = y + 52 + 30;
-      lines.forEach((ln, i) => ctx.fillText(ln, cx0, hy + i * 19));
-      afterHead = hy + lines.length * 19 + 6;
-    } else ctx.fillText(headline, x + 28, y + 95);
-
-    // "‹ View ›" paging row, centered above the chart; clickable/tappable via drawLinks, or '[' / ']'.
-    ctx.font = (compact ? '14px' : '16px') + ' "Press Start 2P", monospace';
-    const metricLabel = (this.chartMetric === 'liquid' ? 'Liquid' : 'Net worth') + ' (' + (this.chartReal ? 'real' : 'nominal') + ')';
-    const viewLabel = CHART_VIEW_LABELS[this.chartView] + (this.chartView === 'bands' ? ' · ' + metricLabel : '');
-    const viewParts = [
-      { text: '‹ ', key: 'chart:viewPrev', action: act('viewPrev') },
-      { text: viewLabel },
-      { text: ' ›', key: 'chart:viewNext', action: act('viewNext') },
-    ];
-    const viewRowW = viewParts.reduce((sum, p) => sum + ctx.measureText(p.text).width, 0);
-    this.drawLinks(ctx, viewParts, x + (boxW - viewRowW) / 2, compact ? afterHead : y + 128);
-
-    const row = f.series[this.chartYear];
-    const referenceRow = f.reference?.find(r => r.year === row.year);
-    const chartX = cx0, chartY = compact ? afterHead + 34 : y + 164, chartW = compact ? innerW : boxW - 56;
-    const chartH = compact ? Math.max(160, boxH - (chartY - y) - 150) : boxH - (chartY - y) - 108;
-    const chartOpts = {
-      x: chartX, y: chartY, w: chartW, h: chartH, metric, selectedYear: row.year,
-      log: this.chartScaleLog, zoomSpan: this.chartZoomSpan, zoomCenter: this.chartZoomCenter,
-    };
-    if (this.chartView === 'bands') {
-      const v = row[metric];
-      chartOpts.cursorLabel = 'P10 ' + money(v.p10) + ' · Median ' + money(v.p50) + ' · P90 ' + money(v.p90);
-      drawForecastChart(ctx, f, chartOpts);
-    } else if (this.chartView === 'composition') {
-      chartOpts.cursorLabel = referenceRow ? 'Net worth ' + money(referenceRow.worth.netWorth) : null;
-      drawCompositionChart(ctx, f.reference || [], chartOpts);
-    } else if (this.chartView === 'cashflow') {
-      if (referenceRow?.statement?.fundingSuccess === false) chartOpts.cursorLabel = 'Shortfall year';
-      else if (referenceRow) {
-        const income = groupIncome(referenceRow.statement).reduce((n, g) => n + g.value, 0);
-        const expenses = groupExpenses(referenceRow.statement).reduce((n, g) => n + g.value, 0);
-        chartOpts.cursorLabel = 'Income ' + money(income) + ' · Expenses ' + money(expenses);
-      }
-      drawCashflowChart(ctx, f.reference || [], chartOpts);
-    } else {
-      const riskRow = f.failureByYear?.find(r => r.year === row.year);
-      chartOpts.cursorLabel = riskRow ? (riskRow.fraction * 100).toFixed(1) + '% hit a wall by ' + riskRow.year : null;
-      drawRiskChart(ctx, f.failureByYear || [], chartOpts);
+    const data = buildChartData({ forecast: f, history: game.worthHistory || [], today: computeWorth(baseline),
+      todayPriceIndex: baseline?.priceIndex || 1, label: 'This timeline' });
+    this.chartYear = Math.max(0, Math.min(this.chartYear, f.series.length - 1));
+    let cursorYear;
+    const range = chartYearRange(kind, [data]);
+    if (kind === 'history') cursorYear = this.historyYear ?? range?.[1];
+    else cursorYear = data.todayYear + this.chartYear;
+    if (range) cursorYear = Math.max(range[0], Math.min(range[1], cursorYear));
+    const opts = { real: this.chartReal, realLabel: this.realDollarLabel(game), metric: this.chartMetric, log: this.chartScaleLog,
+      zoomSpan: this.chartZoomSpan, zoomCenter: this.chartZoomCenter ?? cursorYear, cursorYear, todayYear: game.portfolio.year,
+      portrait: compact, showTitle: false };
+    let chartRect = rect;
+    if (kind === 'risk' && f.stress) {
+      ctx.font = '12px "Press Start 2P", monospace'; ctx.fillStyle = '#8e939c'; ctx.textBaseline = 'top';
+      const line = `Stress tests: market crash, Cash ${f.stress.crash.success ? 'holds up' : 'runs short'}; high inflation, Cash ${f.stress.inflation.success ? 'holds up' : 'runs short'}.`;
+      const end = this.drawWrapped(ctx, line, cx0, rect.y + rect.h - 20, innerW, 18);
+      chartRect = { ...rect, h: rect.h - 30 - Math.max(0, end - (rect.y + rect.h)) };
     }
-
-    // One contextual line: the cursor year's life event, else a short readout for this view.
-    let yy = chartY + chartH + (compact ? 30 : 34);
-    ctx.font = (compact ? '12px' : '14px') + ' "Press Start 2P", monospace'; ctx.fillStyle = '#ddd';
-    let ctxLine;
-    if (referenceRow?.events?.length) {
-      ctxLine = row.year + ': ' + referenceRow.events.join(', ');
-    } else if (this.chartView === 'bands' && referenceRow?.statement) {
-      const statementMoney = amount => money(amount / (this.chartReal ? referenceRow.priceIndex || 1 : 1));
-      ctxLine = 'Hallway ' + money(f.scenarioSeries?.[this.chartYear]?.[metric] ?? 0) + ' · costs ' + statementMoney(referenceRow.statement.requiredSpending ?? 0) +
-        ' · shortfall ' + statementMoney(referenceRow.statement.unfunded ?? 0);
-    } else {
-      ctxLine = 'Hallway path · year ' + row.year + ' · age ' + row.age;
+    if (f.provisional) {
+      ctx.font = '12px "Press Start 2P", monospace'; ctx.fillStyle = '#d4a84b'; ctx.textBaseline = 'top';
+      const status = `Preliminary: ${f.count.toLocaleString('en-US')} futures so far (${Math.round(this.forecast.progress * 100)}%)`;
+      ctx.textAlign = 'right'; ctx.fillText(compact ? `${Math.round(this.forecast.progress * 100)}%` : status, cx0 + innerW, top - (compact ? 24 : 22)); ctx.textAlign = 'left';
     }
-    if (compact) yy = this.drawWrapped(ctx, ctxLine, cx0, yy, innerW, 17) - 17; else ctx.fillText(ctxLine, x + 28, yy);
-
-    // Badges row: stress-test results, plus a clickable input-warnings count linking to Coverage.
-    yy += compact ? 24 : 30;
-    ctx.font = (compact ? '12px' : '14px') + ' "Press Start 2P", monospace'; ctx.fillStyle = '#aaa';
-    const badgeParts = f.stress
-      ? [{ text: 'Crash: ' + (f.stress.crash.success ? 'funded' : 'shortfall') }, { text: '  ·  ' },
-         { text: 'Inflation: ' + (f.stress.inflation.success ? 'funded' : 'shortfall') }, { text: '  ·  ' }]
-      : [];
-    badgeParts.push({ text: (f.warnings?.length || 0) + ' input warnings', key: 'chart:warnings', action: act('coverage') });
-    this.drawLinks(ctx, badgeParts, cx0, yy, compact ? innerW : 0);
+    const result = drawFinanceChart(ctx, kind, [data], chartRect, opts);
+    this.addPlotHits(result, year => {
+      if (kind === 'history') this.historyYear = year;
+      else this.chartYear = Math.max(0, year - data.todayYear);
+    }, 'chart');
   }
 
   drawPortfolio(ctx, p, x, y, boxW, boxH, game) {
@@ -1162,32 +1246,46 @@ export class PauseMenu {
     }
     if (this.mapMode === 'result') {
       const selected = this.selectedComparison.map(id => timelines.find(t => t.id === id)).filter(Boolean);
+      const touch = this.isTouchLayout();
       if (selected.length !== 2 || selected.some(t => !t.forecast)) {
         if (compact) {
-          let ty = this.drawWrapped(ctx, 'This timeline has no saved Monte Carlo ensemble.', left, top + 10, width, 22) + 14;
-          ty = this.drawWrapped(ctx, 'Legacy saves preserve available history; an old forecast cannot be recovered.', left, ty, width, 22) + 14;
-          this.drawWrapped(ctx, 'Generate a new Hallway from a Decision Room to save a new projection.', left, ty, width, 22);
+          let ty = this.drawWrapped(ctx, 'This timeline has no saved projection.', left, top + 10, width, 22) + 14;
+          ty = this.drawWrapped(ctx, 'Older saves keep their history, but an old forecast cannot be recovered.', left, ty, width, 22) + 14;
+          this.drawWrapped(ctx, 'Walk a new Hallway from a Decision Room to save a new projection.', left, ty, width, 22);
         } else {
-          ctx.fillText('This timeline has no saved Monte Carlo ensemble.', left, top + 30);
-          ctx.fillText('Legacy saves preserve available history; an old forecast cannot be recovered.', left, top + 78);
-          ctx.fillText('Generate a new Hallway from a Decision Room to save a new projection.', left, top + 118);
+          ctx.fillText('This timeline has no saved projection.', left, top + 30);
+          ctx.fillText('Older saves keep their history, but an old forecast cannot be recovered.', left, top + 78);
+          ctx.fillText('Walk a new Hallway from a Decision Room to save a new projection.', left, top + 118);
         }
       } else {
-        ctx.font = (compact ? '12px' : '13px') + ' "Press Start 2P", monospace';
-        const keyText = 'Solid: median · dashed: played scenario · bands: 10–90% / 25–75% · common calendar-year axes · ' +
-          'S scale (' + (this.compareScaleLog ? 'log' : 'linear') + ') · Z zoom (' + (this.compareZoomSpan ? 'on' : 'off') + ')';
-        let cy = top + 32;
-        if (compact) cy = this.drawWrapped(ctx, keyText, left, top, width, 18) + 8; else ctx.fillText(keyText, left, top);
-        drawTimelineComparison(ctx, selected, { x: left, y: cy, w: width, h: compact ? Math.max(120, y + boxH - 90 - cy) : boxH - 205 }, game.timeline.startYear,
-          game.portfolio.inflationAdjusted !== false ? 'realNetWorth' : 'netWorth',
-          { log: this.compareScaleLog, zoomSpan: this.compareZoomSpan, zoomCenter: this.compareZoomCenter });
+        const datasets = this.compareDatasets(game, selected);
+        const kind = CHART_KINDS.includes(this.compareView) ? this.compareView : 'networth';
+        const realLabel = this.realDollarLabel(game);
+        const controlsEnd = this.drawChartControls(ctx, kind, left, top - (compact ? 2 : 24), width, {
+          idPrefix: 'cmp', real: this.chartReal, metric: this.chartMetric, log: this.compareScaleLog, zoomed: this.compareZoomSpan != null,
+          realLabel, onPage: dir => this.pageCompare(dir), onReal: g => this.chartAction('real', g), onMetric: g => this.chartAction('liquid', g),
+          onLog: () => { this.compareScaleLog = !this.compareScaleLog; }, onZoom: () => this.toggleCompareZoom(),
+          onMore: null,
+        });
+        const range = chartYearRange(kind, datasets);
+        this._compareRange = range;
+        let cursorYear = this.compareCursor ?? range?.[0];
+        if (range && cursorYear != null) cursorYear = Math.max(range[0], Math.min(range[1], cursorYear));
+        const footH = touch ? 64 : 76;
+        const result = drawFinanceChart(ctx, kind, datasets, { x: left, y: controlsEnd, w: width, h: y + boxH - footH - controlsEnd }, {
+          real: this.chartReal, realLabel, metric: this.chartMetric, log: this.compareScaleLog, zoomSpan: this.compareZoomSpan,
+          zoomCenter: this.compareZoomCenter ?? cursorYear, cursorYear, todayYear: game.portfolio.year, portrait: compact, showTitle: false,
+        });
+        this.addPlotHits(result, year => this.setCompareCursor(year), 'cmp');
       }
-      ctx.font = '13px "Press Start 2P", monospace'; ctx.fillStyle = '#aaa';
-      this.drawLinks(ctx, [{ text: 'Enter: choose another pair', action: g => this.toggleMapCompare(g) }, { text: ' · ' },
-        { text: 'Esc: map', action: () => this.back() }], left, y + boxH - (compact ? 62 : 46), compact ? width : 0);
+      ctx.font = '13px "Press Start 2P", monospace'; ctx.fillStyle = '#aaa'; ctx.textBaseline = 'top';
+      const linksY = y + boxH - (touch ? 50 : 62);
+      this.drawLinks(ctx, [{ text: 'Choose another pair', key: 'compare:again', action: g => this.toggleMapCompare(g) }, { text: ' · ' },
+        { text: 'Back to map', key: 'compare:back', action: () => this.back() }], left, linksY, 0);
+      this.drawKeyHint(ctx, '[ ] chart  < > year  R dollars  L net worth/Cash  S log  + zoom  Enter new pair  Esc map', left, y + boxH - 34, width);
       return;
     }
-    const helpText = '←/→ timeline · ↑/↓ point · Enter: jump to its year in the saved Hallway';
+    const helpText = 'Left/Right timeline · Up/Down point · Enter: jump to its year in the saved Hallway';
     const noteText = 'A: start · letters: decision visits · last point: age 100 · * current · original projections stay unchanged';
     const statusAt = (sel, pt) => sel ? `Timeline ${sel.number} · ${pt?.letter || 'A'}: ${pt?.year || sel.startYear} (age ${pt?.age ?? sel.startAge}) · ${sel.forecast ? 'original projection saved' : 'projection pending'}` : 'No timelines';
     let mapTop = top + 45, mapH = boxH - 290;

@@ -225,7 +225,7 @@ test('Hallway new decisions rerun an ensemble; saved timeline revisit and portab
   } finally { scene.leave(); }
 });
 
-test('Map compares two distinct numeric timelines through keyboard and mouse, drawing three aligned charts', () => {
+test('Map compares two distinct numeric timelines through keyboard and mouse, drawing the shared charts side by side', () => {
   const g = game(); commitRoomDecisions(g); commitHallwayNode(g);
   const { path } = saveForecast(g);
   enterYearRoom(g, path[1].state, path.slice(1, 2)); commitRoomDecisions(g); commitHallwayNode(g); saveForecast(g);
@@ -237,9 +237,15 @@ test('Map compares two distinct numeric timelines through keyboard and mouse, dr
   pause.handleKey({ key: 'Enter', preventDefault() {} }, g);
   assert.equal(pause.mapMode, 'result');
   pause.drawMap(ctx, g, 0, 0, 1680, 880);
-  assert.equal(texts.filter(t => /^Timeline [12] ·/.test(t.text)).length, 2);
-  assert.equal(texts.filter(t => /^Overlay ·/.test(t.text)).length, 1);
-  pause.toggleMapCompare(g); pause.drawMap(ctx, g, 0, 0, 1680, 880);
+  // One labeled panel per timeline, drawn by the same renderer as Pause > Charts, on every chart page.
+  assert.equal(texts.filter(t => /^Timeline [12]( \(current\))?$/.test(t.text)).length, 2);
+  for (let i = 0; i < 8; i++) {
+    pause.handleKey({ key: ']', preventDefault() {} }, g);
+    texts.length = 0;
+    assert.doesNotThrow(() => pause.drawMap(ctx, g, 0, 0, 1680, 880));
+    assert.doesNotThrow(() => pause.drawMap(ctx, g, 0, 0, 760, 1500));
+  }
+  pause.toggleMapCompare(g); pause._hits = []; pause.drawMap(ctx, g, 0, 0, 1680, 880);
   const hit = pause._hits.find(h => h.key === 'compare:timeline-1');
   pause.handlePointerDown(hit.x + 5, hit.y + 5, g);
   assert.deepEqual(pause.selectedComparison, ['timeline-1']);
@@ -278,7 +284,7 @@ test('drawTimelineComparison reuses the Charts.js helpers: log scale, year-range
   assert.ok(calls.some(c => c.op === 'arc')); // the 'Retired' event tick, drawn via the shared drawEventTicks
 });
 
-test('Map Compare exposes its own S/Z scale/zoom toggles while open, reset on leaving Compare', () => {
+test('Map Compare exposes its own S/+ scale/zoom toggles while open, reset on leaving Compare', () => {
   const g = game(); commitRoomDecisions(g); commitHallwayNode(g);
   const { path } = saveForecast(g);
   enterYearRoom(g, path[1].state, path.slice(1, 2)); commitRoomDecisions(g); commitHallwayNode(g); saveForecast(g);
@@ -291,7 +297,7 @@ test('Map Compare exposes its own S/Z scale/zoom toggles while open, reset on le
   assert.equal(pause.compareScaleLog, false); assert.equal(pause.compareZoomSpan, null);
   pause.handleKey({ key: 's', preventDefault() {} }, g);
   assert.equal(pause.compareScaleLog, true);
-  pause.handleKey({ key: 'z', preventDefault() {} }, g);
+  pause.handleKey({ key: '+', preventDefault() {} }, g);
   assert.equal(pause.compareZoomSpan, 15);
   assert.doesNotThrow(() => pause.drawMap(ctx, g, 0, 0, 1680, 880));
   pause.back();
