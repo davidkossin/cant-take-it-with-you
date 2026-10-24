@@ -10,6 +10,8 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-24
+
 ### Changed
 - Charts are now a full financial overview instead of a glass-wall forecast. Pause > Charts pages through eight charts: Summary, Net worth outlook, Assets & debts, Money in & out, Saving & withdrawals, Taxes, Your years so far, and Chance of running short (last, as a minor stress gauge).
 - Every chart has a title, a one- or two-line plain-English description (what the shading means, one sampled future vs all simulated futures), a legend with real color swatches (a row above the chart on wide screens, a grid below it in portrait), rounded axis labels, decade year marks with ages under them, a dotted Today marker, and a fixed readout row under the chart for the selected year. Each color now means one thing.
