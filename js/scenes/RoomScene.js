@@ -24,7 +24,12 @@ import {
 import { Player } from '../render/Player.js';
 import { SpouseNpc, hasSpouseNpc } from '../render/SpouseNpc.js';
 import { BabyNpc, ChildNpc, TeenNpc, isBabyAge, isChildAge, isTeenAge } from '../render/KidNpc.js';
+import { CatNpc } from '../render/CatNpc.js';
+import { CAT_SPRITE_W } from '../render/CatSprites.js';
 import { pickSpouseLine } from '../data/spouseLines.js';
+import {
+  isBirthday, DAVID_LINES, CAT_LINES, BIRTHDAY_CATS, pickBirthdayLine,
+} from '../data/birthday.js';
 import { drawSpeechBubble } from '../render/SpeechBubble.js';
 
 /** The spouse's speech bubble stays about 5 s (60 ticks/s), fading over the last second. */
@@ -113,6 +118,11 @@ export class RoomScene {
     /** @type {(BabyNpc|ChildNpc|TeenNpc)[]} kids shown in the room: babies (0-3), children (4-12) and teens (13-18), visual only */
     this.kidNpcs = [];
     this._babyKey = '';
+    /** @type {CatNpc[]} birthday-only cat NPCs */
+    this.catNpcs = [];
+    this._catKey = '';
+    /** Whose sprite the current speech bubble is anchored to: 'spouse' or a cat name. */
+    this.bubbleOwner = 'spouse';
     this.hud = new Hud();
     this.prompt = null;
     this.bubble = null;
@@ -203,8 +213,8 @@ export class RoomScene {
     });
   }
 
-  /** Every other NPC (spouse and kids) that `self` must not walk into. */
-  _npcOthers = (self) => [this.spouse, ...this.kidNpcs].filter((n) => n && n !== self);
+  /** Every other NPC (spouse, kids, cats) that `self` must not walk into. */
+  _npcOthers = (self) => [this.spouse, ...this.kidNpcs, ...this.catNpcs].filter((n) => n && n !== self);
 
   /** Crawling babies for the children aged 0-3 (rebuilt when the room or those children change). */
   syncKids(p) {
@@ -218,6 +228,27 @@ export class RoomScene {
     this.kidNpcs = [];
     for (const { k, i } of kids) {
       this.kidNpcs.push(new ({ b: BabyNpc, c: ChildNpc, t: TeenNpc }[kind(k.age)])(this.world, k, i, {
+        walkSpeed: pl ? pl.speed : 1.35,
+        avoid: pl ? { x: pl.x - 2, y: pl.y - 12, w: 16, h: 24 } : null,
+        others: this._npcOthers,
+      }));
+    }
+  }
+
+  /** Birthday cats (Yangyang & Chenchen) — only when flags.special === 'birthday'. */
+  syncCats(game) {
+    if (!isBirthday(game)) {
+      this.catNpcs = [];
+      this._catKey = '';
+      return;
+    }
+    const key = BIRTHDAY_CATS.map((c) => c.id).join('|');
+    if (key === this._catKey && this.catNpcs.every((c) => c.world === this.world)) return;
+    this._catKey = key;
+    const pl = this.player;
+    this.catNpcs = [];
+    for (const cat of BIRTHDAY_CATS) {
+      this.catNpcs.push(new CatNpc(this.world, cat, {
         walkSpeed: pl ? pl.speed : 1.35,
         avoid: pl ? { x: pl.x - 2, y: pl.y - 12, w: 16, h: 24 } : null,
         others: this._npcOthers,
@@ -253,8 +284,9 @@ export class RoomScene {
     }
     this.syncSpouse(game.portfolio);
     this.syncKids(game.portfolio);
+    this.syncCats(game);
     const sp = this.spouse;
-    const solids = [...(sp ? [sp] : []), ...this.kidNpcs];
+    const solids = [...(sp ? [sp] : []), ...this.kidNpcs, ...this.catNpcs];
     this.player.update((x, y, w, h) => {
       if (isSolid(this.world, x, y, w, h)) return true;
       // The spouse and babies are solid, unless the player is already overlapping (so they can walk out).
@@ -269,6 +301,7 @@ export class RoomScene {
     const pbox = { x: this.player.x, y: this.player.y, w: this.player.w, h: this.player.h };
     sp?.update(pbox);
     for (const b of this.kidNpcs) b.update(pbox);
+    for (const c of this.catNpcs) c.update(pbox);
     if (this.bubble && ++this.bubble.age >= SPOUSE_BUBBLE_TICKS) this.bubble = null;
     this.prompt = this.facingInteractable(game);
     return null;
@@ -289,6 +322,10 @@ export class RoomScene {
       const b = n.box();
       extra.push({ kind: 'kid', label: name, x: b.x - 2, y: b.y - 6, w: b.w + 4, h: b.h + 8 });
     }
+    for (const c of this.catNpcs) {
+      const b = c.box();
+      extra.push({ kind: 'cat', label: c.name, cat: c, x: b.x - 2, y: b.y - 6, w: b.w + 4, h: b.h + 8 });
+    }
     if (!extra.length) return findFacingInteractable(this.player, this.world);
     return findFacingInteractable(this.player, { interactables: [...this.world.interactables, ...extra] });
   }
@@ -307,15 +344,46 @@ export class RoomScene {
 
     if (obj.kind === 'spouse') {
       const last = this.bubble?.text ?? this.lastSpouseLine ?? null;
-      const text = pickSpouseLine(game.portfolio.age, last);
+      const text = isBirthday(game)
+        ? pickBirthdayLine(DAVID_LINES, last)
+        : pickSpouseLine(game.portfolio.age, last);
       this.lastSpouseLine = text;
+      this.bubbleOwner = 'spouse';
       this.bubble = { text, age: 0 };
       this.spouse?.talk(SPOUSE_BUBBLE_TICKS, this.player);
       this.setInputBlocked(false);
       return null;
     }
 
+    if (obj.kind === 'cat') {
+      const name = obj.cat?.name || obj.label;
+      const bank = CAT_LINES[name] || CAT_LINES.Yangyang;
+      const lastKey = `_lastCatLine_${name}`;
+      const last = this.bubble?.text ?? this[lastKey] ?? null;
+      const text = pickBirthdayLine(bank, last);
+      this[lastKey] = text;
+      this.bubbleOwner = name;
+      this.bubbleCat = obj.cat;
+      this.bubble = { text, age: 0 };
+      this.setInputBlocked(false);
+      return null;
+    }
+
     if (obj.kind === 'door') {
+      if (isBirthday(game)) {
+        const ok = await dialog.confirm(
+          `Are you ready to leave ${game.portfolio.year}?`,
+          { title: 'Hallway of Time', yes: 'Enter hallway', no: 'Stay' }
+        );
+        if (ok) {
+          commitRoomDecisions(game, 'end');
+          autoSave(game, 'end');
+          this.leave();
+          return { goto: 'birthday' };
+        }
+        this.setInputBlocked(false);
+        return null;
+      }
       const ok = await dialog.confirm(
         `Are you ready to leave ${game.portfolio.year}?`,
         { title: 'Hallway of Time', yes: 'Enter hallway', no: 'Stay' }
@@ -1874,6 +1942,7 @@ Cash received: ${money(preview.netCash)}`, {
     // Spouse first, so the player is always drawn over them.
     if (this.spouse && hasSpouseNpc(game.portfolio)) this.spouse.draw(ctx, game.portfolio);
     for (const b of [...this.kidNpcs].sort((a, c) => a.y - c.y)) b.draw(ctx);
+    for (const c of [...this.catNpcs].sort((a, b) => a.y - b.y)) c.draw(ctx);
     this.player.draw(
       ctx,
       game.portfolio.hairColor,
@@ -1886,20 +1955,28 @@ Cash received: ${money(preview.netCash)}`, {
 
     this.hud.draw(ctx, game.portfolio);
 
-    if (this.bubble && this.spouse && hasSpouseNpc(game.portfolio)) {
+    if (this.bubble) {
       const left = this.bubble.age;
       const alpha = Math.min(1, (SPOUSE_BUBBLE_TICKS - left) / SPOUSE_BUBBLE_FADE_TICKS);
       const bob = Math.sin(left / 12) * 2;
-      const ax = (this.spouse.x + 8 - camX) * WORLD_SCALE;
-      const ay = HUD_H + (this.spouse.y - camY) * WORLD_SCALE - 6 + bob;
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      drawSpeechBubble(ctx, this.bubble.text, ax, ay, { left: 12, right: FRAME_W - 12, top: HUD_H + 8 }, alpha);
-      ctx.restore();
+      let who = null;
+      if (this.bubbleOwner === 'spouse' && this.spouse && hasSpouseNpc(game.portfolio)) who = this.spouse;
+      else if (this.bubbleCat) who = this.bubbleCat;
+      if (who) {
+        const mid = this.bubbleOwner === 'spouse' ? 8 : CAT_SPRITE_W / 2;
+        const ax = (who.x + mid - camX) * WORLD_SCALE;
+        const ay = HUD_H + (who.y - camY) * WORLD_SCALE - 6 + bob;
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        drawSpeechBubble(ctx, this.bubble.text, ax, ay, { left: 12, right: FRAME_W - 12, top: HUD_H + 8 }, alpha);
+        ctx.restore();
+      }
     }
 
     if (this.prompt && !this.locked) {
-      drawActionPrompt(ctx, this.prompt.label, { bare: this.prompt.kind === 'spouse' || this.prompt.kind === 'kid' });
+      drawActionPrompt(ctx, this.prompt.label, {
+        bare: this.prompt.kind === 'spouse' || this.prompt.kind === 'kid' || this.prompt.kind === 'cat',
+      });
     }
   }
 }

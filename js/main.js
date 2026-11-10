@@ -9,7 +9,9 @@ import { TitleScene } from './scenes/TitleScene.js';
 import { SetupScene } from './scenes/SetupScene.js';
 import { RoomScene } from './scenes/RoomScene.js';
 import { HallwayScene } from './scenes/HallwayScene.js';
+import { BirthdayScene } from './scenes/BirthdayScene.js';
 import { EndingScene } from './scenes/EndingScene.js';
+import { isBirthday } from './data/birthday.js';
 import { PauseMenu, QUIT_SUBTITLE } from './scenes/PauseMenu.js';
 import { VirtualPad } from './input/VirtualPad.js';
 import { installFullscreen, isOsFullscreen } from './input/Fullscreen.js';
@@ -192,10 +194,11 @@ const title = new TitleScene({});
 const setup = new SetupScene();
 const room = new RoomScene();
 const hallway = new HallwayScene();
+const birthday = new BirthdayScene();
 const ending = new EndingScene();
 const pause = new PauseMenu();
 
-/** @type {'title'|'setup'|'room'|'hallway'|'ending'} */
+/** @type {'title'|'setup'|'room'|'hallway'|'birthday'|'ending'} */
 let mode = 'title';
 /** @type {object|null} */
 let game = null;
@@ -214,6 +217,7 @@ function syncMoneyContext(forInput = false) {
 function suspendInput() {
   room.player?.clearKeys();
   hallway.player?.clearKeys();
+  birthday.player?.clearKeys();
   virtualPad.clearHeldInput();
   frameClock.reset();
 }
@@ -286,16 +290,28 @@ async function startTitle() {
 function enterLoadedGame(loaded) {
   room.leave();
   hallway.leave();
+  birthday.leave();
   pause.hide();
   canvas.style.cursor = '';
+  booting = false;
   game = loaded;
   // migrate old saves lightly
   if (!game.worthHistory) game.worthHistory = [];
   if (!game.timeline.snapshots) game.timeline.snapshots = {};
-  mode = game.scene === 'ending' ? 'ending' : game.scene === 'hallway' ? 'hallway' : 'room';
-  if (mode === 'room') room.enter(game, false);
-  else if (mode === 'hallway') hallway.enter(game);
-  else ending.enter(game);
+  // Birthday saves store scene as 'room' or 'birthday'; never drop into the normal hallway.
+  if (game.scene === 'birthday' || (isBirthday(game) && game.scene === 'hallway')) {
+    mode = 'birthday';
+    birthday.enter(game, { skipIntro: !!game.flags?.birthday?.introDone });
+  } else if (game.scene === 'ending') {
+    mode = 'ending';
+    ending.enter(game);
+  } else if (game.scene === 'hallway') {
+    mode = 'hallway';
+    hallway.enter(game);
+  } else {
+    mode = 'room';
+    room.enter(game, false);
+  }
 }
 pause.onLoadGame = (loaded) => {
   enterLoadedGame(loaded);
@@ -303,7 +319,10 @@ pause.onLoadGame = (loaded) => {
 };
 
 function directionHeld() {
-  const p = mode === 'room' ? room.player : mode === 'hallway' ? hallway.player : null;
+  const p = mode === 'room' ? room.player
+    : mode === 'hallway' ? hallway.player
+    : mode === 'birthday' ? birthday.player
+    : null;
   if (!p) return false;
   return (
     p.pressed(KEYS.up) ||
@@ -328,10 +347,12 @@ function applyPauseResult(result) {
   if (result === 'close') {
     if (mode === 'room') room.setInputBlocked(false);
     else if (mode === 'hallway') hallway.setInputBlocked(false);
+    else if (mode === 'birthday') birthday.setInputBlocked(false);
   }
   if (result === 'quit') {
     room.leave();
     hallway.leave();
+    birthday.leave();
     startTitle();
     return;
   }
@@ -368,6 +389,12 @@ canvas.addEventListener('pointerdown', (e) => {
   if (dialog.active) {
     dialogPointerDown(e, pt);
     return;
+  }
+  if (mode === 'birthday' && birthday.phase === 'keypad' && game) {
+    if (birthday.onPointer(pt.x, pt.y, game)) {
+      e.preventDefault();
+      return;
+    }
   }
   if (pause.open && game) {
     const { handled, result } = pause.handlePointerDown(pt.x, pt.y, game);
@@ -452,7 +479,7 @@ async function confirmLeave() {
   // a loading overlay (busy, no input) falls back to the browser's confirm.
   const inGame = !(dialog.active && dialog.mode === 'loading');
   if (!inGame) return window.confirm(LEAVE_QUESTION);
-  const subtitle = game && (mode === 'room' || mode === 'hallway' || mode === 'ending') ? QUIT_SUBTITLE
+  const subtitle = game && (mode === 'room' || mode === 'hallway' || mode === 'birthday' || mode === 'ending') ? QUIT_SUBTITLE
     : mode === 'setup' ? 'Custom Setup answers are not saved' : '';
   suspendInput();
   return dialog.confirmOver(LEAVE_QUESTION, { title: 'Leave the game?', subtitle });
@@ -486,6 +513,10 @@ window.addEventListener('keydown', async (e) => {
     return;
   }
 
+  if (mode === 'birthday' && birthday.phase === 'keypad' && game) {
+    if (birthday.onKey(e, game)) return;
+  }
+
   if (pause.open) {
     applyPauseResult(pause.handleKey(e, game));
     if (!pause.open) canvas.style.cursor = '';
@@ -497,6 +528,7 @@ window.addEventListener('keydown', async (e) => {
     if (ending.done) {
       room.leave();
       hallway.leave();
+      birthday.leave();
       startTitle();
     }
     return;
@@ -505,14 +537,16 @@ window.addEventListener('keydown', async (e) => {
   if (booting || interacting) return;
 
   // Esc / Menu opens pause map/charts during play
-  if (KEYS.cancel.includes(e.key) && (mode === 'room' || mode === 'hallway') && game) {
+  if (KEYS.cancel.includes(e.key) && (mode === 'room' || mode === 'hallway' || mode === 'birthday') && game) {
     // A trusted Escape exits OS fullscreen; do not also open pause on that keypress.
     // Synthetic Escape from the on-screen Menu button must still open pause in
     // OS fullscreen and in the iOS viewport-fill fallback (is-max-fill).
     if (isOsFullscreen() && e.isTrusted && e.key === 'Escape') return;
+    if (mode === 'birthday' && birthday.phase === 'keypad') return;
     e.preventDefault();
     if (mode === 'room') room.setInputBlocked(true);
-    else hallway.setInputBlocked(true);
+    else if (mode === 'hallway') hallway.setInputBlocked(true);
+    else birthday.setInputBlocked(true);
     pause.show(game, dialog);
     return;
   }
@@ -533,6 +567,7 @@ window.addEventListener('keydown', async (e) => {
       let nav = null;
       if (mode === 'room') nav = await room.tryInteract(game, dialog);
       else if (mode === 'hallway') nav = await hallway.tryInteract(game, dialog);
+      else if (mode === 'birthday') nav = await birthday.tryInteract(game, dialog);
       // An erased timeline must not stay selected on the Pause Map or in Compare.
       if (nav?.timelineErased) pause.forgetTimelineSelection();
       if (nav?.goto) await transition(nav.goto, nav.arrival);
@@ -546,16 +581,25 @@ async function transition(to, arrival = null) {
   debugLog('scene', { to, from: mode });
   if (to === 'hallway') {
     room.leave();
+    birthday.leave();
     mode = 'hallway';
     hallway.enter(game);
     game.scene = 'hallway';
+  } else if (to === 'birthday') {
+    room.leave();
+    hallway.leave();
+    mode = 'birthday';
+    birthday.enter(game);
+    game.scene = 'birthday';
   } else if (to === 'room') {
     hallway.leave();
+    birthday.leave();
     mode = 'room';
     room.enter(game, true, arrival);
     game.scene = 'room';
   } else if (to === 'ending') {
     hallway.leave();
+    birthday.leave();
     mode = 'ending';
     ending.enter(game);
     game.scene = 'ending';
@@ -581,7 +625,8 @@ function syncVirtualPad() {
     !dialog.active &&
     !pause.open &&
     !interacting &&
-    (mode === 'room' || (mode === 'hallway' && hallway.ready));
+    (mode === 'room' || (mode === 'hallway' && hallway.ready)
+      || (mode === 'birthday' && (birthday.phase === 'hub' || birthday.phase === 'puzzle')));
   virtualPad.setLayout({ discrete, showRun: walking });
 }
 
@@ -589,6 +634,7 @@ function updateScene() {
   if (mode === 'title') title.update();
   else if (mode === 'room' && game && !pause.open) room.update(game, dialog);
   else if (mode === 'hallway' && game && !pause.open) hallway.update(game, dialog);
+  else if (mode === 'birthday' && game && !pause.open) birthday.update(game, dialog);
   else if (mode === 'ending') ending.update();
 }
 
@@ -610,6 +656,8 @@ function loop(now) {
     setup.draw(ctx);
   } else if (mode === 'room' && game) {
     room.render(ctx, game);
+  } else if (mode === 'birthday' && game) {
+    birthday.render(ctx, game);
   } else if (mode === 'hallway' && game) {
     hallway.render(ctx, game);
     if (
@@ -663,6 +711,18 @@ function loop(now) {
 
   requestAnimationFrame(loop);
 }
+
+
+/** Read-only test/debug handle (playwright / console). Not used by gameplay. */
+globalThis.__ctiw = {
+  get mode() { return mode; },
+  get game() { return game; },
+  get birthday() { return birthday; },
+  get room() { return room; },
+  get hallway() { return hallway; },
+  get dialog() { return dialog; },
+  enterLoadedGame,
+};
 
 requestAnimationFrame(loop);
 initializeSaves().then(() => startTitle()).catch((err) => {
