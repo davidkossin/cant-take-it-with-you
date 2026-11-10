@@ -211,16 +211,20 @@ export class TitleScene {
    */
   /** Menu entry handler: open the picker now, then close the menu if a file was chosen. */
   pickFileFromMenu(dialog) {
-    if (this._pickingFile) return;
+    // A still-pending pick (iOS cancelled without a cancel event) must not
+    // swallow a second tap. A new gesture starts a new pick and aborts the old one.
+    const generation = (this._pickGeneration = (this._pickGeneration || 0) + 1);
     this._pickingFile = true;
     this._pickedFile = null;
     const finish = (picked) => {
+      if (generation !== this._pickGeneration) return;
       this._pickingFile = false;
       if (!picked) return; // cancelled: stay on the start menu
       this._pickedFile = picked;
       dialog.close('loadFile');
     };
-    // loadFromFile() calls the file input's click() synchronously, inside this handler.
+    // loadFromFile() calls the file input's click() inside this handler (or
+    // on the touch release — see withUserGesture).
     loadFromFile().then((loaded) => finish(loaded ? { loaded } : null), (error) => finish({ error }));
   }
 

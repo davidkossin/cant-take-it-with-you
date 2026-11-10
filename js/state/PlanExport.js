@@ -440,30 +440,97 @@ export function pickPlanFile() { return pickJsonFile(importPlan); }
 /** Plan (with or without profiles) or profiles-only file; null on cancel. */
 export function pickSaveFile() { return pickJsonFile(importSaveFile); }
 
+/**
+ * Open a file picker and parse the chosen file. Resolves null if cancelled.
+ *
+ * iOS Safari often fires `focus` when the Files app opens or when the tab
+ * comes back, *before* it delivers `change` (and sometimes while the player
+ * is still picking). A short "no files means cancel" timer was settling the
+ * promise as cancelled and removing the input, so the later `change` never
+ * ran and the title menu just sat there. Do not treat `focus` alone as
+ * cancel. Use the `cancel` event, and only after the document has actually
+ * been hidden and shown again wait long enough for `change` to arrive.
+ * A new pick aborts a still-pending one so a second tap is not swallowed.
+ */
+let activePickAbort = null;
+
 function pickJsonFile(parse) {
   return new Promise((resolve, reject) => {
+    activePickAbort?.();
     const input = document.createElement('input');
-    input.type = 'file'; input.accept = '.json,application/json';
-    input.style.display = 'none'; document.body.append(input);
+    input.type = 'file';
+    // Chat / iOS downloads often land as .txt or text/plain (sometimes .json.txt).
+    // accept is a hint; the parser still requires valid JSON.
+    input.accept = '.json,.txt,application/json,text/plain';
+    input.setAttribute('aria-hidden', 'true');
+    input.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;';
+    document.body.append(input);
+
     let settled = false;
-    const finish = value => {
-      if (settled) return;
-      settled = true; window.removeEventListener('focus', onFocus); input.remove(); resolve(value);
+    let wasHidden = document.hidden || document.visibilityState === 'hidden';
+    let cancelTimer = 0;
+    const CANCEL_GRACE_MS = 2000;
+
+    const cleanup = () => {
+      window.clearTimeout(cancelTimer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      input.remove();
+      if (activePickAbort === abort) activePickAbort = null;
     };
-    const onFocus = () => setTimeout(() => { if (!input.files?.length) finish(null); }, 400);
-    input.oncancel = () => finish(null);
-    input.onchange = async () => {
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error(error?.message || 'This save file could not be loaded.'));
+    };
+    const abort = () => finish(null);
+    activePickAbort = abort;
+
+    const readChosenFile = async () => {
       const file = input.files?.[0];
       if (!file) { finish(null); return; }
       try {
+        if (!file.size) throw new Error('This save file is empty.');
         if (file.size > MAX_IMPORT_BYTES) throw new Error('Choose a JSON plan file smaller than 50 MiB.');
-        finish(parse(await file.text()));
+        const text = await file.text();
+        if (!String(text).trim()) throw new Error('This save file is empty.');
+        finish(parse(text));
       } catch (error) {
-        settled = true; window.removeEventListener('focus', onFocus); input.remove(); reject(error);
+        fail(error);
       }
     };
+
+    const onVisibility = () => {
+      if (document.hidden || document.visibilityState === 'hidden') {
+        wasHidden = true;
+        window.clearTimeout(cancelTimer);
+        return;
+      }
+      if (!wasHidden) return;
+      // Tab was in the background (typical Files-app handoff) and is visible
+      // again. Give Safari time to populate input.files and fire change
+      // before treating this as a cancel.
+      window.clearTimeout(cancelTimer);
+      cancelTimer = window.setTimeout(() => {
+        if (settled) return;
+        if (document.hidden || document.visibilityState === 'hidden') return;
+        if (input.files?.length) { void readChosenFile(); return; }
+        finish(null);
+      }, CANCEL_GRACE_MS);
+    };
+
+    input.addEventListener('cancel', () => finish(null));
+    input.addEventListener('change', () => { void readChosenFile(); });
+    document.addEventListener('visibilitychange', onVisibility);
+
     // A touch tap opens the chooser from its release (see UserGesture.js).
-    withUserGesture(() => { window.addEventListener('focus', onFocus); input.click(); return true; })
-      .then(opened => { if (!opened) finish(null); }, error => { settled = true; input.remove(); reject(error); });
+    withUserGesture(() => { input.click(); return true; })
+      .then((opened) => { if (!opened) finish(null); }, fail);
   });
 }
