@@ -1,7 +1,7 @@
 import { PALETTE, FRAME_W, FRAME_H, TILE, WORLD_SCALE } from '../config.js';
 import { autoSave, deleteSave, flushSaves, getSaveStatus, hasSaves, listSaves, loadSave, loadStoredRecord } from '../state/SaveSystem.js';
 import { openAiProfilePanel } from '../ui/AiProfilePanel.js';
-import { exportPlan, pickSaveFile, saveFileName, saveTextToDisk } from '../state/PlanExport.js';
+import { exportPlan, interruptedFilePickMessage, pickSaveFile, saveFileName, saveTextToDisk } from '../state/PlanExport.js';
 import {
   loadFromFile,
   loadedFileMessage,
@@ -47,6 +47,10 @@ export class TitleScene {
   }
 
   async runMenu(dialog) {
+    const interrupted = interruptedFilePickMessage();
+    if (interrupted) {
+      await dialog.show(interrupted, { title: 'Load from File' });
+    }
     while (true) {
       // Rebuild the title menu after save/profile management so dependent
       // entries disappear immediately when the final entry is deleted.

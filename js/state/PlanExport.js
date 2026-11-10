@@ -443,49 +443,97 @@ export function pickSaveFile() { return pickJsonFile(importSaveFile); }
 /**
  * Open a file picker and parse the chosen file. Resolves null if cancelled.
  *
- * iOS Safari often fires `focus` when the Files app opens or when the tab
- * comes back, *before* it delivers `change` (and sometimes while the player
- * is still picking). A short "no files means cancel" timer was settling the
- * promise as cancelled and removing the input, so the later `change` never
- * ran and the title menu just sat there. Do not treat `focus` alone as
- * cancel. Use the `cancel` event, and only after the document has actually
- * been hidden and shown again wait long enough for `change` to arrive.
- * A new pick aborts a still-pending one so a second tap is not swallowed.
+ * On a phone the browser backgrounds this tab for the system file picker and
+ * fires `focus` / `visibilitychange` when it returns, often *before* it
+ * delivers `change` — or it fills `input.files` without a `change` event.
+ * A short "no files means cancel" timer used to settle the promise as
+ * cancelled and remove the input, so the later `change` never ran and the
+ * menu just sat there.
+ *
+ * Do not treat focus or a brief visibility flicker as cancel. Wait for
+ * `change`, the `cancel` event, a new pick (which aborts this one), or
+ * `input.files` being populated after the tab is visible again. The file is
+ * read as text regardless of its name or MIME type (a Downloads pick may
+ * have no extension, an empty type, or application/octet-stream).
+ *
+ * If the browser discards the page while the picker is open, a sessionStorage
+ * flag lets the title menu explain that the load did not finish.
  */
+const PICK_FLAG = 'ctiw-pending-file-pick';
+
+function markPickStarted() {
+  try { sessionStorage.setItem(PICK_FLAG, '1'); } catch { /* private mode */ }
+}
+
+function markPickSettled() {
+  try { sessionStorage.removeItem(PICK_FLAG); } catch { /* ignore */ }
+}
+
+/** Message if the page reloaded mid-pick; otherwise null. Clears the flag. */
+export function interruptedFilePickMessage() {
+  try {
+    if (sessionStorage.getItem(PICK_FLAG)) {
+      sessionStorage.removeItem(PICK_FLAG);
+      return 'The save file was not loaded because the page refreshed when the file picker closed. Please choose Load from File again.';
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 let activePickAbort = null;
+
+function readFileText(file) {
+  if (typeof file.text === 'function') {
+    return Promise.resolve().then(() => file.text()).catch(() => readFileWithReader(file));
+  }
+  return readFileWithReader(file);
+}
+
+function readFileWithReader(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('This save file could not be read.'));
+    reader.readAsText(file);
+  });
+}
 
 function pickJsonFile(parse) {
   return new Promise((resolve, reject) => {
     activePickAbort?.();
     const input = document.createElement('input');
     input.type = 'file';
-    // Chat / iOS downloads often land as .txt or text/plain (sometimes .json.txt).
-    // accept is a hint; the parser still requires valid JSON.
-    input.accept = '.json,.txt,application/json,text/plain';
+    // No accept filter: Android Chrome / Downloads / content:// picks often
+    // have no extension, an empty type, or application/octet-stream. The
+    // parser still requires valid JSON.
     input.setAttribute('aria-hidden', 'true');
     input.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;';
     document.body.append(input);
+    try { input.value = ''; } catch { /* ignore */ }
 
     let settled = false;
-    let wasHidden = document.hidden || document.visibilityState === 'hidden';
-    let cancelTimer = 0;
-    const CANCEL_GRACE_MS = 2000;
+    let pollTimer = 0;
+    const stopPolling = () => { window.clearInterval(pollTimer); pollTimer = 0; };
 
     const cleanup = () => {
-      window.clearTimeout(cancelTimer);
+      stopPolling();
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onVisibility);
+      window.removeEventListener('resize', onResize);
       input.remove();
       if (activePickAbort === abort) activePickAbort = null;
     };
     const finish = (value) => {
       if (settled) return;
       settled = true;
+      markPickSettled();
       cleanup();
       resolve(value);
     };
     const fail = (error) => {
       if (settled) return;
       settled = true;
+      markPickSettled();
       cleanup();
       reject(error instanceof Error ? error : new Error(error?.message || 'This save file could not be loaded.'));
     };
@@ -494,11 +542,12 @@ function pickJsonFile(parse) {
 
     const readChosenFile = async () => {
       const file = input.files?.[0];
-      if (!file) { finish(null); return; }
+      if (!file) return;
+      stopPolling();
       try {
         if (!file.size) throw new Error('This save file is empty.');
         if (file.size > MAX_IMPORT_BYTES) throw new Error('Choose a JSON plan file smaller than 50 MiB.');
-        const text = await file.text();
+        const text = await readFileText(file);
         if (!String(text).trim()) throw new Error('This save file is empty.');
         finish(parse(text));
       } catch (error) {
@@ -506,29 +555,39 @@ function pickJsonFile(parse) {
       }
     };
 
+    const startPollingForFile = () => {
+      if (settled || pollTimer) return;
+      let ticks = 0;
+      pollTimer = window.setInterval(() => {
+        if (settled) { stopPolling(); return; }
+        if (input.files?.length) { stopPolling(); void readChosenFile(); return; }
+        ticks += 1;
+        // Stop polling after 20s; keep the input and listeners for change / cancel / a retry.
+        if (ticks > 200) stopPolling();
+      }, 100);
+    };
+
     const onVisibility = () => {
-      if (document.hidden || document.visibilityState === 'hidden') {
-        wasHidden = true;
-        window.clearTimeout(cancelTimer);
-        return;
-      }
-      if (!wasHidden) return;
-      // Tab was in the background (typical Files-app handoff) and is visible
-      // again. Give Safari time to populate input.files and fire change
-      // before treating this as a cancel.
-      window.clearTimeout(cancelTimer);
-      cancelTimer = window.setTimeout(() => {
-        if (settled) return;
-        if (document.hidden || document.visibilityState === 'hidden') return;
-        if (input.files?.length) { void readChosenFile(); return; }
-        finish(null);
-      }, CANCEL_GRACE_MS);
+      // pagehide / hidden must not cancel — that is the file picker opening.
+      if (document.hidden || document.visibilityState === 'hidden') return;
+      if (input.files?.length) { void readChosenFile(); return; }
+      startPollingForFile();
+    };
+
+    // Android Chrome resizes the viewport when the address bar or keyboard
+    // moves; that must not drop the input or its handlers.
+    const onResize = () => {
+      if (settled) return;
+      if (input.isConnected === false) document.body.append(input);
     };
 
     input.addEventListener('cancel', () => finish(null));
     input.addEventListener('change', () => { void readChosenFile(); });
     document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onVisibility);
+    window.addEventListener('resize', onResize);
 
+    markPickStarted();
     // A touch tap opens the chooser from its release (see UserGesture.js).
     withUserGesture(() => { input.click(); return true; })
       .then((opened) => { if (!opened) finish(null); }, fail);

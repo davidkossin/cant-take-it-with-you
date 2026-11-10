@@ -11,7 +11,7 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 ## [Unreleased]
 
 ### Fixed
-- Load from File no longer silently does nothing after you pick a file on iPhone. iOS was treating the return from the Files app as a cancelled picker (and dropping a file saved as .txt). A file that cannot be read now shows an error message.
+- Load from File no longer silently does nothing after you pick a file on a phone. Returning from the system picker used to be treated as a cancelled load (before the file was delivered), and files with no extension, a .txt name, or an odd type were easy to drop. A file that cannot be read, or a load interrupted because the page refreshed, now shows an error message.
 
 ### Added
 - Birthday cats use David's 21×21 reference sprites for side sit/walk (mirrored for left), plus new matching up and down sit/walk frames (front to the camera, or back with the tail visible).
