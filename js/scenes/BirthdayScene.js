@@ -501,16 +501,29 @@ export class BirthdayScene {
         ctx.fillStyle = colors[state];
         ctx.fillRect(sx + 3, sy + 3, obj.w - 6, obj.h - 6);
         // Labels sit on the cream floor, so give them a dark plate like the READ signs.
+        // Size the plate from glyph metrics plus padding so descenders stay inside.
         const label = PUZZLE2.labels[state].slice(0, 8);
         ctx.font = '5px ' + FONT;
         ctx.textAlign = 'center';
+        ctx.textBaseline = 'alphabetic';
+        let ascent = 0, descent = 0;
+        for (const raw of PUZZLE2.labels) {
+          const mm = ctx.measureText(raw.slice(0, 8));
+          ascent = Math.max(ascent, Math.ceil(mm.actualBoundingBoxAscent || mm.fontBoundingBoxAscent || 5));
+          descent = Math.max(descent, Math.ceil(mm.actualBoundingBoxDescent || mm.fontBoundingBoxDescent || 1));
+        }
+        const m = ctx.measureText(label);
+        const tw = Math.ceil(Math.max(
+          m.width,
+          (m.actualBoundingBoxLeft || 0) + (m.actualBoundingBoxRight || 0),
+        ));
+        const padX = 3, padY = 2;
+        const pw = tw + padX * 2;
+        const plateH = ascent + descent + padY * 2;
         const lx = sx + obj.w / 2;
-        const ly = sy + obj.h + 8;
-        const tw = ctx.measureText(label).width;
-        const padX = 3, plateH = 9;
-        const px = Math.round(lx - tw / 2 - padX);
-        const py = Math.round(ly - 6);
-        const pw = Math.round(tw + padX * 2);
+        const py = Math.round(sy + obj.h + 2);
+        const px = Math.round(lx - pw / 2);
+        const ly = py + padY + ascent;
         ctx.fillStyle = '#2a2018';
         ctx.fillRect(px, py, pw, plateH);
         ctx.strokeStyle = '#100c08';

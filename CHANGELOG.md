@@ -11,7 +11,7 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 ## [Unreleased]
 
 ### Fixed
-- Birthday puzzle 2 (Cat Bowls) labels are drawn on a dark outlined plate so they stay readable on the cream floor tiles (they used to be cream text on cream tiles).
+- Birthday puzzle 2 (Cat Bowls) labels are drawn on a dark outlined plate so they stay readable on the cream floor tiles (they used to be cream text on cream tiles). The plate is sized from the font metrics with padding above and below so the full glyphs, including descenders, sit inside and are vertically centered.
 - Load from File no longer silently does nothing after you pick a file on a phone. Returning from the system picker used to be treated as a cancelled load (before the file was delivered), and files with no extension, a .txt name, or an odd type were easy to drop. A file that cannot be read, or a load interrupted because the page refreshed, now shows an error message.
 
 ### Added
