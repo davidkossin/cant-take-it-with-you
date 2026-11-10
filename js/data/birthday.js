@@ -128,20 +128,76 @@ export const PUZZLE2 = {
 };
 
 /**
- * Puzzle 3: push three gift crates onto the pressure plates that match
- * the wall pattern (plates that should be occupied).
- * Plate grid is 3 wide; true = needs a gift on it.
- * Pattern (row-major, top row first): center of each row → plates 1, 4, 7
- * Using a simpler 3-plate row: left, center-right targets.
+ * Puzzle 3: sokoban-style room. Push three colored gift crates onto the
+ * three plates named in the wall riddle. Layout legend:
+ *   # wall   . floor   = sill (player can walk, crates cannot)
+ *   W/M/P window, mid, and plant plates   R/G/B red, gold, blue gifts
+ *   @ player spawn
+ * Assignment (from the riddle, not shown in the map):
+ *   Blue -> Window, Gold -> Mid, Red -> Plant.
  */
 export const PUZZLE3 = {
   id: 3,
   title: 'Birthday Gifts',
-  /** Which of the 3 plates (L, C, R) must have a gift. */
-  platesNeeded: [true, false, true],
-  hint: 'The poster shows gifts on the LEFT and RIGHT plates — not the middle.',
+  gifts: {
+    R: { id: 'red', name: 'Red', letter: 'R', wrap: '#b43232', ribbon: '#e8c84a', ink: '#f0e8c8' },
+    G: { id: 'gold', name: 'Gold', letter: 'G', wrap: '#c4a030', ribbon: '#6a3030', ink: '#2a2018' },
+    B: { id: 'blue', name: 'Blue', letter: 'B', wrap: '#30506a', ribbon: '#f0e8c8', ink: '#f0e8c8' },
+  },
+  plates: {
+    W: { id: 'window', name: 'Window', needs: 'blue' },
+    M: { id: 'mid', name: 'Mid', needs: 'gold' },
+    P: { id: 'plant', name: 'Plant', needs: 'red' },
+  },
+  riddle: [
+    "The red gift isn't next to the window.",
+    'The gold gift isn\'t next to the plant.',
+    'The blue gift is left of the gold gift.',
+  ].join('\n\n'),
+  layout: [
+    '####################',
+    '####################',
+    '####W..M#P.....#####',
+    '#####..###.....#####',
+    '####.G....#....#####',
+    '####......#B...#####',
+    '####...R.......#####',
+    '####...........#####',
+    '##########.#########',
+    '#==================#',
+    '#==================#',
+    '#=========@========#',
+    '#==================#',
+    '####################',
+  ],
   success: 'A sealed note appears.',
 };
+
+/** Parse PUZZLE3.layout into walls, sills, plates, gifts, and spawn (tile units). */
+export function parsePuzzle3Layout(layout = PUZZLE3.layout) {
+  const walls = [];
+  const sills = [];
+  const plates = [];
+  const gifts = [];
+  let spawn = { tx: 10, ty: 11 };
+  const rows = layout.length;
+  const cols = layout[0].length;
+  for (let ty = 0; ty < rows; ty++) {
+    for (let tx = 0; tx < layout[ty].length; tx++) {
+      const c = layout[ty][tx];
+      if (c === '#') walls.push({ tx, ty });
+      else if (c === '=' || c === '@') sills.push({ tx, ty });
+      if (PUZZLE3.plates[c]) {
+        plates.push({ tx, ty, ...PUZZLE3.plates[c] });
+      }
+      if (PUZZLE3.gifts[c]) {
+        gifts.push({ tx, ty, ...PUZZLE3.gifts[c] });
+      }
+      if (c === '@') spawn = { tx, ty };
+    }
+  }
+  return { cols, rows, walls, sills, plates, gifts, spawn };
+}
 
 /** Cats present in the Decision Room during the birthday instance. */
 export const BIRTHDAY_CATS = [

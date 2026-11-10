@@ -3,6 +3,7 @@
  * and three puzzle rooms. Uses the Decision Room theme so drawWorld works.
  */
 import { TILE } from '../config.js';
+import { PUZZLE3, parsePuzzle3Layout } from '../data/birthday.js';
 
 function blankRoom(cols = 20, rows = 14) {
   const map = [];
@@ -152,38 +153,73 @@ export function buildPuzzle2Room() {
   return world;
 }
 
-/** Puzzle 3: three plates + three pushable gifts + hint + reset + final note. */
+/** Puzzle 3: sokoban yard + south hall with riddle, reset, and the sealed note. */
 export function buildPuzzle3Room() {
-  const world = blankRoom();
-  openSouth(world.map, world.rows, 9);
-  const plate = (id, i, tx) => ({
-    id, kind: 'plate', plateIndex: i, label: `Plate ${['L', 'C', 'R'][i]}`,
-    x: tx * TILE, y: 5 * TILE, w: TILE + 4, h: TILE + 4,
-  });
+  const parsed = parsePuzzle3Layout();
+  const { cols, rows, sills, plates, gifts, spawn } = parsed;
+  const map = [];
+  for (let y = 0; y < rows; y++) {
+    const row = [];
+    for (let x = 0; x < cols; x++) row.push('square');
+    map.push(row);
+  }
+  for (const w of parsed.walls) map[w.ty][w.tx] = 'wall';
+  openSouth(map, rows, 9);
+  const noCrate = new Set(sills.map((s) => `${s.tx},${s.ty}`));
+  // Door opening on the south wall is also a sill so a crate cannot block the exit.
+  noCrate.add(`${9},${rows - 1}`);
+  noCrate.add(`${10},${rows - 1}`);
+
+  const world = {
+    cols, rows, map,
+    interactables: [],
+    rug: null,
+    spawn: { x: spawn.tx * TILE + 2, y: spawn.ty * TILE + 2 },
+    width: cols * TILE,
+    height: rows * TILE,
+    theme: 'room',
+    birthday: true,
+    puzzle: 3,
+    noCrate,
+  };
+
+  for (const p of plates) {
+    world.interactables.push({
+      id: `plate-${p.id}`,
+      kind: 'plate',
+      plateId: p.id,
+      needs: p.needs,
+      label: p.name,
+      tx: p.tx,
+      ty: p.ty,
+      x: p.tx * TILE,
+      y: p.ty * TILE,
+      w: TILE,
+      h: TILE,
+    });
+  }
   world.interactables.push(
-    plate('plate-0', 0, 5),
-    plate('plate-1', 1, 9),
-    plate('plate-2', 2, 13),
-    { id: 'hint-3', kind: 'plaque', label: 'Read poster',
-      x: 5 * TILE, y: 2 * TILE, w: 10 * TILE, h: 20,
-      text: 'Poster: gifts on the\nLEFT and RIGHT plates.\nNot the middle.' },
+    { id: 'hint-3', kind: 'plaque', label: 'Read riddle',
+      x: 2 * TILE, y: 10 * TILE, w: 6 * TILE, h: 20,
+      text: PUZZLE3.riddle },
     { id: 'reset-3', kind: 'reset', label: 'Reset puzzle',
-      x: 1 * TILE + 4, y: 10 * TILE, w: 28, h: 20 },
+      x: 1 * TILE + 4, y: 12 * TILE, w: 28, h: 20 },
     { id: 'reveal-3', kind: 'reveal', label: 'Read sealed note',
-      x: 16 * TILE, y: 3 * TILE, w: 28, h: 24, puzzle: 3 },
+      x: 16 * TILE, y: 10 * TILE, w: 28, h: 24, puzzle: 3 },
     {
       id: 'door-back',
-      x: 9 * TILE, y: (world.rows - 1) * TILE - 4, w: 2 * TILE, h: 20,
+      x: 9 * TILE, y: (rows - 1) * TILE - 4, w: 2 * TILE, h: 20,
       label: 'Back to doors', kind: 'south-door', facing: 'h', doorStyle: 'beige',
     },
+    { id: 'decor-plant-3', kind: 'decor', decor: 'plant',
+      x: 10 * TILE + 1, y: 1 * TILE + 1, w: 18, h: 18 },
   );
-  // Pushable gifts start south of the plates
-  world.gifts = [
-    { id: 'gift-0', x: 5 * TILE, y: 9 * TILE, w: 14, h: 14 },
-    { id: 'gift-1', x: 9 * TILE, y: 9 * TILE, w: 14, h: 14 },
-    { id: 'gift-2', x: 13 * TILE, y: 9 * TILE, w: 14, h: 14 },
-  ];
-  world.spawn = { x: 10 * TILE - 6, y: 11 * TILE };
-  world.puzzle = 3;
+  world.gifts = gifts.map((g) => ({
+    ...g,
+    x: g.tx * TILE,
+    y: g.ty * TILE,
+    w: TILE,
+    h: TILE,
+  }));
   return world;
 }

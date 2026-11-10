@@ -170,21 +170,16 @@ export class BirthdayScene {
       this.player.inputEnabled = true;
     }
 
-    // Puzzle 3: push gifts
+    // Puzzle 3: tile-based crate pushes (one tile per bump).
     const giftBoxes = this.puzzleId === 3 ? this.gifts : [];
 
     this.player.update((x, y, w, h) => {
       if (isSolid(this.world, x, y, w, h)) return true;
       for (const g of giftBoxes) {
         if (overlaps(x, y, w, h, g.x, g.y, g.w, g.h)) {
-          // Try to push the gift in the movement direction.
           const dx = x - this.player.x;
           const dy = y - this.player.y;
-          const gx = g.x + Math.sign(dx) * Math.min(Math.abs(dx), 2);
-          const gy = g.y + Math.sign(dy) * Math.min(Math.abs(dy), 2);
-          if (this._giftBlocked(g, gx, gy, giftBoxes)) return true;
-          g.x = gx;
-          g.y = gy;
+          if (!this._tryPushGift(g, dx, dy, giftBoxes)) return true;
           this._checkPuzzle3Solve(game);
           return false;
         }
@@ -201,11 +196,30 @@ export class BirthdayScene {
     return null;
   }
 
-  _giftBlocked(self, x, y, gifts) {
-    if (isSolid(this.world, x, y, self.w, self.h)) return true;
+  /** Push `gift` one tile if the bump is head-on and the destination is free. */
+  _tryPushGift(gift, dx, dy, gifts) {
+    let pdx = 0, pdy = 0;
+    if (Math.abs(dx) >= Math.abs(dy) && dx !== 0) pdx = Math.sign(dx);
+    else if (dy !== 0) pdy = Math.sign(dy);
+    else return false;
+    const destTx = gift.tx + pdx;
+    const destTy = gift.ty + pdy;
+    if (this._giftTileBlocked(destTx, destTy, gift, gifts)) return false;
+    gift.tx = destTx;
+    gift.ty = destTy;
+    gift.x = destTx * TILE;
+    gift.y = destTy * TILE;
+    return true;
+  }
+
+  _giftTileBlocked(tx, ty, self, gifts) {
+    if (!this.world) return true;
+    if (ty < 0 || tx < 0 || ty >= this.world.rows || tx >= this.world.cols) return true;
+    const t = this.world.map[ty][tx];
+    if (t === 'wall' || t === 'wallPurple' || t === 'void') return true;
+    if (this.world.noCrate && this.world.noCrate.has(`${tx},${ty}`)) return true;
     for (const g of gifts) {
-      if (g === self) continue;
-      if (overlaps(x, y, self.w, self.h, g.x, g.y, g.w, g.h)) return true;
+      if (g !== self && g.tx === tx && g.ty === ty) return true;
     }
     return false;
   }
@@ -234,14 +248,12 @@ export class BirthdayScene {
   }
 
   _checkPuzzle3Solve(game) {
-    const needed = PUZZLE3.platesNeeded;
     const plates = this.world.interactables.filter((o) => o.kind === 'plate');
-    let ok = true;
-    for (let i = 0; i < plates.length; i++) {
-      const p = plates[i];
-      const has = this.gifts.some((g) => overlaps(g.x, g.y, g.w, g.h, p.x, p.y, p.w, p.h));
-      if (has !== !!needed[i]) { ok = false; break; }
-    }
+    if (plates.length < 3) return;
+    const ok = plates.every((p) => {
+      const g = this.gifts.find((box) => box.tx === p.tx && box.ty === p.ty);
+      return g && g.id === p.needs;
+    });
     if (ok) this._solvePuzzle(game, 3);
   }
 
@@ -532,11 +544,16 @@ export class BirthdayScene {
         ctx.fillStyle = '#f0e8c8';
         ctx.fillText(label, lx, ly);
       } else if (obj.kind === 'plate') {
-        const needed = PUZZLE3.platesNeeded[obj.plateIndex];
-        ctx.fillStyle = needed ? '#4a3a2a' : '#2a2a32';
+        ctx.fillStyle = '#3a3228';
         ctx.fillRect(sx, sy, obj.w, obj.h);
         ctx.strokeStyle = '#c4a030';
-        ctx.strokeRect(sx, sy, obj.w, obj.h);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sx + 0.5, sy + 0.5, obj.w - 1, obj.h - 1);
+        // "Window" / "Plant" sit on the wall above the pad, with the same
+        // contrast plate used for the Cat Bowls labels. Mid is unlabeled.
+        if (obj.plateId === 'window' || obj.plateId === 'plant') {
+          this._drawFloorLabel(ctx, sx + obj.w / 2, sy - 12, obj.label);
+        }
       } else if (obj.kind === 'plaque' || obj.kind === 'reset' || obj.kind === 'reveal') {
         ctx.fillStyle = obj.kind === 'reset' ? '#6a3030' : obj.kind === 'reveal' ? '#30506a' : '#5a4a30';
         ctx.fillRect(sx, sy, obj.w, obj.h);
@@ -547,14 +564,29 @@ export class BirthdayScene {
         ctx.fillText(tag, sx + obj.w / 2, sy + obj.h / 2 + 2);
       }
     }
+    // West-wall window, immediately left of the Window plate (puzzle 3).
+    if (this.puzzleId === 3) {
+      this._drawWindow(ctx, 3 * TILE - camX, 1 * TILE - camY);
+    }
     // Gifts
     for (const g of this.gifts) {
       const sx = g.x - camX, sy = g.y - camY;
-      ctx.fillStyle = '#b43232';
+      ctx.fillStyle = g.wrap || '#b43232';
       ctx.fillRect(sx, sy, g.w, g.h);
-      ctx.fillStyle = '#e8c84a';
-      ctx.fillRect(sx + 5, sy, 4, g.h);
-      ctx.fillRect(sx, sy + 5, g.w, 4);
+      ctx.strokeStyle = '#100c08';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx + 0.5, sy + 0.5, g.w - 1, g.h - 1);
+      ctx.fillStyle = g.ribbon || '#e8c84a';
+      const band = 4;
+      ctx.fillRect(sx + (g.w - band) / 2, sy, band, g.h);
+      ctx.fillRect(sx, sy + (g.h - band) / 2, g.w, band);
+      if (g.letter) {
+        ctx.font = '6px ' + FONT;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = g.ink || '#f0e8c8';
+        ctx.fillText(g.letter, sx + g.w / 2, sy + g.h / 2 + 1);
+      }
     }
     // Solved banner hint
     if (this.puzzleId && b.solved[this.puzzleId]) {
@@ -661,6 +693,47 @@ export class BirthdayScene {
   }
 
   wantsGlassWallMessage() { return false; }
+
+  _drawFloorLabel(ctx, cx, topY, text) {
+    ctx.font = '5px ' + FONT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    const m = ctx.measureText(text);
+    const ascent = Math.ceil(m.actualBoundingBoxAscent || m.fontBoundingBoxAscent || 5);
+    const descent = Math.ceil(m.actualBoundingBoxDescent || m.fontBoundingBoxDescent || 1);
+    const tw = Math.ceil(Math.max(
+      m.width,
+      (m.actualBoundingBoxLeft || 0) + (m.actualBoundingBoxRight || 0),
+    ));
+    const padX = 3, padY = 2;
+    const pw = tw + padX * 2;
+    const plateH = ascent + descent + padY * 2;
+    const py = Math.round(topY);
+    const px = Math.round(cx - pw / 2);
+    const ly = py + padY + ascent;
+    ctx.fillStyle = '#2a2018';
+    ctx.fillRect(px, py, pw, plateH);
+    ctx.strokeStyle = '#100c08';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, plateH - 1);
+    ctx.fillStyle = '#f0e8c8';
+    ctx.fillText(text, cx, ly);
+  }
+
+  _drawWindow(ctx, x, y) {
+    // Two tiles tall, one tile wide, cream panes in a wood frame.
+    ctx.fillStyle = '#5a4a30';
+    ctx.fillRect(x + 1, y + 2, 14, 28);
+    ctx.fillStyle = '#c8d8e8';
+    ctx.fillRect(x + 3, y + 4, 4, 10);
+    ctx.fillRect(x + 9, y + 4, 4, 10);
+    ctx.fillRect(x + 3, y + 16, 4, 10);
+    ctx.fillRect(x + 9, y + 16, 4, 10);
+    ctx.strokeStyle = '#2a2018';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 1.5, y + 2.5, 13, 27);
+  }
+
 }
 
 function overlaps(ax, ay, aw, ah, bx, by, bw, bh) {
