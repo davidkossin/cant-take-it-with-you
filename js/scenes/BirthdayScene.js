@@ -500,11 +500,24 @@ export class BirthdayScene {
         ctx.fillRect(sx, sy, obj.w, obj.h);
         ctx.fillStyle = colors[state];
         ctx.fillRect(sx + 3, sy + 3, obj.w - 6, obj.h - 6);
-        ctx.fillStyle = '#f0e8c8';
+        // Labels sit on the cream floor, so give them a dark plate like the READ signs.
+        const label = PUZZLE2.labels[state].slice(0, 8);
         ctx.font = '5px ' + FONT;
         ctx.textAlign = 'center';
-        const label = PUZZLE2.labels[state].slice(0, 8);
-        ctx.fillText(label, sx + obj.w / 2, sy + obj.h + 8);
+        const lx = sx + obj.w / 2;
+        const ly = sy + obj.h + 8;
+        const tw = ctx.measureText(label).width;
+        const padX = 3, plateH = 9;
+        const px = Math.round(lx - tw / 2 - padX);
+        const py = Math.round(ly - 6);
+        const pw = Math.round(tw + padX * 2);
+        ctx.fillStyle = '#2a2018';
+        ctx.fillRect(px, py, pw, plateH);
+        ctx.strokeStyle = '#100c08';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, plateH - 1);
+        ctx.fillStyle = '#f0e8c8';
+        ctx.fillText(label, lx, ly);
       } else if (obj.kind === 'plate') {
         const needed = PUZZLE3.platesNeeded[obj.plateIndex];
         ctx.fillStyle = needed ? '#4a3a2a' : '#2a2a32';
