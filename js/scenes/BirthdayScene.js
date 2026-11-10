@@ -552,7 +552,7 @@ export class BirthdayScene {
         // "Window" / "Plant" sit on the wall above the pad, with the same
         // contrast plate used for the Cat Bowls labels. Mid is unlabeled.
         if (obj.plateId === 'window' || obj.plateId === 'plant') {
-          this._drawFloorLabel(ctx, sx + obj.w / 2 + (obj.plateId === 'window' ? 10 : 0), sy - 12, obj.label);
+          this._drawFloorLabel(ctx, sx + obj.w / 2 + (obj.plateId === 'window' ? 22 : 0), sy - 12, obj.label);
         }
       } else if (obj.kind === 'plaque' || obj.kind === 'reset' || obj.kind === 'reveal') {
         ctx.fillStyle = obj.kind === 'reset' ? '#6a3030' : obj.kind === 'reveal' ? '#30506a' : '#5a4a30';

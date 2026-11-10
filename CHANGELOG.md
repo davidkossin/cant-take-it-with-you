@@ -15,7 +15,7 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 - Load from File no longer silently does nothing after you pick a file on a phone. Returning from the system picker used to be treated as a cancelled load (before the file was delivered), and files with no extension, a .txt name, or an odd type were easy to drop. A file that cannot be read, or a load interrupted because the page refreshed, now shows an error message.
 
 ### Changed
-- Birthday puzzle 3 (Birthday Gifts) is now a harder sokoban-style room: three colored gift crates have to be pushed onto the three plates named in a short wall riddle (the old poster that gave the pattern away is gone). Internal walls punish naive pushes, a crate has to be moved out of the way first, and the reset stays in the south hall so a deadlock cannot soft-lock the save.
+- Birthday puzzle 3 (Birthday Gifts) is now a harder sokoban-style room: three colored gift crates have to be pushed onto the three plates named in a short wall riddle (the old poster that gave the pattern away is gone). Internal walls punish naive pushes, a crate has to be moved out of the way first, and the reset stays in the south hall (next to the riddle, inside a phone-width view) so a deadlock cannot soft-lock the save.
 
 ### Added
 - Birthday cats use David's 21×21 reference sprites for side sit/walk (mirrored for left), plus new matching up and down sit/walk frames (front to the camera, or back with the tail visible).

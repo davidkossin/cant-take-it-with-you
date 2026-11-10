@@ -200,10 +200,10 @@ export function buildPuzzle3Room() {
   }
   world.interactables.push(
     { id: 'hint-3', kind: 'plaque', label: 'Read riddle',
-      x: 2 * TILE, y: 10 * TILE, w: 6 * TILE, h: 20,
+      x: 6 * TILE, y: 10 * TILE, w: 4 * TILE, h: 20,
       text: PUZZLE3.riddle },
     { id: 'reset-3', kind: 'reset', label: 'Reset puzzle',
-      x: 4 * TILE, y: 11 * TILE, w: 28, h: 20 },
+      x: 6 * TILE, y: 11 * TILE, w: 36, h: 20 },
     { id: 'reveal-3', kind: 'reveal', label: 'Read sealed note',
       x: 14 * TILE, y: 11 * TILE, w: 28, h: 24, puzzle: 3 },
     {
