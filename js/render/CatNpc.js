@@ -44,6 +44,8 @@ export class CatNpc {
       maxY: world.height - TILE - NPC_WALL_GAP - CAT_SPRITE_H,
     };
     this.facing = 'down';
+    /** Last left/right facing; up/down walk and sit mirroring use this. Native art faces right. */
+    this.horiz = 'right';
     this.moving = false;
     this.target = null;
     this.frame = 0;
@@ -58,8 +60,8 @@ export class CatNpc {
   }
 
   box(x = this.x, y = this.y) {
-    // Feet under the torso of the 24×16 sprite.
-    return { x: x + 5, y: y + 10, w: 14, h: 6 };
+    // Feet under the lower body of the 21×21 sprite (paws sit around y=14–19).
+    return { x: x + 3, y: y + 13, w: 15, h: 7 };
   }
 
   _inBounds(x, y) {
@@ -97,6 +99,7 @@ export class CatNpc {
         if (this._inBounds(x, y)) {
           this.target = { x, y };
           this.facing = dir;
+          if (dir === 'left' || dir === 'right') this.horiz = dir;
           this.moving = true;
           return true;
         }
@@ -112,6 +115,7 @@ export class CatNpc {
         const dx = player.x + player.w / 2 - (this.x + CAT_SPRITE_W / 2);
         const dy = player.y + player.h / 2 - (this.y + CAT_SPRITE_H / 2);
         if (Math.hypot(dx, dy) < NPC_FACE_RANGE) {
+          if (dx !== 0) this.horiz = dx < 0 ? 'left' : 'right';
           this.facing = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'up' : 'down');
         }
       }
@@ -158,7 +162,7 @@ export class CatNpc {
   }
 
   draw(ctx) {
-    const spr = makeCatSprite(this.coat, this.facing, this.moving ? this.frame : -1);
+    const spr = makeCatSprite(this.coat, this.facing, this.moving ? this.frame : -1, this.horiz);
     drawCrispSprite(ctx, spr, this.x, this.y);
   }
 }

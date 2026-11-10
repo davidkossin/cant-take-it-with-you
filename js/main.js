@@ -12,6 +12,7 @@ import { HallwayScene } from './scenes/HallwayScene.js';
 import { BirthdayScene } from './scenes/BirthdayScene.js';
 import { EndingScene } from './scenes/EndingScene.js';
 import { isBirthday } from './data/birthday.js';
+import { preloadCatSprites, catSpritesReady } from './render/CatSprites.js';
 import { PauseMenu, QUIT_SUBTITLE } from './scenes/PauseMenu.js';
 import { VirtualPad } from './input/VirtualPad.js';
 import { installFullscreen, isOsFullscreen } from './input/Fullscreen.js';
@@ -722,10 +723,11 @@ globalThis.__ctiw = {
   get hallway() { return hallway; },
   get dialog() { return dialog; },
   enterLoadedGame,
+  catSpritesReady,
 };
 
 requestAnimationFrame(loop);
-initializeSaves().then(() => startTitle()).catch((err) => {
+Promise.all([initializeSaves(), preloadCatSprites()]).then(() => startTitle()).catch((err) => {
   console.error(err);
   debugLog('error', { where: 'boot', message: String(err && err.message || err) });
   ctx.fillStyle = '#c04040';

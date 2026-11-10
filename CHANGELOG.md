@@ -11,7 +11,7 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 ## [Unreleased]
 
 ### Added
-- Cat sprites redrawn with pointy ears, a long side-walk silhouette, a classic sitting pose, and roughly knee-to-thigh scale next to the adult.
+- Birthday cats use David's 21×21 reference sprites for side sit/walk (mirrored for left), plus new matching up and down sit/walk frames (front to the camera, or back with the tail visible).
 - Birthday special instance (gated on `flags.special === 'birthday'` in a Load-from-File save): Dora as player with David as spouse, Yangyang and Chenchen cat NPCs in the Decision Room (infant movement rules, name tooltips, speech banks), birthday spouse lines for David, and a Hallway of Time replacement with a fake Monte Carlo splash, glitch sequence, three-door hub, keypad, and three rising-difficulty puzzle rooms. Progress persists on the save. Final clue and door codes live in `js/data/birthday.js`.
 
 ## [0.9.0] — 2026-10-24
