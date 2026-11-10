@@ -552,7 +552,7 @@ export class BirthdayScene {
         // "Window" / "Plant" sit on the wall above the pad, with the same
         // contrast plate used for the Cat Bowls labels. Mid is unlabeled.
         if (obj.plateId === 'window' || obj.plateId === 'plant') {
-          this._drawFloorLabel(ctx, sx + obj.w / 2, sy - 12, obj.label);
+          this._drawFloorLabel(ctx, sx + obj.w / 2 + (obj.plateId === 'window' ? 10 : 0), sy - 12, obj.label);
         }
       } else if (obj.kind === 'plaque' || obj.kind === 'reset' || obj.kind === 'reveal') {
         ctx.fillStyle = obj.kind === 'reset' ? '#6a3030' : obj.kind === 'reveal' ? '#30506a' : '#5a4a30';
@@ -564,10 +564,8 @@ export class BirthdayScene {
         ctx.fillText(tag, sx + obj.w / 2, sy + obj.h / 2 + 2);
       }
     }
-    // West-wall window, immediately left of the Window plate (puzzle 3).
-    if (this.puzzleId === 3) {
-      this._drawWindow(ctx, 3 * TILE - camX, 1 * TILE - camY);
-    }
+    // The Window plate is identified by its "Window" label on the north wall.
+    // (A window graphic here would sit off the left of a phone view or overlap the label.)
     // Gifts
     for (const g of this.gifts) {
       const sx = g.x - camX, sy = g.y - camY;
@@ -721,17 +719,17 @@ export class BirthdayScene {
   }
 
   _drawWindow(ctx, x, y) {
-    // Two tiles tall, one tile wide, cream panes in a wood frame.
+    // Compact north-wall window (wood frame, cream panes), same palette as the room.
     ctx.fillStyle = '#5a4a30';
-    ctx.fillRect(x + 1, y + 2, 14, 28);
+    ctx.fillRect(x, y, 16, 12);
     ctx.fillStyle = '#c8d8e8';
-    ctx.fillRect(x + 3, y + 4, 4, 10);
-    ctx.fillRect(x + 9, y + 4, 4, 10);
-    ctx.fillRect(x + 3, y + 16, 4, 10);
-    ctx.fillRect(x + 9, y + 16, 4, 10);
+    ctx.fillRect(x + 2, y + 2, 5, 3);
+    ctx.fillRect(x + 9, y + 2, 5, 3);
+    ctx.fillRect(x + 2, y + 7, 5, 3);
+    ctx.fillRect(x + 9, y + 7, 5, 3);
     ctx.strokeStyle = '#2a2018';
     ctx.lineWidth = 1;
-    ctx.strokeRect(x + 1.5, y + 2.5, 13, 27);
+    ctx.strokeRect(x + 0.5, y + 0.5, 15, 11);
   }
 
 }

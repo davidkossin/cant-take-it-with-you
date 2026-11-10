@@ -203,9 +203,9 @@ export function buildPuzzle3Room() {
       x: 2 * TILE, y: 10 * TILE, w: 6 * TILE, h: 20,
       text: PUZZLE3.riddle },
     { id: 'reset-3', kind: 'reset', label: 'Reset puzzle',
-      x: 1 * TILE + 4, y: 12 * TILE, w: 28, h: 20 },
+      x: 4 * TILE, y: 11 * TILE, w: 28, h: 20 },
     { id: 'reveal-3', kind: 'reveal', label: 'Read sealed note',
-      x: 16 * TILE, y: 10 * TILE, w: 28, h: 24, puzzle: 3 },
+      x: 14 * TILE, y: 11 * TILE, w: 28, h: 24, puzzle: 3 },
     {
       id: 'door-back',
       x: 9 * TILE, y: (rows - 1) * TILE - 4, w: 2 * TILE, h: 20,
