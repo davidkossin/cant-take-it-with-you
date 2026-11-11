@@ -3,9 +3,11 @@ import { autoSave, deleteSave, flushSaves, getSaveStatus, hasSaves, listSaves, l
 import { openAiProfilePanel } from '../ui/AiProfilePanel.js';
 import { exportPlan, interruptedFilePickMessage, pickSaveFile, saveFileName, saveTextToDisk } from '../state/PlanExport.js';
 import {
+  applyImportedSave,
   loadFromFile,
   loadedFileMessage,
   profileMergeMessage,
+  promptToUnlockSave,
   savedFileMessage,
   saveProfilesToFile,
 } from '../state/SaveFile.js';
@@ -240,7 +242,12 @@ export class TitleScene {
       await dialog.show(picked.error.message || 'This save file could not be loaded.', { title: 'Load from File' });
       return null;
     }
-    const loaded = picked.loaded;
+    let loaded = picked.loaded;
+    if (loaded && loaded.locked) {
+      const unlocked = await promptToUnlockSave(dialog, loaded.text);
+      if (!unlocked) return null;
+      loaded = await applyImportedSave(unlocked);
+    }
     await dialog.show(loadedFileMessage(loaded), { title: 'Load from File' });
     return loaded.game ? { action: 'load', game: loaded.game } : null;
   }
@@ -418,8 +425,12 @@ export class TitleScene {
       if (pick === '__import') {
         try {
           // Accepts plan files (with or without profiles) and profiles-only files.
-          const imported = await pickSaveFile();
+          let imported = await pickSaveFile();
           if (!imported) continue;
+          if (imported.locked) {
+            imported = await promptToUnlockSave(dialog, imported.text);
+            if (!imported) continue;
+          }
           const merged = imported.profiles.length ? profileMergeMessage(importProfiles(imported.profiles)) : '';
           const entry = imported.game ? autoSave(imported.game, 'import') : null;
           const saved = await flushSaves();

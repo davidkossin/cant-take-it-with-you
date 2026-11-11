@@ -7,6 +7,7 @@ import { effectiveDifficulty } from '../finance/Difficulty.js';
 import { migrateGame, normalizePortfolio } from '../finance/Schema.js';
 import { isJourneyScenario } from '../finance/Journey.js';
 import { withUserGesture } from '../input/UserGesture.js';
+import { isLockedSave, isLockedSaveFormat } from './SaveLock.js';
 
 export const PLAN_FORMAT = 'cant-take-it-plan';
 export const PLAN_FORMAT_VERSION = 1;
@@ -289,6 +290,10 @@ function parseDocument(text) {
   let document;
   try { document = JSON.parse(text); } catch { throw new Error('This file is not valid JSON.'); }
   validateJSON(document);
+  if (isLockedSaveFormat(document)) {
+    if (isLockedSave(document)) throw new Error('This save is locked. Enter passphrase.');
+    throw new Error('This locked save uses an unsupported format.');
+  }
   return document;
 }
 
@@ -437,8 +442,17 @@ export function downloadForecastBundle(game, forecast, options = {}) {
 
 /** Resolves null when the native picker is cancelled. */
 export function pickPlanFile() { return pickJsonFile(importPlan); }
-/** Plan (with or without profiles) or profiles-only file; null on cancel. */
-export function pickSaveFile() { return pickJsonFile(importSaveFile); }
+/**
+ * Plan, profiles-only file, or a locked envelope (returned as
+ * `{ locked: true, text }` so the caller can ask for a passphrase).
+ * Null on cancel.
+ */
+export function pickSaveFile() { return pickJsonFile(inspectSaveFile); }
+
+function inspectSaveFile(text) {
+  if (isLockedSave(text)) return { locked: true, text };
+  return importSaveFile(text);
+}
 
 /**
  * Open a file picker and parse the chosen file. Resolves null if cancelled.

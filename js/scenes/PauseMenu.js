@@ -1364,7 +1364,7 @@ export class PauseMenu {
       );
       if (!confirmed) return;
       let loaded;
-      try { loaded = await loadFromFile(); } catch (error) {
+      try { loaded = await loadFromFile(this.dialog); } catch (error) {
         await this.dialog.show(error.message || 'This save file could not be loaded.', { title: 'Load from File' });
         return;
       }
