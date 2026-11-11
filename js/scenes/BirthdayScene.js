@@ -13,7 +13,7 @@ import {
 } from '../render/BirthdayWorlds.js';
 import {
   ensureBirthdayProgress, birthdayCode, checkBirthdayCode,
-  PUZZLE1, PUZZLE2, PUZZLE3, FINAL_CLUE,
+  PUZZLE1, PUZZLE2, PUZZLE3, sealedNoteText,
 } from '../data/birthday.js';
 import { autoSave } from '../state/SaveSystem.js';
 import { virtualStick } from '../input/VirtualPad.js';
@@ -310,7 +310,7 @@ export class BirthdayScene {
       } else if (id === 2) {
         await dialog.show(PUZZLE2.success(birthdayCode(3)), { title: 'Unlocked' });
       } else {
-        await dialog.show(FINAL_CLUE, { title: 'Sealed Note' });
+        await dialog.show(sealedNoteText(game), { title: 'Sealed Note' });
       }
       this.setInputBlocked(false);
       return null;

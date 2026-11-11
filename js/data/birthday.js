@@ -1,6 +1,7 @@
 /**
- * Birthday special-instance data. Everything gated on game.flags.special === 'birthday'
- * lives or is keyed from here so the final clue and door codes are easy to edit.
+ * Special-instance data. Everything gated on game.flags.special === 'birthday'
+ * lives or is keyed from here. Door codes are edited here; the sealed note
+ * after the last puzzle is stored on the save, not in this file.
  *
  * Door codes are XOR-scrambled (light obfuscation). A determined reader of the
  * public JS can still recover them; see birthdayCode() if you want a stronger hash.
@@ -86,17 +87,16 @@ export function checkBirthdayCode(door, input) {
 }
 
 /**
- * Final clue shown after puzzle 3. Edit this string for the real hunt.
- * Keep it short enough for the dialog box.
+ * Fallback sealed-note body if the loaded save has none.
+ * The real note is stored on the save (game.flags.birthday.finalClue).
  */
-export const FINAL_CLUE = [
-  'PLACEHOLDER FINAL CLUE',
-  '',
-  'Replace this text in js/data/birthday.js',
-  '(export const FINAL_CLUE).',
-  '',
-  'Happy Birthday, Dora!',
-].join('\n');
+export const FINAL_CLUE = 'The sealed note is blank.';
+
+/** Body of the sealed note after the last puzzle. Prefer the text on the save. */
+export function sealedNoteText(game) {
+  const raw = game?.flags?.birthday?.finalClue;
+  return typeof raw === 'string' && raw.trim() ? raw : FINAL_CLUE;
+}
 
 /** Puzzle 1: step on floor pads in the order shown on the wall plaque. */
 export const PUZZLE1 = {
