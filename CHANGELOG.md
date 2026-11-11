@@ -10,18 +10,20 @@ Unpublished work stays under **[Unreleased]** until David says to publish.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-11-10
+
 ### Fixed
-- Birthday puzzle 2 (Cat Bowls) labels are drawn on a dark outlined plate so they stay readable on the cream floor tiles (they used to be cream text on cream tiles). The plate is sized from the font metrics with padding above and below so the full glyphs, including descenders, sit inside and are vertically centered.
-- Load from File no longer silently does nothing after you pick a file on a phone. Returning from the system picker used to be treated as a cancelled load (before the file was delivered), and files with no extension, a .txt name, or an odd type were easy to drop. A file that cannot be read, or a load interrupted because the page refreshed, now shows an error message.
+- Load from File fix on Android: choosing a file on a phone no longer silently does nothing when the tab comes back from the system picker (including files with no extension or an unusual type). A file that cannot be read, or a load interrupted because the page refreshed, now shows an error message.
+- Puzzle labels on cream floor tiles are drawn on a dark outlined plate, sized from the font metrics with padding so full glyphs (including descenders) stay readable and vertically centered.
 
 ### Changed
 - The sealed note after the last special-instance puzzle is read from the loaded save (with a generic placeholder if the save has none).
-- Birthday puzzle 3 (Birthday Gifts) is now a harder sokoban-style room: three colored gift crates have to be pushed onto the three plates named in a short wall riddle (the old poster that gave the pattern away is gone). Internal walls punish naive pushes, a crate has to be moved out of the way first, and the reset stays in the south hall (next to the riddle, inside a phone-width view) so a deadlock cannot soft-lock the save.
+- Special save mode puzzles: the third puzzle is now a harder sokoban-style room. Three colored crates have to be pushed onto plates named in a short wall riddle (the old poster that gave the pattern away is gone). Internal walls punish naive pushes, a crate has to be moved out of the way first, and the reset stays easy to find so a deadlock cannot soft-lock the save.
 
 ### Added
-- Load from File can unlock a locked save file. If the file is in the locked envelope, the game asks for a passphrase (the same text prompt used elsewhere, including on a phone) and decrypts it before loading. A wrong passphrase can be retried or cancelled. Ordinary unencrypted save files still load as before.
-- Birthday cats use David's 21×21 reference sprites for side sit/walk (mirrored for left), plus new matching up and down sit/walk frames (front to the camera, or back with the tail visible).
-- Birthday special instance (gated on `flags.special === 'birthday'` in a Load-from-File save): Dora as player with David as spouse, Yangyang and Chenchen cat NPCs in the Decision Room (infant movement rules, name tooltips, speech banks), birthday spouse lines for David, and a Hallway of Time replacement with a fake Monte Carlo splash, glitch sequence, three-door hub, keypad, and three rising-difficulty puzzle rooms. Progress persists on the save. Door codes live in `js/data/birthday.js`; the sealed note after the last puzzle is stored on the save.
+- Locked saves: passphrase prompt on Load from File. If the file is in the locked envelope, the game asks for a passphrase (the same text prompt used elsewhere, including on a phone) and decrypts it before loading. A wrong passphrase can be retried or cancelled. Ordinary unencrypted save files still load as before.
+- Cat NPCs in a special save mode use 21×21 reference sprites for side sit/walk (mirrored for left), plus matching up and down sit/walk frames.
+- Special save mode: a Load-from-File instance with custom player and spouse lines, cat NPCs in the Decision Room, a Hallway of Time replacement (splash, glitch sequence, three-door hub, keypad), and three rising-difficulty puzzle rooms. Progress persists on the save. Door codes live in the special-instance data; the sealed note after the last puzzle is stored on the save.
 
 ## [0.9.0] — 2026-10-24
 
